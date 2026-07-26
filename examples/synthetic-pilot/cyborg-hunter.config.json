@@ -1,0 +1,6 @@
+{
+  "dataDir": "./data",
+  "filePattern": "*.csv",
+  "participantIdField": "subject_ID",
+  "outputDir": "./report"
+}

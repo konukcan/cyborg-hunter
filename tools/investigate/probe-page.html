@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cursor-alignment probe page</title>
+<style>
+  /* margin:0 explicitly — isolates scroll/resize/transform mechanics from the
+     body-margin-parity mechanism (demonstrated separately by the user fixture). */
+  html, body { margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; height: 2200px; position: relative; }
+  .target { position: absolute; width: 80px; height: 30px; background: #1976d2;
+            color: #fff; border: 0; font-size: 13px; }
+  #t-base   { left: 200px; top: 150px; }
+  #t-scroll { left: 250px; top: 900px; }
+  #t-fixed  { position: fixed; left: 500px; top: 60px; width: 90px; height: 28px;
+              background: #d32f2f; }
+  #scrollbox { position: absolute; left: 40px; top: 1300px; width: 300px; height: 150px;
+               overflow: auto; border: 1px solid #999; }
+  #scrollbox .inner { height: 600px; position: relative; }
+  #t-inner  { left: 60px; top: 260px; }
+  #trans-wrap { position: absolute; left: 600px; top: 1500px;
+                transform: translate(60px, 25px); width: 200px; height: 100px; }
+  #t-trans  { left: 0; top: 0; }
+  /* Centered container: reflows horizontally on viewport resize — the
+     controlled stand-in for real centered experiment layouts. */
+  #center-wrap { max-width: 400px; margin: 0 auto; position: absolute;
+                 left: 0; right: 0; top: 2000px; height: 60px; }
+  #t-center { left: 160px; top: 10px; }
+</style>
+</head>
+<body>
+  <button class="target" id="t-base">base</button>
+  <button class="target" id="t-scroll">scroll</button>
+  <button class="target" id="t-fixed">fixed</button>
+  <div id="scrollbox"><div class="inner"><button class="target" id="t-inner">inner</button></div></div>
+  <div id="trans-wrap"><button class="target" id="t-trans">trans</button></div>
+  <div id="center-wrap"><button class="target" id="t-center">center</button></div>
+
+  <script src="../../dist/cyborg-hunter-replay.js"></script>
+  <script>
+    // Ground-truth click log, captured independently of the recorder at
+    // capture phase: what the browser actually reported for each click.
+    window.__truth = [];
+    document.addEventListener('click', function (e) {
+      window.__truth.push({
+        target: e.target.id || e.target.tagName,
+        pageX: e.pageX, pageY: e.pageY,
+        clientX: e.clientX, clientY: e.clientY,
+        scrollX: window.scrollX, scrollY: window.scrollY,
+        innerWidth: window.innerWidth, innerHeight: window.innerHeight,
+        dpr: window.devicePixelRatio
+      });
+    }, true);
+
+    window.PROBE = {
+      start: function () {
+        window.__rec = window.CyborgHunterReplay.attach({
+          participantId: 'PROBE-1', tier: 'dom', autoSave: { mode: 'none' },
+          root: document.body
+        });
+        window.__rec.startSession();
+        window.__rec.startTrial({ trialId: 'probe-trial', plugin: 'ch:probe' });
+      },
+      finish: function () {
+        window.__rec.endTrial();
+        window.__rec.stopSession('finished');
+        var r = window.__rec.getRecording();
+        window.__rec.destroy();
+        return { recording: r, truth: window.__truth };
+      }
+    };
+  </script>
+</body>
+</html>

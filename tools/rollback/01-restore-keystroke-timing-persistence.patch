@@ -1,0 +1,22 @@
+diff --git a/src/core/monitor.js b/src/core/monitor.js
+index bd1572f..259d0c6 100644
+--- a/src/core/monitor.js
++++ b/src/core/monitor.js
+@@ -324,17 +324,6 @@ export function init(userConfig) {
+         sessionData.charsPerSec.push(cps);
+       }
+
+-      // Privacy gate: the raw per-edit timestamps are keystroke-timing data.
+-      // Persist them ONLY when keystroke dynamics are explicitly enabled
+-      // (signals.keystrokeDynamics, or collectForPostHoc.fullKeystrokeTimestamps).
+-      // Otherwise keep only the derived charsPerSec — the typing-speed signal
+-      // still works, but the raw timings never leave the browser. Without this,
+-      // the documented "off by default in permissive/standard" privacy toggle was
+-      // inert and the timings were saved verbatim regardless.
+-      if (!config.signals.keystrokeDynamics && !config.collectForPostHoc.fullKeystrokeTimestamps) {
+-        report.editTimestamps = [];
+-      }
+-
+       // Compute mouse bot metrics
+       var mouseMetrics = computeMouseMetrics(
+         trialData.mouseEvents,

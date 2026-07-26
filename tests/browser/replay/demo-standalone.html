@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Replay E2E demo (standalone, no jsPsych)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; }
+    #experiment { max-width: 640px; }
+    .card { width: 120px; height: 168px; border: 2px solid #333; border-radius: 8px;
+            display: inline-flex; align-items: center; justify-content: center;
+            font-size: 42px; margin: 8px; background: #fff; }
+    .card.flipped { background: #1976d2; color: #fff; }
+    #feedback { min-height: 28px; font-weight: 600; }
+    input, button { font-size: 16px; padding: 6px 10px; margin: 6px 0; }
+  </style>
+</head>
+<body>
+  <div id="experiment">
+    <h1 id="title">Which card wins?</h1>
+    <div id="cards">
+      <div class="card" id="card-a">7♠</div>
+      <div class="card" id="card-b">K♥</div>
+    </div>
+    <div id="feedback"></div>
+    <label>Your answer: <input type="text" id="answer" autocomplete="off"></label><br>
+    <label><input type="checkbox" id="confident"> I am confident</label><br>
+    <label>Secret (redaction pin): <input type="password" id="secret"></label><br>
+    <button id="next">Next</button>
+  </div>
+
+  <!-- Library under test: built dist artifacts, exactly what studies load -->
+  <script src="../../../dist/cyborg-hunter.min.js"></script>
+  <script src="../../../dist/cyborg-hunter-replay.js"></script>
+  <script src="../../../dist/extension-guard-friction.js"></script>
+  <script src="../../../dist/extension-guard-honeypot.js"></script>
+
+  <script>
+    // Standalone wiring (no jsPsych): the exact path a custom experiment
+    // would use. Driven from run-replay-tests.mjs via window.CH_E2E.
+    window.CH_E2E = (function () {
+      var monitor = null;
+      var rec = null;
+      var frictionToken = null;
+
+      return {
+        start: function () {
+          monitor = window.CyborgHunter.init({
+            participantId: 'E2E-P1',
+            preset: 'standard',
+            experimentContainer: '#experiment'
+          });
+          monitor.startSession();
+
+          // Replay attaches BEFORE friction starts — same ordering the
+          // jsPsych path guarantees (extensions initialize before friction's
+          // entry-trial click) — so violation starts are never missed. The
+          // library also synthesizes an in-progress violation at subscribe
+          // time as a belt-and-braces for the reverse order.
+          rec = window.CyborgHunterReplay.attach({
+            participantId: 'E2E-P1',
+            tier: 'dom',
+            autoSave: { mode: 'none' },
+            root: document.body
+          });
+          rec.startSession();
+
+          // Guards: friction in observe-only mode (no fullscreen needed in
+          // headless), honeypot injects bait surfaces that the replay's DOM
+          // serializer must strip.
+          frictionToken = window.GuardFriction.start({ observeOnly: true });
+          window.GuardHoneypot.init({ friction: window.GuardFriction });
+
+          monitor.startTrial({ trialId: 'trial-1' });
+          rec.startTrial({ trialId: 'trial-1', plugin: 'ch:standalone-demo' });
+        },
+
+        // Simulates the experiment reacting to the participant: feedback
+        // text (characterData/childList mutations) + a class flip
+        // (attribute mutation).
+        respond: function () {
+          document.getElementById('feedback').textContent = 'Correct!';
+          document.getElementById('card-b').classList.add('flipped');
+        },
+
+        nextTrial: function () {
+          rec.endTrial();
+          monitor.endTrial();
+          monitor.startTrial({ trialId: 'trial-2' });
+          rec.startTrial({ trialId: 'trial-2', plugin: 'ch:standalone-demo' });
+          document.getElementById('title').textContent = 'Round two: which card wins?';
+          document.getElementById('feedback').textContent = '';
+          document.getElementById('answer').value = '';
+        },
+
+        finish: function () {
+          rec.endTrial();
+          monitor.endTrial();
+          rec.stopSession('finished');
+          if (frictionToken != null) window.GuardFriction.stop(frictionToken);
+          var chReport = monitor.getSessionReport();
+          var recording = rec.getRecording({ chSessionReport: chReport });
+          monitor.destroy();
+          return recording;
+        }
+      };
+    })();
+  </script>
+</body>
+</html>

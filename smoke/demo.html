@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cyborg-hunter smoke-test demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+  h1 { font-size: 1.3rem; }
+  .step { border: 1px solid #ccc; border-radius: 8px; padding: 16px; margin: 16px 0; opacity: 0.4; pointer-events: none; }
+  .step.active { opacity: 1; pointer-events: auto; border-color: #1976d2; box-shadow: 0 0 0 1px #1976d2; }
+  .step.done { opacity: 0.6; border-color: #2e7d32; }
+  .step h2 { margin-top: 0; font-size: 1rem; }
+  input[type=text] { font-size: 16px; padding: 6px 10px; width: 100%; box-sizing: border-box; margin: 6px 0; }
+  button { font-size: 15px; padding: 8px 16px; margin-top: 8px; cursor: pointer; }
+  #status { font-weight: 600; padding: 10px; border-radius: 6px; background: #eee; margin-bottom: 16px; }
+  #status.recording { background: #fff3cd; }
+  #status.done { background: #d4edda; }
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; }
+  #copy-source { font-size: 18px; font-weight: 600; background: #f5f5f5; padding: 8px; border-radius: 4px; user-select: all; display: inline-block; }
+</style>
+</head>
+<body>
+  <h1>cyborg-hunter smoke test</h1>
+  <div id="status">Not started. Click "Start Session" below.</div>
+
+  <div class="step active" id="step-0">
+    <h2>Step 0 — start</h2>
+    <p>Starts the integrity monitor and the replay recorder together.</p>
+    <button id="btn-start">Start Session</button>
+  </div>
+
+  <div class="step" id="step-1">
+    <h2>Step 1 — copy &amp; paste</h2>
+    <p>Select and copy this phrase: <span id="copy-source">the quick brown fox</span></p>
+    <p>Then paste it into the box below:</p>
+    <input type="text" id="answer-1" placeholder="Paste here">
+    <br><button id="btn-next-1">Next</button>
+  </div>
+
+  <div class="step" id="step-2">
+    <h2>Step 2 — tab away</h2>
+    <p>Switch to another browser tab (or another app entirely) for a few seconds, then come back here and click Next.</p>
+    <br><button id="btn-next-2">Next</button>
+  </div>
+
+  <div class="step" id="step-3">
+    <h2>Step 3 — squeeze the viewport</h2>
+    <p>Narrow this browser window noticeably (drag an edge in, or use your window manager to snap it to half-width) for a couple of seconds, then widen it back and click Finish.</p>
+    <br><button id="btn-finish">Finish &amp; Save Session</button>
+  </div>
+
+  <div class="step" id="step-done">
+    <h2>Done</h2>
+    <p>Two files were just downloaded to your Downloads folder: a participant data file (<code>.json</code>) and a replay recording (<code>-replay-&lt;epoch&gt;.json</code>). Move both into the same directory and run <code>smoke/process.sh &lt;that-directory&gt;</code>.</p>
+  </div>
+
+  <!-- Library under test: built dist artifacts, exactly what a real study loads -->
+  <script src="../dist/cyborg-hunter.min.js"></script>
+  <script src="../dist/cyborg-hunter-replay.js"></script>
+
+  <script>
+    var PID = 'SMOKE-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+    var monitor = null;
+    var rec = null;
+    var trialReports = [];
+    var trialIds = ['copy-paste', 'tab-away', 'viewport-squeeze'];
+    var trialIndex = 0;
+
+    function setStatus(text, cls) {
+      var el = document.getElementById('status');
+      el.textContent = text;
+      el.className = cls || '';
+    }
+    function activate(id) {
+      document.getElementById(id).classList.add('active');
+    }
+    function finishStep(id) {
+      var el = document.getElementById(id);
+      el.classList.remove('active');
+      el.classList.add('done');
+    }
+
+    document.getElementById('btn-start').addEventListener('click', function () {
+      monitor = window.CyborgHunter.init({ participantId: PID, preset: 'standard' });
+      monitor.startSession();
+
+      rec = window.CyborgHunterReplay.attach({
+        participantId: PID,
+        tier: 'dom',
+        autoSave: { mode: 'download' },
+        root: document.body
+      });
+      rec.startSession();
+
+      monitor.startTrial({ trialId: trialIds[0] });
+      rec.startTrial({ trialId: trialIds[0], plugin: 'ch:smoke-demo' });
+
+      setStatus('Recording — participant ID ' + PID, 'recording');
+      finishStep('step-0');
+      activate('step-1');
+    });
+
+    function advanceTrial(fromStepId, toStepId) {
+      var report = monitor.endTrial();
+      trialReports.push(report);
+      rec.endTrial();
+      trialIndex++;
+
+      if (trialIndex < trialIds.length) {
+        monitor.startTrial({ trialId: trialIds[trialIndex] });
+        rec.startTrial({ trialId: trialIds[trialIndex], plugin: 'ch:smoke-demo' });
+      }
+
+      finishStep(fromStepId);
+      if (toStepId) activate(toStepId);
+    }
+
+    document.getElementById('btn-next-1').addEventListener('click', function () {
+      advanceTrial('step-1', 'step-2');
+    });
+    document.getElementById('btn-next-2').addEventListener('click', function () {
+      advanceTrial('step-2', 'step-3');
+    });
+
+    document.getElementById('btn-finish').addEventListener('click', async function () {
+      // Last trial's endTrial() + rec.endTrial() happen inside advanceTrial,
+      // but there is no "next" trial after step 3 — close out directly.
+      var report = monitor.endTrial();
+      trialReports.push(report);
+      rec.endTrial();
+      rec.stopSession('finished');
+
+      var chReport = monitor.getSessionReport();
+      var saveResult = await rec.autoSaveNow({ chSessionReport: chReport });
+      var meta = saveResult.meta;
+
+      // Build the Shape-1 participant file exactly as the jsPsych extension
+      // would emit it (trials[].integrity + a metadata.integritySession
+      // mirror), so `cyborg-hunter report` ingests it with no special config.
+      var participantFile = {
+        participantId: PID,
+        trials: trialReports.map(function (t, i) {
+          var row = { trialId: t.trialId, integrity: t };
+          if (i === 0) row.integrityReplayMeta = meta;
+          return row;
+        }),
+        metadata: { integritySession: chReport }
+      };
+      var blob = new Blob([JSON.stringify(participantFile, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = PID + '.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+
+      monitor.destroy();
+      rec.destroy();
+
+      finishStep('step-3');
+      activate('step-done');
+      setStatus('Saved. Downloaded ' + PID + '.json and ' + (saveResult.saveResult.filename || '(replay file)') + '.', 'done');
+    });
+  </script>
+</body>
+</html>

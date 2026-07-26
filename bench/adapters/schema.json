@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CommonEvent",
+  "type": "object",
+  "required": ["t_ms", "type", "source"],
+  "properties": {
+    "t_ms": { "type": "number" },
+    "type": {
+      "type": "string",
+      "enum": [
+        "paste","copy","drop","tab_away","tab_return","focus_change",
+        "typing_burst","mouse_sample","click","scroll","viewport_change",
+        "extension_detected","device_flag","programmatic_typing",
+        "teleporting_mouse","centered_click","jump_scroll",
+        "audio_recorded","permission_prompt",
+        "ai_use_bait","ai_report_bait","tamper_detected",
+        "guard_violation_fullscreen","guard_violation_sidebar","guard_violation_focus",
+        "agentic_browser_detected","session_flags","other"
+      ]
+    },
+    "source": { "type": "string", "enum": ["ch","roundtable"] },
+    "trialId": { "type": ["string","null"] },
+    "payload": { "type": "object" }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "name": "cyborg-hunter",
+  "version": "0.7.0",
+  "description": "Detect LLM-assisted 'cyborg' behavior in online behavioral experiments",
+  "main": "dist/cyborg-hunter.min.js",
+  "module": "dist/cyborg-hunter.esm.js",
+  "bin": {
+    "cyborg-hunter": "bin/cyborg-hunter.js"
+  },
+  "scripts": {
+    "build": "node build.js",
+    "test:browser": "echo 'Open tests/browser/integrity-monitor.test.html in a browser'",
+    "test:cli": "node --test tests/cli/*.test.js",
+    "test:core": "node --test tests/core/*.test.js",
+    "test:jspsych": "node --test tests/jspsych/*.test.js",
+    "test": "npm run test:core && npm run test:replay && npm run test:cli && npm run test:jspsych",
+    "test:replay": "node --test tests/replay/*.test.js",
+    "test:browser:replay": "node tests/browser/replay/run-replay-tests.mjs",
+    "test:browser:alignment": "node tests/browser/replay/cursor-alignment.battery.mjs"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "src/",
+    "README.md",
+    "CHANGELOG.md",
+    "CITATION.cff"
+  ],
+  "keywords": [
+    "integrity",
+    "cheating-detection",
+    "online-experiments",
+    "jspsych",
+    "prolific",
+    "mturk",
+    "behavioral-research"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "author": "Can Konuk",
+  "homepage": "https://github.com/konukcan/cyborg-hunter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/konukcan/cyborg-hunter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/konukcan/cyborg-hunter/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "optionalDependencies": {
+    "canvas": "^3.2.3"
+  },
+  "devDependencies": {
+    "ajv": "^8.20.0",
+    "esbuild": "^0.21.0",
+    "happy-dom": "^20.9.0"
+  },
+  "dependencies": {
+    "papaparse": "^5.5.3"
+  }
+}

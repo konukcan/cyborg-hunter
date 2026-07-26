@@ -1,0 +1,33 @@
+{
+  "behaviors": [
+    { "id": "paste",                        "description": "Clipboard paste into form input" },
+    { "id": "copy",                         "description": "Clipboard copy from page" },
+    { "id": "drop",                         "description": "Drag-and-drop into input" },
+    { "id": "tab_away_short",               "description": "Visibility loss < 10s" },
+    { "id": "tab_away_long",                "description": "Visibility loss >= 10s" },
+    { "id": "browser_sidebar",              "description": "Browser sidebar opened (window-width heuristic)" },
+    { "id": "ai_extension_present",         "description": "Known AI extension content script detected in DOM" },
+    { "id": "fast_typing",                  "description": "Typing speed exceeds preset cps threshold" },
+    { "id": "no_corrections",               "description": "No backspaces/edits in free-text input (RT signal)" },
+    { "id": "synthetic_insertion",          "description": "Text appears in input without keystrokes" },
+    { "id": "foreign_input",                "description": "Input event lands outside experiment container" },
+    { "id": "idle_gap",                     "description": "Inactivity gap in input/mouse" },
+    { "id": "programmatic_typing",          "description": "Highly regular typing cadence (bot signal)" },
+    { "id": "teleporting_mouse",            "description": "Mouse jumps without continuous trajectory (RT signal)" },
+    { "id": "centered_click",               "description": "Perfectly centered click on target (RT signal)" },
+    { "id": "jump_scroll",                  "description": "Scroll moves in large discontinuous jumps (RT signal)" },
+    { "id": "headless_browser",             "description": "Selenium/Playwright/Puppeteer signature (RT signal)" },
+    { "id": "vpn_or_tor",                   "description": "Network origin VPN/Tor/datacenter (RT signal)" },
+    { "id": "vm_environment",               "description": "Browser running in VM (RT signal)" },
+    { "id": "location_spoofing",            "description": "Browser-reported location conflicts with IP (RT signal)" },
+    { "id": "audio_recorded",               "description": "Voice trial captured audio (always intended for clean+cyborg)" },
+    { "id": "permission_prompt",            "description": "Microphone/camera permission prompted" },
+    { "id": "ai_use_bait",                  "description": "Honeypot AI-use bait field filled (CH guard layer)" },
+    { "id": "ai_report_bait",               "description": "Honeypot AI-disclosure surface filled (CH guard layer)" },
+    { "id": "tamper_detected",              "description": "External script removed CH guards; re-applied (CH)" },
+    { "id": "guard_violation_fullscreen",   "description": "Fullscreen exited during trial (CH)" },
+    { "id": "guard_violation_sidebar",      "description": "Sidebar opened during trial (CH)" },
+    { "id": "guard_violation_focus",        "description": "Window focus lost during trial (CH)" },
+    { "id": "agentic_browser_detected",     "description": "Browser-Use / Operator / Computer Use caught via honeypot bait (CH)" }
+  ]
+}

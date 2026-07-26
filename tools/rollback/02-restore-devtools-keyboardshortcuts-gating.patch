@@ -1,0 +1,34 @@
+diff --git a/src/core/signals/browser.js b/src/core/signals/browser.js
+index e90b8db..4e81643 100644
+--- a/src/core/signals/browser.js
++++ b/src/core/signals/browser.js
+@@ -24,11 +24,8 @@ export function attachBrowserSignals(ctx) {
+   // ── Sidebar gap detection (2s polling) ──
+   // Tracks state TRANSITIONS in innerWidth. A sidebar opening shrinks
+   // innerWidth by 300-500px. Also checks layout compression (extension
+-  // padding/margin on <html> element) and zoom changes. None of these are
+-  // DevTools-related, so this interval is gated by `sidebarGap` alone — the
+-  // earlier `|| devTools` here was a mis-routed toggle (DevTools evidence comes
+-  // from the keyboard-shortcut listener below, not from viewport polling).
+-  if (config.signals.sidebarGap) {
++  // padding/margin on <html> element).
++  if (config.signals.sidebarGap || config.signals.devTools) {
+     var _lastZoom = window.devicePixelRatio || 1;
+     var _baselineIW = window.innerWidth;
+     var _sidebarOpen = false;
+@@ -141,12 +138,9 @@ export function attachBrowserSignals(ctx) {
+     ctx.addInterval(setInterval(scanExtensions, config.thresholds.extensionScanMs));
+   }
+ 
+-  // ── Keyboard shortcut / DevTools-hotkey detection ──
+-  // Catches DevTools shortcuts (Ctrl+Shift+I/J/C, F12). This listener IS the
+-  // "DevTools" detector, so EITHER the `keyboardShortcuts` or the `devTools`
+-  // signal enables it (the soft `devTools` weight then scores the captured
+-  // hotkeys). Records into sessionData.keyboardShortcuts.
+-  if (config.signals.keyboardShortcuts || config.signals.devTools) {
++  // ── Keyboard shortcut detection ──
++  // Catches DevTools shortcuts (Ctrl+Shift+I/J/C, F12)
++  if (config.signals.keyboardShortcuts) {
+     ctx.addListener(document, "keydown", function (e) {
+       var dominated = e.ctrlKey || e.metaKey;
+       if (dominated && e.shiftKey && (e.key === "I" || e.key === "J" || e.key === "C")) {

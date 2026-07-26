@@ -1,0 +1,72 @@
+{
+  "metadata": {
+    "subjectId": "P-SESSION",
+    "integritySession": {
+      "pasteCount": 2,
+      "sidebarEvents": [
+        { "t": 12000, "type": "opened", "method": "innerWidth_delta", "deltaIW": 312, "innerWidth": 1608, "baselineIW": 1920 },
+        { "t": 45000, "type": "closed", "method": "innerWidth_delta", "deltaIW": -308, "duration_ms": 33000 }
+      ],
+      "aiExtensionsFound": [
+        { "name": "ChatGPT Sidebar", "confidence": 0.95, "detectedAt": 8000 }
+      ]
+    },
+    "integrityScore": {
+      "anyHardTriggered": true,
+      "hardScore": {
+        "paste": { "triggered": true, "count": 2 },
+        "extension": { "triggered": true, "count": 1 }
+      },
+      "softScore": {
+        "tabAway": { "weight": 0 },
+        "typing": { "weight": 0 }
+      }
+    }
+  },
+  "trials": [
+    {
+      "trialId": "t1",
+      "integrity": {
+        "trialId": "t1",
+        "libraryVersion": "0.3.0",
+        "participantId": "P-SESSION",
+        "startTime": 1000,
+        "duration_ms": 10000,
+        "pasteEvents": [
+          { "t": 3000, "text": "pasted block one" },
+          { "t": 6000, "text": "pasted block two" }
+        ],
+        "copyEvents": [],
+        "dropEvents": [],
+        "tabAwayEvents": [],
+        "mouseEvents": [],
+        "extensionsDetected": ["ChatGPT Sidebar"],
+        "charsPerSec": 12,
+        "trialSoftScore": 0,
+        "trialSignals": {
+          "hard": { "paste": { "triggered": true, "count": 2 } },
+          "soft": {}
+        }
+      }
+    },
+    {
+      "trialId": "t2",
+      "integrity": {
+        "trialId": "t2",
+        "libraryVersion": "0.3.0",
+        "participantId": "P-SESSION",
+        "startTime": 12000,
+        "duration_ms": 8000,
+        "pasteEvents": [],
+        "copyEvents": [],
+        "dropEvents": [],
+        "tabAwayEvents": [],
+        "mouseEvents": [],
+        "extensionsDetected": [],
+        "charsPerSec": 10,
+        "trialSoftScore": 0,
+        "trialSignals": { "hard": {}, "soft": {} }
+      }
+    }
+  ]
+}

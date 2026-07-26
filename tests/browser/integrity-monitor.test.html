@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html>
+<head><title>IntegrityMonitor Tests</title></head>
+<body>
+<pre id="output"></pre>
+<script src="../../dist/cyborg-hunter.min.js"></script>
+<script>
+// Minimal assert framework
+var passed = 0, failed = 0;
+function assert(cond, msg) {
+  if (cond) { passed++; log("PASS: " + msg); }
+  else { failed++; log("FAIL: " + msg); }
+}
+function log(msg) {
+  document.getElementById("output").textContent += msg + "\n";
+  console.log(msg);
+}
+
+// Test 1: init returns frozen monitor
+var m = IntegrityMonitor.init({ participantId: "test1", preset: "standard" });
+assert(typeof m.startSession === "function", "init returns monitor with startSession");
+assert(typeof m.startTrial === "function", "init returns monitor with startTrial");
+assert(typeof m.endTrial === "function", "init returns monitor with endTrial");
+assert(typeof m.destroy === "function", "init returns monitor with destroy");
+assert(Object.isFrozen(m), "monitor is frozen");
+
+// Test 2: lifecycle state machine
+m.startSession();
+m.startTrial({ trialId: "t1" });
+var report = m.endTrial();
+assert(report !== null, "endTrial returns a report");
+assert(report.trialId === "t1", "report has correct trialId");
+assert(report.libraryVersion === IntegrityMonitor.VERSION, "report has libraryVersion");
+m.destroy();
+
+// Test 3: invalid transitions throw
+var m2 = IntegrityMonitor.init({ participantId: "test2" });
+var threw = false;
+try { m2.startTrial(); } catch (e) { threw = true; }
+assert(threw, "startTrial before startSession throws");
+m2.destroy();
+
+// Test 4: idempotent init (second init destroys first)
+var m3 = IntegrityMonitor.init({ participantId: "test3" });
+var m4 = IntegrityMonitor.init({ participantId: "test4" });
+threw = false;
+try { m3.startSession(); } catch (e) { threw = true; }
+assert(threw, "previous instance destroyed on re-init");
+m4.destroy();
+
+// Test 5: unknown preset throws
+threw = false;
+try { IntegrityMonitor.init({ preset: "nonexistent" }); } catch (e) { threw = true; }
+assert(threw, "unknown preset throws");
+
+// Test 6: deep copy — mutating report doesn't affect internal state
+var m5 = IntegrityMonitor.init({ participantId: "test5" });
+m5.startSession();
+m5.startTrial({ trialId: "t1" });
+var r1 = m5.endTrial();
+r1.trialId = "MUTATED";
+m5.startTrial({ trialId: "t2" });
+var r2 = m5.endTrial();
+assert(r2.trialId === "t2", "deep copy: mutating report doesn't affect next trial");
+m5.destroy();
+
+// Test 7: GDPR defaults
+var m6 = IntegrityMonitor.init({ participantId: "test6" });
+var raw = m6.getRawData();
+assert(raw.libraryVersion === IntegrityMonitor.VERSION, "getRawData has libraryVersion");
+m6.destroy();
+
+// ═══════════════════════════════════════════════
+// SESSION-SCOPED SIGNAL TESTS
+// ═══════════════════════════════════════════════
+
+// Test 8: session report has expected structure after startSession
+var m7 = IntegrityMonitor.init({ participantId: "test7", preset: "standard" });
+m7.startSession();
+var sr = m7.getSessionReport();
+assert(Array.isArray(sr.sidebarEvents), "session report has sidebarEvents array");
+assert(Array.isArray(sr.aiExtensionsFound), "session report has aiExtensionsFound array");
+assert(Array.isArray(sr.keyboardShortcuts), "session report has keyboardShortcuts array");
+assert(Array.isArray(sr.windowPositions), "session report has windowPositions array");
+assert(Array.isArray(sr.tabAwaySums), "session report has tabAwaySums array");
+assert(sr.config.preset === "standard", "session report includes preset name");
+assert(sr.config.participantId === "test7", "session report includes participantId");
+m7.destroy();
+
+// Test 9: destroy cleans up intervals (sidebar/window polling stop)
+// We verify by checking that no new events accumulate after destroy.
+var m8 = IntegrityMonitor.init({ participantId: "test8", preset: "standard" });
+m8.startSession();
+m8.destroy();
+// After destroy, if intervals were cleared, windowPositions length stays 0
+// (the 2s poll hasn't fired yet because we destroyed immediately)
+// This is a smoke test — the real verification is that destroy() doesn't throw.
+assert(true, "destroy after startSession does not throw");
+
+// Test 10: keyboard shortcut listener fires on keydown
+var m9 = IntegrityMonitor.init({ participantId: "test9", preset: "standard" });
+m9.startSession();
+// Simulate a Ctrl+Shift+I keydown event (DevTools shortcut)
+var fakeEvent = new KeyboardEvent("keydown", {
+  key: "I", ctrlKey: true, shiftKey: true, bubbles: true
+});
+document.dispatchEvent(fakeEvent);
+var sr2 = m9.getSessionReport();
+assert(sr2.keyboardShortcuts.length === 1, "keyboard shortcut detected on Ctrl+Shift+I");
+assert(sr2.keyboardShortcuts[0].combo === "Ctrl+Shift+I", "keyboard shortcut combo is correct");
+m9.destroy();
+
+// Test 11: F12 keyboard shortcut detection
+var m10 = IntegrityMonitor.init({ participantId: "test10", preset: "standard" });
+m10.startSession();
+var f12Event = new KeyboardEvent("keydown", { key: "F12", bubbles: true });
+document.dispatchEvent(f12Event);
+var sr3 = m10.getSessionReport();
+assert(sr3.keyboardShortcuts.length === 1, "F12 shortcut detected");
+assert(sr3.keyboardShortcuts[0].combo === "F12", "F12 combo is correct");
+m10.destroy();
+
+// Test 12: permissive preset still collects keyboard shortcuts
+// (always-collect philosophy: signals control data collection, scoring controls screenout)
+var m11 = IntegrityMonitor.init({ participantId: "test11", preset: "permissive" });
+m11.startSession();
+document.dispatchEvent(new KeyboardEvent("keydown", {
+  key: "I", ctrlKey: true, shiftKey: true, bubbles: true
+}));
+var sr4 = m11.getSessionReport();
+assert(sr4.keyboardShortcuts.length === 1, "permissive preset: keyboard shortcuts still collected");
+m11.destroy();
+
+// Test 13: AI extension detection with injected DOM element
+var m12 = IntegrityMonitor.init({ participantId: "test12", preset: "standard" });
+// Inject a fake AI extension element before starting session
+var fakeExt = document.createElement("div");
+fakeExt.setAttribute("data-chatgpt", "true");
+fakeExt.style.display = "none";
+document.body.appendChild(fakeExt);
+m12.startSession();
+var sr5 = m12.getSessionReport();
+assert(sr5.aiExtensionsFound.length >= 1, "AI extension detected via DOM scan");
+assert(sr5.aiExtensionsFound[0].name === "ChatGPT extension", "detected extension name is correct");
+// Clean up injected element
+fakeExt.remove();
+m12.destroy();
+
+// Test 14: shouldScreenout respects grace period for soft signals
+// Two-tier system: grace period only applies to soft score, not hard signals.
+var m13 = IntegrityMonitor.init({
+  participantId: "test13", preset: "standard",
+  screenout: { enabled: true, gracePeriodTrials: 2 }
+});
+m13.startSession();
+// Complete 1 trial — still in grace period for soft signals
+m13.startTrial({ trialId: "t1" });
+m13.endTrial();
+assert(m13.shouldScreenout() === false, "shouldScreenout false during grace period (1 trial)");
+m13.destroy();
+
+// ═══════════════════════════════════════════════
+// TRIAL-SCOPED SIGNAL TESTS
+// ═══════════════════════════════════════════════
+
+// Test 15: paste detection fires on simulated paste event
+var m14 = IntegrityMonitor.init({ participantId: "test14", preset: "standard" });
+m14.startSession();
+m14.startTrial({ trialId: "t1" });
+// Simulate a paste with >20 chars
+var pasteEvent = new ClipboardEvent("paste", {
+  bubbles: true,
+  clipboardData: new DataTransfer()
+});
+// DataTransfer.setData only works in some browsers; we test what we can
+document.dispatchEvent(pasteEvent);
+// The paste handler tries clipboardData.getData("text") which returns ""
+// for synthetic events, so pastedLength won't exceed 20.
+// This is a smoke test — real paste testing needs Playwright.
+var tr14 = m14.endTrial();
+assert(Array.isArray(tr14.pasteEvents), "trial report has pasteEvents array");
+m14.destroy();
+
+// Test 16: copy detection fires on simulated copy event
+var m15 = IntegrityMonitor.init({ participantId: "test15", preset: "standard" });
+m15.startSession();
+m15.startTrial({ trialId: "t1" });
+var copyEvent = new ClipboardEvent("copy", { bubbles: true });
+document.dispatchEvent(copyEvent);
+var tr15 = m15.endTrial();
+assert(tr15.copyEvents.length === 1, "copy event detected");
+assert(tr15.copyEvents[0].type === "copy", "copy event has correct type");
+m15.destroy();
+
+// Test 17: mouse tracking captures click events
+var m16 = IntegrityMonitor.init({ participantId: "test16", preset: "standard" });
+m16.startSession();
+m16.startTrial({ trialId: "t1" });
+// Simulate a click
+var clickEvent = new MouseEvent("click", { bubbles: true, pageX: 100, pageY: 200 });
+document.dispatchEvent(clickEvent);
+var tr16 = m16.endTrial();
+assert(tr16.mouseEvents.length >= 1, "mouse click captured");
+assert(tr16.mouseEvents[0].type === "click", "mouse event type is 'click'");
+m16.destroy();
+
+// Test 18: trial listeners are removed after endTrial
+var m17 = IntegrityMonitor.init({ participantId: "test17", preset: "standard" });
+m17.startSession();
+m17.startTrial({ trialId: "t1" });
+m17.endTrial();
+// After endTrial, start a new trial. Events from between trials shouldn't leak.
+m17.startTrial({ trialId: "t2" });
+var tr17 = m17.endTrial();
+assert(tr17.trialId === "t2", "second trial has correct trialId");
+assert(tr17.copyEvents.length === 0, "no leaked events from previous trial");
+m17.destroy();
+
+// Test 19: trial report includes syntheticInsertions array
+var m18 = IntegrityMonitor.init({ participantId: "test18", preset: "standard" });
+m18.startSession();
+m18.startTrial({ trialId: "t1" });
+var tr18 = m18.endTrial();
+assert(Array.isArray(tr18.syntheticInsertions), "trial report has syntheticInsertions array");
+m18.destroy();
+
+// Test 20: trial report includes duration_ms
+var m19 = IntegrityMonitor.init({ participantId: "test19", preset: "standard" });
+m19.startSession();
+m19.startTrial({ trialId: "t1" });
+// Small delay to ensure duration > 0
+var _start20 = performance.now();
+while (performance.now() - _start20 < 5) {} // busy-wait 5ms
+var tr19 = m19.endTrial();
+assert(tr19.duration_ms > 0, "trial report has positive duration_ms");
+m19.destroy();
+
+// Test 21: multiple trials accumulate session trialsCompleted
+var m20 = IntegrityMonitor.init({ participantId: "test20", preset: "standard" });
+m20.startSession();
+m20.startTrial({ trialId: "t1" }); m20.endTrial();
+m20.startTrial({ trialId: "t2" }); m20.endTrial();
+m20.startTrial({ trialId: "t3" }); m20.endTrial();
+var sr20 = m20.getSessionReport();
+assert(sr20.trialsCompleted === 3, "session tracks 3 completed trials");
+m20.destroy();
+
+// Test 22: destroy mid-trial doesn't throw
+var m21 = IntegrityMonitor.init({ participantId: "test21", preset: "standard" });
+m21.startSession();
+m21.startTrial({ trialId: "t1" });
+m21.destroy();
+assert(true, "destroy mid-trial does not throw");
+
+// ═══════════════════════════════════════════════
+// ENHANCED EXTENSION DETECTION TESTS (Task 2.5)
+// ═══════════════════════════════════════════════
+
+// Test 23: MutationObserver detects injected custom element
+var m22 = IntegrityMonitor.init({ participantId: "test22", preset: "standard" });
+m22.startSession();
+// Inject a fake AI extension custom element (tag has hyphen)
+var fakePanel = document.createElement("ai-sidebar-panel");
+fakePanel.style.display = "none";
+document.body.appendChild(fakePanel);
+// MutationObserver fires asynchronously, so we need a small delay
+setTimeout(function () {
+  var sr22 = m22.getSessionReport();
+  assert(sr22.extensionInjections.length >= 1, "MutationObserver: custom element injection detected");
+  assert(sr22.extensionInjections[0].tag === "ai-sidebar-panel", "MutationObserver: correct tag name logged");
+  fakePanel.remove();
+  m22.destroy();
+
+  // Test 24: MutationObserver ignores benign extensions (Grammarly)
+  var m23 = IntegrityMonitor.init({ participantId: "test23", preset: "standard" });
+  m23.startSession();
+  var grammarlyEl = document.createElement("grammarly-desktop-integration");
+  grammarlyEl.style.display = "none";
+  document.body.appendChild(grammarlyEl);
+  setTimeout(function () {
+    var sr23 = m23.getSessionReport();
+    assert(sr23.extensionInjections.length === 0, "MutationObserver: benign extension (Grammarly) ignored");
+    grammarlyEl.remove();
+    m23.destroy();
+
+    // Test 25: session report has extensionInjections and layoutShifts arrays
+    var m24 = IntegrityMonitor.init({ participantId: "test24", preset: "standard" });
+    m24.startSession();
+    var sr24 = m24.getSessionReport();
+    assert(Array.isArray(sr24.extensionInjections), "session report has extensionInjections array");
+    assert(Array.isArray(sr24.viewportWidthShifts), "session report has viewportWidthShifts array (canonical since 0.6.1)");
+    assert(Array.isArray(sr24.layoutShifts), "session report has layoutShifts array (deprecated alias)");
+    assert(Array.isArray(sr24.tabAwayEvents), "session report has session-level tabAwayEvents array (0.6.1)");
+    m24.destroy();
+
+    // Test 26: element trace is empty when config disabled (default)
+    var m25 = IntegrityMonitor.init({ participantId: "test25", preset: "standard" });
+    m25.startSession();
+    m25.startTrial({ trialId: "t1" });
+    var tr25 = m25.endTrial();
+    assert(tr25.elementTrace === undefined, "element trace not collected when config.elementTrace is false");
+    m25.destroy();
+
+    // Test 27: element trace array exists when enabled
+    var m26 = IntegrityMonitor.init({
+      participantId: "test26", preset: "standard",
+      collectForPostHoc: { elementTrace: true }
+    });
+    m26.startSession();
+    m26.startTrial({ trialId: "t1" });
+    var tr26 = m26.endTrial();
+    assert(Array.isArray(tr26.elementTrace), "element trace collected when enabled");
+    m26.destroy();
+
+    // Test 28: destroy cleans up MutationObserver and ResizeObserver
+    var m27 = IntegrityMonitor.init({ participantId: "test27", preset: "standard" });
+    m27.startSession();
+    m27.destroy();
+    // Verify no errors from injecting elements after destroy (observers disconnected)
+    var postDestroy = document.createElement("test-post-destroy");
+    document.body.appendChild(postDestroy);
+    setTimeout(function () {
+      postDestroy.remove();
+      assert(true, "destroy cleans up MutationObserver without errors");
+
+      // Test 29: innerWidth vs clientWidth gap check runs in sidebar poll
+      // (smoke test — we can't fake the gap in a test, but verify the code path exists)
+      var m28 = IntegrityMonitor.init({ participantId: "test28", preset: "standard" });
+      m28.startSession();
+      var sr28 = m28.getSessionReport();
+      // sidebarEvents array exists and includes layout_compression type checking
+      assert(Array.isArray(sr28.sidebarEvents), "sidebar events tracked including layout_compression path");
+      m28.destroy();
+
+      // ═══════════════════════════════════════════════
+      // MOUSE BOT METRICS TESTS (Task 3.5)
+      // ═══════════════════════════════════════════════
+
+      // Test 30: mouseMetrics computed from sufficient move events
+      // The library throttles mousemove at 50ms. We override performance.now
+      // to fake timestamps so all synthetic events pass the throttle.
+      var realPerfNow = performance.now.bind(performance);
+      var fakeTime = realPerfNow();
+      performance.now = function () { return fakeTime; };
+
+      var m29 = IntegrityMonitor.init({ participantId: "test29", preset: "standard" });
+      m29.startSession();
+      m29.startTrial({ trialId: "t1" });
+      // Simulate 5 mouse moves in a straight horizontal line (bot-like)
+      var straightCoords = [
+        { pageX: 100, pageY: 100 },
+        { pageX: 150, pageY: 100 },
+        { pageX: 200, pageY: 100 },
+        { pageX: 250, pageY: 100 },
+        { pageX: 300, pageY: 100 }
+      ];
+      for (var mi = 0; mi < straightCoords.length; mi++) {
+        fakeTime += 60; // advance 60ms each (past 50ms throttle)
+        document.dispatchEvent(new MouseEvent("mousemove", {
+          pageX: straightCoords[mi].pageX, pageY: straightCoords[mi].pageY,
+          clientX: straightCoords[mi].pageX, clientY: straightCoords[mi].pageY,
+          bubbles: true
+        }));
+      }
+      var tr29 = m29.endTrial();
+      assert(tr29.mouseMetrics !== undefined, "mouseMetrics present when >= 3 move events");
+      assert(typeof tr29.mouseMetrics.pathEfficiency === "number", "mouseMetrics.pathEfficiency is a number");
+      assert(typeof tr29.mouseMetrics.directionChanges === "number", "mouseMetrics.directionChanges is a number");
+      assert(typeof tr29.mouseMetrics.speedVariance === "number", "mouseMetrics.speedVariance is a number");
+      assert(tr29.mouseMetrics.moveCount >= 5, "mouseMetrics.moveCount >= 5");
+      // Straight-line path: pathEfficiency should be close to 1.0
+      assert(tr29.mouseMetrics.pathEfficiency > 0.9, "straight-line pathEfficiency > 0.9 (bot-like)");
+      // No direction changes on a straight horizontal line
+      assert(tr29.mouseMetrics.directionChanges === 0, "no direction changes on straight line");
+      m29.destroy();
+
+      // Test 31: mouseMetrics absent when < 3 move events
+      var m30 = IntegrityMonitor.init({ participantId: "test30", preset: "standard" });
+      m30.startSession();
+      m30.startTrial({ trialId: "t1" });
+      fakeTime += 60;
+      document.dispatchEvent(new MouseEvent("mousemove", { clientX: 50, clientY: 50, pageX: 50, pageY: 50, bubbles: true }));
+      var tr30 = m30.endTrial();
+      assert(tr30.mouseMetrics === undefined, "mouseMetrics absent when < 3 move events");
+      m30.destroy();
+
+      // Test 32: zigzag path has low pathEfficiency and direction changes
+      var m31 = IntegrityMonitor.init({ participantId: "test31", preset: "standard" });
+      m31.startSession();
+      m31.startTrial({ trialId: "t1" });
+      var zigzag = [
+        { pageX: 100, pageY: 100 },
+        { pageX: 200, pageY: 150 },
+        { pageX: 100, pageY: 200 },
+        { pageX: 200, pageY: 250 },
+        { pageX: 100, pageY: 300 }
+      ];
+      for (var zi = 0; zi < zigzag.length; zi++) {
+        fakeTime += 60;
+        document.dispatchEvent(new MouseEvent("mousemove", {
+          pageX: zigzag[zi].pageX, pageY: zigzag[zi].pageY,
+          clientX: zigzag[zi].pageX, clientY: zigzag[zi].pageY,
+          bubbles: true
+        }));
+      }
+      var tr31 = m31.endTrial();
+      assert(tr31.mouseMetrics.directionChanges > 0, "zigzag path has direction changes");
+      assert(tr31.mouseMetrics.pathEfficiency < 0.9, "zigzag pathEfficiency < 0.9 (human-like)");
+      m31.destroy();
+
+      // Restore real performance.now
+      performance.now = realPerfNow;
+
+      // ═══════════════════════════════════════════════
+      // SCORING ENGINE TESTS (Task 4)
+      // ═══════════════════════════════════════════════
+
+      // ── Two-tier scoring tests ──
+      // The scoring engine splits signals into two tiers:
+      //   Hard: count-based (paste, copy, drop). ANY crossing threshold = immediate screenout.
+      //   Soft: weighted accumulation (copy, tabAway, typingSpeed, sidebarEvent, devTools).
+      //         softScore >= softScoreThreshold = screenout (after grace period).
+      // A signal can be in both tiers (e.g., copy in strict preset is hard AND soft).
+
+      // Test 33: endTrial report includes trialSoftScore and two-tier trialSignals
+      var m32 = IntegrityMonitor.init({ participantId: "test32", preset: "standard" });
+      m32.startSession();
+      m32.startTrial({ trialId: "t1" });
+      var tr32 = m32.endTrial();
+      assert(typeof tr32.trialSoftScore === "number", "endTrial report has trialSoftScore");
+      assert(typeof tr32.trialSignals === "object", "endTrial report has trialSignals");
+      assert(typeof tr32.trialSignals.hard === "object", "trialSignals has hard tier");
+      assert(typeof tr32.trialSignals.soft === "object", "trialSignals has soft tier");
+      assert(tr32.trialSoftScore === 0, "no-signal trial has trialSoftScore of 0");
+      m32.destroy();
+
+      // Test 34: copy events contribute to soft score (standard preset)
+      // standard preset: copy is a soft signal with weight=2, maxPerTrial=2
+      var m33 = IntegrityMonitor.init({ participantId: "test33", preset: "standard" });
+      m33.startSession();
+      m33.startTrial({ trialId: "t1" });
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      var tr33 = m33.endTrial();
+      assert(tr33.trialSignals.soft.copy.hits === 2, "scoring: 2 copy events detected in soft tier");
+      assert(tr33.trialSignals.soft.copy.capped === 2, "scoring: 2 copies capped at maxPerTrial=2");
+      assert(tr33.trialSoftScore === 4, "scoring: 2 copies * weight 2 = soft score 4");
+      m33.destroy();
+
+      // Test 35: getSessionScore returns two-tier object, softScore accumulates
+      var m34 = IntegrityMonitor.init({ participantId: "test34", preset: "standard" });
+      m34.startSession();
+      // Trial 1: 1 copy (soft score: 1 * weight 2 = 2)
+      m34.startTrial({ trialId: "t1" });
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      m34.endTrial();
+      // Trial 2: 1 copy (soft score: 1 * weight 2 = 2)
+      m34.startTrial({ trialId: "t2" });
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      m34.endTrial();
+      var score34 = m34.getSessionScore();
+      assert(typeof score34 === "object", "getSessionScore returns an object");
+      assert(score34.softScore === 4, "session soft score accumulates: 2 + 2 = 4");
+      assert(score34.trialsCompleted === 2, "getSessionScore tracks trials completed");
+      m34.destroy();
+
+      // Test 36: hard signal triggers screenout immediately (no grace period)
+      // strict preset: copy is a hard signal with countThreshold = 2.
+      // (We use copy instead of paste because synthetic paste events can't carry
+      //  clipboard data in browsers, so pastedLength=0 and 0>0 is false.)
+      var m35 = IntegrityMonitor.init({ participantId: "test35", preset: "strict" });
+      m35.startSession();
+      m35.startTrial({ trialId: "t1" });
+      // Dispatch 2 copy events to cross the hard threshold
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      var tr35 = m35.endTrial();
+      // strict preset: copy hard countThreshold = 2, so 2 copies → triggered
+      assert(tr35.trialSignals.hard.copy !== undefined, "strict: copy tracked as hard signal");
+      assert(tr35.trialSignals.hard.copy.sessionTotal >= 2, "strict: copy session count >= 2");
+      // Hard signal should cause immediate screenout (even during grace period)
+      assert(m35.shouldScreenout() === true, "hard signal triggers screenout immediately, ignoring grace period");
+      m35.destroy();
+
+      // Test 37: soft score screenout respects threshold and grace period
+      // We configure a custom preset with low softScoreThreshold so 2 copies cross it.
+      var m36 = IntegrityMonitor.init({
+        participantId: "test36", preset: "standard",
+        scoring: { softScoreThreshold: 3 },
+        screenout: { enabled: true, gracePeriodTrials: 2 }
+      });
+      m36.startSession();
+      // Trial 1 (grace period, trialsCompleted=1 < 2): 2 copies → softScore 4 > threshold 3
+      m36.startTrial({ trialId: "t1" });
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      m36.endTrial();
+      assert(m36.shouldScreenout() === false, "shouldScreenout false during grace period (1 of 2 trials)");
+      // Trial 2 (trialsCompleted=2, grace over): softScore already 4 > threshold 3
+      m36.startTrial({ trialId: "t2" });
+      m36.endTrial();
+      assert(m36.shouldScreenout() === true, "shouldScreenout true after grace: softScore 4 > threshold 3");
+      m36.destroy();
+
+      // Test 38: screenout disabled returns false even with signals
+      var m37 = IntegrityMonitor.init({
+        participantId: "test37", preset: "permissive"
+        // permissive preset: screenout.enabled = false
+      });
+      m37.startSession();
+      m37.startTrial({ trialId: "t1" });
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      m37.endTrial();
+      assert(m37.shouldScreenout() === false, "shouldScreenout false when screenout disabled (permissive)");
+      m37.destroy();
+
+      // ═══════════════════════════════════════════════
+      // DOM PROTECTION UTILITY TESTS (Task 5)
+      // ═══════════════════════════════════════════════
+
+      // Test 39: preventTextSelection applies user-select: none
+      var testDiv39 = document.createElement("div");
+      testDiv39.className = "test-select-target";
+      testDiv39.textContent = "Some text";
+      document.body.appendChild(testDiv39);
+      IntegrityMonitor.preventTextSelection(".test-select-target");
+      var computedSelect = window.getComputedStyle(testDiv39).userSelect ||
+                           window.getComputedStyle(testDiv39).webkitUserSelect;
+      assert(computedSelect === "none", "preventTextSelection sets user-select: none");
+      testDiv39.remove();
+
+      // Test 40: addHoneypot inserts hidden span with decoy text
+      var testDiv40 = document.createElement("div");
+      testDiv40.className = "test-honeypot-target";
+      testDiv40.textContent = "Visible content";
+      document.body.appendChild(testDiv40);
+      IntegrityMonitor.addHoneypot(".test-honeypot-target", "DECOY_MARKER_XYZ");
+      var honeySpan = testDiv40.querySelector("[data-honeypot]");
+      assert(honeySpan !== null, "addHoneypot inserts a span with data-honeypot");
+      assert(honeySpan.textContent === "DECOY_MARKER_XYZ", "honeypot span has correct decoy text");
+      assert(honeySpan.style.opacity === "0", "honeypot span is invisible");
+      testDiv40.remove();
+
+      // Test 41: setAltText overrides image alt attribute
+      var testImg41 = document.createElement("img");
+      testImg41.className = "test-alt-target";
+      testImg41.alt = "Original alt";
+      testImg41.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+      document.body.appendChild(testImg41);
+      IntegrityMonitor.setAltText(".test-alt-target", "This is a card game about patterns");
+      assert(testImg41.alt === "This is a card game about patterns", "setAltText overrides alt attribute");
+      testImg41.remove();
+
+      // Test 42: static utilities are accessible on frozen IntegrityMonitor
+      assert(typeof IntegrityMonitor.preventTextSelection === "function", "preventTextSelection is a static method");
+      assert(typeof IntegrityMonitor.addHoneypot === "function", "addHoneypot is a static method");
+      assert(typeof IntegrityMonitor.setAltText === "function", "setAltText is a static method");
+
+      // ═══════════════════════════════════════════════
+      // NEW: Two-tier scoring + config additions
+      // ═══════════════════════════════════════════════
+
+      // Test 43: getSessionScore returns structured object with both tiers
+      var m43 = IntegrityMonitor.init({ participantId: "test43", preset: "standard" });
+      m43.startSession();
+      m43.startTrial({ trialId: "t1" }); m43.endTrial();
+      var s43 = m43.getSessionScore();
+      assert(typeof s43.hardScore === "object", "getSessionScore has hardScore object");
+      assert(typeof s43.softScore === "number", "getSessionScore has softScore number");
+      assert(typeof s43.softScoreThreshold === "number", "getSessionScore has softScoreThreshold");
+      assert(typeof s43.anyHardTriggered === "boolean", "getSessionScore has anyHardTriggered flag");
+      assert(s43.anyHardTriggered === false, "no hard signals triggered in clean trial");
+      assert(s43.softScore === 0, "soft score is 0 for clean trial");
+      m43.destroy();
+
+      // Test 44: session report includes zoomChanges array
+      var m44 = IntegrityMonitor.init({ participantId: "test44", preset: "standard" });
+      m44.startSession();
+      var sr44 = m44.getSessionReport();
+      assert(Array.isArray(sr44.zoomChanges), "session report has zoomChanges array");
+      m44.destroy();
+
+      // Test 45: session report includes hardScore and softScore
+      var m45 = IntegrityMonitor.init({ participantId: "test45", preset: "standard" });
+      m45.startSession();
+      m45.startTrial({ trialId: "t1" }); m45.endTrial();
+      var sr45 = m45.getSessionReport();
+      assert(typeof sr45.hardScore === "object", "session report has hardScore");
+      assert(typeof sr45.softScore === "number", "session report has softScore");
+      m45.destroy();
+
+      // Test 45b: getSessionReport is a strict superset of getSessionScore + session accumulators
+      // (single source of truth for all session-level data)
+      var m45b = IntegrityMonitor.init({ participantId: "test45b", preset: "standard" });
+      m45b.startSession();
+      m45b.startTrial({ trialId: "t1" }); m45b.endTrial();
+      m45b.startTrial({ trialId: "t2" }); m45b.endTrial();
+      var r45b = m45b.getSessionReport();
+      // Session accumulators still present
+      assert(r45b.pasteCount !== undefined, "getSessionReport: has pasteCount accumulator");
+      // Scoring summary fields (previously only on getSessionScore)
+      assert(r45b.hardScore !== undefined, "getSessionReport: has hardScore summary");
+      assert(typeof r45b.softScore === "number", "getSessionReport: has softScore");
+      assert(typeof r45b.softScoreThreshold === "number", "getSessionReport: has softScoreThreshold");
+      assert(typeof r45b.anyHardTriggered === "boolean", "getSessionReport: has anyHardTriggered");
+      assert(r45b.trialsCompleted === 2, "getSessionReport: trialsCompleted matches");
+      // Metadata
+      assert(r45b.libraryVersion !== undefined, "getSessionReport: has libraryVersion");
+      assert(r45b.config && r45b.config.preset === "standard", "getSessionReport: config.preset");
+      assert(r45b.config && r45b.config.participantId === "test45b", "getSessionReport: config.participantId");
+      // Values match getSessionScore() (strict superset)
+      var s45b = m45b.getSessionScore();
+      assert(r45b.softScore === s45b.softScore, "getSessionReport.softScore === getSessionScore.softScore");
+      assert(r45b.anyHardTriggered === s45b.anyHardTriggered, "getSessionReport.anyHardTriggered === getSessionScore.anyHardTriggered");
+      assert(r45b.trialsCompleted === s45b.trialsCompleted, "getSessionReport.trialsCompleted === getSessionScore.trialsCompleted");
+      m45b.destroy();
+
+      // Test 46: custom thresholds merge with defaults
+      var m46 = IntegrityMonitor.init({
+        participantId: "test46", preset: "standard",
+        thresholds: { pasteMinChars: 50, mouseMaxEvents: 500 }
+      });
+      var raw46 = m46.getRawData();
+      // Custom values should override defaults, but other defaults remain
+      assert(raw46.config.preset === "standard", "custom thresholds: preset still standard");
+      m46.destroy();
+
+      // Test 47: maxPerTrial caps soft signal contribution
+      // standard preset: copy has maxPerTrial=2, weight=2
+      // 5 copy events should cap at 2 → soft score = 2 * 2 = 4
+      var m47 = IntegrityMonitor.init({ participantId: "test47", preset: "standard" });
+      m47.startSession();
+      m47.startTrial({ trialId: "t1" });
+      for (var ci = 0; ci < 5; ci++) {
+        document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      }
+      var tr47 = m47.endTrial();
+      assert(tr47.trialSignals.soft.copy.hits === 5, "maxPerTrial: 5 copy hits recorded");
+      assert(tr47.trialSignals.soft.copy.capped === 2, "maxPerTrial: capped at 2");
+      assert(tr47.trialSignals.soft.copy.score === 4, "maxPerTrial: score = 2 * weight 2 = 4");
+      assert(tr47.trialSoftScore === 4, "maxPerTrial: total trial soft score = 4");
+      m47.destroy();
+
+      // Test 48: hard signal cross-threshold via copy (strict preset, countThreshold=2)
+      // (Can't test paste hard signal with synthetic events because clipboardData
+      //  returns "" and 0 > 0 is false. Testing with copy in strict mode instead.)
+      var m48 = IntegrityMonitor.init({ participantId: "test48", preset: "strict" });
+      m48.startSession();
+      m48.startTrial({ trialId: "t1" });
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      var tr48 = m48.endTrial();
+      var score48 = m48.getSessionScore();
+      assert(score48.anyHardTriggered === true, "2 copies trigger hard signal (strict countThreshold=2)");
+      assert(score48.hardScore.copy.triggered === true, "copy hard signal specifically triggered");
+      assert(m48.shouldScreenout() === true, "hard signal causes immediate screenout");
+      m48.destroy();
+
+      // ══════���════════════════════════════════════════
+      // onSignal CALLBACK HOOK TESTS
+      // ═══════════���═══════════════════════════════════
+
+      // Test 49: onSignal fires on copy events with correct payload
+      var signals49 = [];
+      var m49 = IntegrityMonitor.init({
+        participantId: "test49", preset: "standard",
+        onSignal: function(sig) { signals49.push(sig); }
+      });
+      m49.startSession();
+      m49.startTrial({ trialId: "t1" });
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      var tr49 = m49.endTrial();
+      assert(signals49.length >= 1, "onSignal fired on copy event");
+      assert(signals49[0].type === "copy", "onSignal copy has type='copy'");
+      assert(signals49[0].trialId === "t1", "onSignal copy has correct trialId");
+      assert(typeof signals49[0].data.selectedLength === "number", "onSignal copy has selectedLength");
+      assert(signals49[0].event instanceof Event, "onSignal copy passes raw DOM event");
+      m49.destroy();
+
+      // Test 50: onSignal fires on paste events
+      var signals50 = [];
+      var m50 = IntegrityMonitor.init({
+        participantId: "test50", preset: "standard",
+        onSignal: function(sig) { signals50.push(sig); }
+      });
+      m50.startSession();
+      m50.startTrial({ trialId: "t1" });
+      var pe50 = new ClipboardEvent("paste", {
+        bubbles: true,
+        clipboardData: new DataTransfer()
+      });
+      document.dispatchEvent(pe50);
+      m50.endTrial();
+      // Note: synthetic paste has 0-length text, and pasteMinChars=0, so it fires
+      assert(signals50.some(function(s) { return s.type === "paste"; }), "onSignal fires on paste");
+      m50.destroy();
+
+      // Test 51: onSignal fires on cut events
+      var signals51 = [];
+      var m51 = IntegrityMonitor.init({
+        participantId: "test51", preset: "standard",
+        onSignal: function(sig) { signals51.push(sig); }
+      });
+      m51.startSession();
+      m51.startTrial({ trialId: "t1" });
+      document.dispatchEvent(new ClipboardEvent("cut", { bubbles: true }));
+      var tr51 = m51.endTrial();
+      assert(signals51.some(function(s) { return s.type === "cut"; }), "onSignal fires on cut");
+      assert(tr51.copyEvents.some(function(e) { return e.type === "cut"; }), "cut event in copyEvents array");
+      m51.destroy();
+
+      // Test 52: onSignal fires on keyboard shortcuts
+      var signals52 = [];
+      var m52 = IntegrityMonitor.init({
+        participantId: "test52", preset: "standard",
+        onSignal: function(sig) { signals52.push(sig); }
+      });
+      m52.startSession();
+      // Keyboard shortcuts are session-scoped, fire even outside a trial
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "F12", bubbles: true
+      }));
+      assert(signals52.some(function(s) { return s.type === "keyboardShortcut" && s.data.combo === "F12"; }),
+        "onSignal fires on F12 keyboard shortcut");
+      m52.destroy();
+
+      // Test 53: no onSignal callback — signals still work, no errors
+      var m53 = IntegrityMonitor.init({ participantId: "test53", preset: "standard" });
+      m53.startSession();
+      m53.startTrial({ trialId: "t1" });
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      var tr53 = m53.endTrial();
+      assert(tr53.copyEvents.length >= 1, "signals fire without onSignal callback");
+      m53.destroy();
+
+      // Test 54: onSignal callback error doesn't break library
+      var m54 = IntegrityMonitor.init({
+        participantId: "test54", preset: "standard",
+        onSignal: function() { throw new Error("callback error!"); }
+      });
+      m54.startSession();
+      m54.startTrial({ trialId: "t1" });
+      document.dispatchEvent(new ClipboardEvent("copy", { bubbles: true }));
+      var tr54 = m54.endTrial();
+      assert(tr54.copyEvents.length >= 1, "library continues after callback error");
+      m54.destroy();
+
+      // ═══════════════════════════���═══════════════════
+      // experimentContainer + FOREIGN INPUT TESTS
+      // ═══════════════════════════════════════════════
+
+      // Create a test container and a foreign input element
+      var testContainer = document.createElement("div");
+      testContainer.id = "test-experiment-container";
+      var knownInput = document.createElement("textarea");
+      knownInput.id = "test-known-input";
+      testContainer.appendChild(knownInput);
+      document.body.appendChild(testContainer);
+
+      var foreignInput = document.createElement("input");
+      foreignInput.id = "test-foreign-input";
+      foreignInput.className = "chatgpt-sidebar-input";
+      document.body.appendChild(foreignInput);
+
+      // Test 55: experimentContainer classifies known input
+      var signals55 = [];
+      var m55 = IntegrityMonitor.init({
+        participantId: "test55", preset: "standard",
+        experimentContainer: "#test-experiment-container",
+        onSignal: function(sig) { signals55.push(sig); }
+      });
+      m55.startSession();
+      m55.startTrial({ trialId: "t1" });
+      // Simulate input on the known textarea (inside container)
+      knownInput.dispatchEvent(new InputEvent("input", {
+        bubbles: true, inputType: "insertText", data: "a"
+      }));
+      var tr55 = m55.endTrial();
+      // Known inputs should NOT produce foreignInputEvents
+      assert(tr55.foreignInputEvents.length === 0, "input inside container is not foreign");
+      assert(!signals55.some(function(s) { return s.type === "typingOutsideExperiment"; }),
+        "no typingOutsideExperiment signal for known input");
+      m55.destroy();
+
+      // Test 56: experimentContainer classifies foreign input
+      var signals56 = [];
+      var m56 = IntegrityMonitor.init({
+        participantId: "test56", preset: "standard",
+        experimentContainer: "#test-experiment-container",
+        onSignal: function(sig) { signals56.push(sig); }
+      });
+      m56.startSession();
+      m56.startTrial({ trialId: "t1" });
+      // Simulate input on the foreign input (outside container)
+      foreignInput.dispatchEvent(new InputEvent("input", {
+        bubbles: true, inputType: "insertText", data: "x"
+      }));
+      var tr56 = m56.endTrial();
+      assert(tr56.foreignInputEvents.length >= 1, "input outside container is foreign");
+      assert(tr56.foreignInputEvents[0].targetTag === "INPUT", "foreign event has targetTag");
+      assert(tr56.foreignInputEvents[0].targetId === "test-foreign-input", "foreign event has targetId");
+      assert(tr56.foreignInputEvents[0].targetClass === "chatgpt-sidebar-input", "foreign event has targetClass");
+      assert(signals56.some(function(s) { return s.type === "typingOutsideExperiment"; }),
+        "typingOutsideExperiment signal fires for foreign input");
+      m56.destroy();
+
+      // Test 57: foreignInput contributes to soft score
+      var m57 = IntegrityMonitor.init({
+        participantId: "test57", preset: "standard",
+        experimentContainer: "#test-experiment-container"
+      });
+      m57.startSession();
+      m57.startTrial({ trialId: "t1" });
+      foreignInput.dispatchEvent(new InputEvent("input", {
+        bubbles: true, inputType: "insertText", data: "z"
+      }));
+      var tr57 = m57.endTrial();
+      assert(tr57.trialSoftScore > 0, "foreign input increases trial soft score");
+      assert(tr57.trialSignals.soft.foreignInput != null, "foreignInput appears in soft signals");
+      assert(tr57.trialSignals.soft.foreignInput.weight != null || tr57.trialSignals.soft.foreignInput.score > 0,
+        "foreignInput soft signal has score");
+      m57.destroy();
+
+      // Test 58: no experimentContainer — foreignInputEvents stays empty, no errors
+      var m58 = IntegrityMonitor.init({ participantId: "test58", preset: "standard" });
+      m58.startSession();
+      m58.startTrial({ trialId: "t1" });
+      foreignInput.dispatchEvent(new InputEvent("input", {
+        bubbles: true, inputType: "insertText", data: "y"
+      }));
+      var tr58 = m58.endTrial();
+      assert(tr58.foreignInputEvents.length === 0,
+        "no experimentContainer: foreignInputEvents empty (tracking disabled)");
+      m58.destroy();
+
+      // Test 59: knownInputs selector overrides container check
+      var signals59 = [];
+      var m59 = IntegrityMonitor.init({
+        participantId: "test59", preset: "standard",
+        experimentContainer: "#test-experiment-container",
+        knownInputs: "#test-foreign-input",  // explicitly mark the "foreign" one as known
+        onSignal: function(sig) { signals59.push(sig); }
+      });
+      m59.startSession();
+      m59.startTrial({ trialId: "t1" });
+      foreignInput.dispatchEvent(new InputEvent("input", {
+        bubbles: true, inputType: "insertText", data: "w"
+      }));
+      var tr59 = m59.endTrial();
+      assert(tr59.foreignInputEvents.length === 0,
+        "knownInputs override: foreign element treated as known");
+      m59.destroy();
+
+      // Test 60: per-trial experimentContainer update
+      var m60 = IntegrityMonitor.init({
+        participantId: "test60", preset: "standard",
+        experimentContainer: "#test-experiment-container"
+      });
+      m60.startSession();
+      // Trial 1: foreign input fires normally
+      m60.startTrial({ trialId: "t1" });
+      foreignInput.dispatchEvent(new InputEvent("input", {
+        bubbles: true, inputType: "insertText", data: "q"
+      }));
+      var tr60a = m60.endTrial();
+      assert(tr60a.foreignInputEvents.length >= 1, "trial 1: foreign input detected");
+      // Trial 2: expand container to body (everything is known)
+      m60.startTrial({ trialId: "t2", experimentContainer: "body" });
+      foreignInput.dispatchEvent(new InputEvent("input", {
+        bubbles: true, inputType: "insertText", data: "r"
+      }));
+      var tr60b = m60.endTrial();
+      assert(tr60b.foreignInputEvents.length === 0,
+        "trial 2: per-trial container update reclassifies input as known");
+      m60.destroy();
+
+      // Test 61: paste event includes isKnownInput field
+      var signals61 = [];
+      var m61 = IntegrityMonitor.init({
+        participantId: "test61", preset: "standard",
+        experimentContainer: "#test-experiment-container",
+        onSignal: function(sig) { signals61.push(sig); }
+      });
+      m61.startSession();
+      m61.startTrial({ trialId: "t1" });
+      // Paste on known input
+      knownInput.dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true, clipboardData: new DataTransfer()
+      }));
+      // Paste on foreign input
+      foreignInput.dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true, clipboardData: new DataTransfer()
+      }));
+      var tr61 = m61.endTrial();
+      // Both pastes recorded (pastedLength=0 passes threshold of 0)
+      var knownPastes = tr61.pasteEvents.filter(function(p) { return p.isKnownInput === true; });
+      var foreignPastes = tr61.pasteEvents.filter(function(p) { return p.isKnownInput === false; });
+      assert(knownPastes.length >= 1, "paste on known input tagged isKnownInput=true");
+      assert(foreignPastes.length >= 1, "paste on foreign input tagged isKnownInput=false");
+      m61.destroy();
+
+      // Cleanup test DOM
+      document.body.removeChild(testContainer);
+      document.body.removeChild(foreignInput);
+
+      // Final summary
+      log("\n" + passed + " passed, " + failed + " failed");
+    }, 50);
+  }, 50);
+}, 50);
+// Note: tests 23-42 run asynchronously due to MutationObserver timing
+</script>
+</body>
+</html>

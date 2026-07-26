@@ -1,0 +1,346 @@
+{
+  "session_id": "REDACTED",
+  "user_id": "REDACTED",
+  "tags": [
+    "guards:none",
+    "runId:schema-discovery-002",
+    "scenario:schema-discovery"
+  ],
+  "risk_score": 15,
+  "risk_explanation": "All device signals look legitimate, but the complete absence of typing corrections (no backspaces) is an unusual biometric pattern that can indicate scripted or automated input, representing a low-level risk.",
+  "recommended_action": "Auto-accept",
+  "user_logs": [
+    {
+      "action": "User navigated to /bench/harness/?scenario=schema-discovery&guards=none&runId=schema-discovery-002&skip-voice=1",
+      "user_time": "5/13/2026, 8:01:53 PM",
+      "unix_timestamp": 1778727713027
+    },
+    {
+      "action": "Page became hidden",
+      "user_time": "5/13/2026, 8:01:59 PM",
+      "unix_timestamp": 1778727719507
+    },
+    {
+      "action": "Page became visible",
+      "user_time": "5/13/2026, 8:02:27 PM",
+      "unix_timestamp": 1778727747776
+    },
+    {
+      "action": "User clicked \"Next >\"",
+      "user_time": "5/13/2026, 8:02:52 PM",
+      "unix_timestamp": 1778727772087
+    },
+    {
+      "action": "User clicked \"Next >\"",
+      "user_time": "5/13/2026, 8:02:52 PM",
+      "unix_timestamp": 1778727772850
+    },
+    {
+      "action": "User clicked \"Next >\"",
+      "user_time": "5/13/2026, 8:02:54 PM",
+      "unix_timestamp": 1778727774299
+    },
+    {
+      "action": "User clicked \"Enter fullscreen\"",
+      "user_time": "5/13/2026, 8:02:54 PM",
+      "unix_timestamp": 1778727774906
+    },
+    {
+      "action": "User clicked \"😐 Neutral\"",
+      "user_time": "5/13/2026, 8:03:07 PM",
+      "unix_timestamp": 1778727787796
+    },
+    {
+      "action": "User clicked \"Not at all confident\nSomewhat\nVery confident\"",
+      "user_time": "5/13/2026, 8:03:13 PM",
+      "unix_timestamp": 1778727793010
+    },
+    {
+      "action": "User clicked \"Not at all confident\nSomewhat\nVery confident\"",
+      "user_time": "5/13/2026, 8:03:13 PM",
+      "unix_timestamp": 1778727793391
+    },
+    {
+      "action": "User clicked \"Continue\"",
+      "user_time": "5/13/2026, 8:03:14 PM",
+      "unix_timestamp": 1778727794254
+    },
+    {
+      "action": "User clicked \"Done drawing\"",
+      "user_time": "5/13/2026, 8:03:19 PM",
+      "unix_timestamp": 1778727799869
+    },
+    {
+      "action": "User clicked \"Continue\"",
+      "user_time": "5/13/2026, 8:03:43 PM",
+      "unix_timestamp": 1778727823798
+    },
+    {
+      "action": "User clicked \"Desktop\"",
+      "user_time": "5/13/2026, 8:03:45 PM",
+      "unix_timestamp": 1778727825255
+    },
+    {
+      "action": "User clicked \"Chrome\"",
+      "user_time": "5/13/2026, 8:03:46 PM",
+      "unix_timestamp": 1778727826099
+    },
+    {
+      "action": "User clicked \"Never before\"",
+      "user_time": "5/13/2026, 8:03:47 PM",
+      "unix_timestamp": 1778727827030
+    },
+    {
+      "action": "User clicked \"Fair\"",
+      "user_time": "5/13/2026, 8:03:48 PM",
+      "unix_timestamp": 1778727828087
+    },
+    {
+      "action": "User clicked \"Fair\"",
+      "user_time": "5/13/2026, 8:03:48 PM",
+      "unix_timestamp": 1778727828624
+    },
+    {
+      "action": "User clicked \"Very unclear\"",
+      "user_time": "5/13/2026, 8:03:49 PM",
+      "unix_timestamp": 1778727829437
+    },
+    {
+      "action": "User clicked \"Too slow\"",
+      "user_time": "5/13/2026, 8:03:50 PM",
+      "unix_timestamp": 1778727830256
+    },
+    {
+      "action": "User clicked \"Slightly slow\"",
+      "user_time": "5/13/2026, 8:03:51 PM",
+      "unix_timestamp": 1778727831056
+    },
+    {
+      "action": "User clicked \"Confidence slider\"",
+      "user_time": "5/13/2026, 8:03:52 PM",
+      "unix_timestamp": 1778727832901
+    },
+    {
+      "action": "User clicked \"Comfortable\"",
+      "user_time": "5/13/2026, 8:03:54 PM",
+      "unix_timestamp": 1778727834439
+    },
+    {
+      "action": "User submitted jspsych-survey-multi-choice_form",
+      "user_time": "5/13/2026, 8:03:56 PM",
+      "unix_timestamp": 1778727836989
+    },
+    {
+      "action": "User edited #jspsych-survey-text-response-0",
+      "user_time": "5/13/2026, 8:04:01 PM",
+      "unix_timestamp": 1778727841309
+    },
+    {
+      "action": "User edited #jspsych-survey-text-response-0",
+      "user_time": "5/13/2026, 8:04:02 PM",
+      "unix_timestamp": 1778727842505
+    },
+    {
+      "action": "User edited #jspsych-survey-text-response-1",
+      "user_time": "5/13/2026, 8:04:03 PM",
+      "unix_timestamp": 1778727843843
+    },
+    {
+      "action": "User clicked \"In one sentence, what did you think of this demo?\"",
+      "user_time": "5/13/2026, 8:04:05 PM",
+      "unix_timestamp": 1778727845666
+    },
+    {
+      "action": "User edited #jspsych-survey-text-response-2",
+      "user_time": "5/13/2026, 8:04:08 PM",
+      "unix_timestamp": 1778727848499
+    },
+    {
+      "action": "User clicked \"In one sentence, what did you think of this demo?\"",
+      "user_time": "5/13/2026, 8:04:11 PM",
+      "unix_timestamp": 1778727851206
+    },
+    {
+      "action": "User clicked \"In one sentence, what did you think of this demo?\"",
+      "user_time": "5/13/2026, 8:04:12 PM",
+      "unix_timestamp": 1778727852161
+    },
+    {
+      "action": "User edited #jspsych-survey-text-response-2",
+      "user_time": "5/13/2026, 8:04:14 PM",
+      "unix_timestamp": 1778727854281
+    },
+    {
+      "action": "User clicked \"What is your first name? (you may use a pseudonym)\"",
+      "user_time": "5/13/2026, 8:04:19 PM",
+      "unix_timestamp": 1778727859144
+    },
+    {
+      "action": "User submitted jspsych-survey-text-form",
+      "user_time": "5/13/2026, 8:04:20 PM",
+      "unix_timestamp": 1778727860557
+    },
+    {
+      "action": "User clicked \"Rule name\"",
+      "user_time": "5/13/2026, 8:04:22 PM",
+      "unix_timestamp": 1778727862670
+    },
+    {
+      "action": "User clicked \"Rule name\"",
+      "user_time": "5/13/2026, 8:04:39 PM",
+      "unix_timestamp": 1778727879699
+    },
+    {
+      "action": "User edited #jspsych-survey-text-response-0",
+      "user_time": "5/13/2026, 8:04:40 PM",
+      "unix_timestamp": 1778727880612
+    },
+    {
+      "action": "User submitted jspsych-survey-text-form",
+      "user_time": "5/13/2026, 8:04:43 PM",
+      "unix_timestamp": 1778727883844
+    },
+    {
+      "action": "User navigated to /bench/harness/?scenario=schema-discovery&guards=none&runId=schema-discovery-002&skip-voice=1",
+      "user_time": "5/13/2026, 8:09:14 PM",
+      "unix_timestamp": 1778728154250
+    },
+    {
+      "action": "User clicked \"Next >\"",
+      "user_time": "5/13/2026, 8:09:33 PM",
+      "unix_timestamp": 1778728173949
+    },
+    {
+      "action": "User clicked \"Next >\"",
+      "user_time": "5/13/2026, 8:09:34 PM",
+      "unix_timestamp": 1778728174900
+    },
+    {
+      "action": "User clicked \"Next >\"",
+      "user_time": "5/13/2026, 8:09:35 PM",
+      "unix_timestamp": 1778728175625
+    },
+    {
+      "action": "User clicked \"Enter fullscreen\"",
+      "user_time": "5/13/2026, 8:09:39 PM",
+      "unix_timestamp": 1778728179126
+    },
+    {
+      "action": "User clicked \"😞 Sad\"",
+      "user_time": "5/13/2026, 8:09:47 PM",
+      "unix_timestamp": 1778728187829
+    },
+    {
+      "action": "User clicked \"Not at all confident\nSomewhat\nVery confident\"",
+      "user_time": "5/13/2026, 8:09:50 PM",
+      "unix_timestamp": 1778728190091
+    },
+    {
+      "action": "User clicked \"Not at all confident\nSomewhat\nVery confident\"",
+      "user_time": "5/13/2026, 8:09:51 PM",
+      "unix_timestamp": 1778728191197
+    },
+    {
+      "action": "User clicked \"Continue\"",
+      "user_time": "5/13/2026, 8:09:52 PM",
+      "unix_timestamp": 1778728192160
+    },
+    {
+      "action": "User clicked \"Done drawing\"",
+      "user_time": "5/13/2026, 8:10:01 PM",
+      "unix_timestamp": 1778728201632
+    },
+    {
+      "action": "User clicked \"Continue\"",
+      "user_time": "5/13/2026, 8:10:09 PM",
+      "unix_timestamp": 1778728209370
+    },
+    {
+      "action": "User clicked \"Tablet\"",
+      "user_time": "5/13/2026, 8:10:11 PM",
+      "unix_timestamp": 1778728211646
+    },
+    {
+      "action": "User clicked \"Chrome\"",
+      "user_time": "5/13/2026, 8:10:12 PM",
+      "unix_timestamp": 1778728212796
+    },
+    {
+      "action": "User submitted jspsych-survey-multi-choice_form",
+      "user_time": "5/13/2026, 8:10:15 PM",
+      "unix_timestamp": 1778728215461
+    },
+    {
+      "action": "User edited #jspsych-survey-text-response-0",
+      "user_time": "5/13/2026, 8:10:21 PM",
+      "unix_timestamp": 1778728221029
+    },
+    {
+      "action": "User clicked \"How old are you?\"",
+      "user_time": "5/13/2026, 8:10:23 PM",
+      "unix_timestamp": 1778728223080
+    },
+    {
+      "action": "User edited #jspsych-survey-text-response-1",
+      "user_time": "5/13/2026, 8:10:26 PM",
+      "unix_timestamp": 1778728226378
+    },
+    {
+      "action": "User clicked \"In one sentence, what did you think of this demo?\"",
+      "user_time": "5/13/2026, 8:10:27 PM",
+      "unix_timestamp": 1778728227487
+    },
+    {
+      "action": "User edited #jspsych-survey-text-response-2",
+      "user_time": "5/13/2026, 8:10:30 PM",
+      "unix_timestamp": 1778728230586
+    },
+    {
+      "action": "User submitted jspsych-survey-text-form",
+      "user_time": "5/13/2026, 8:10:31 PM",
+      "unix_timestamp": 1778728231513
+    },
+    {
+      "action": "User clicked \"Rule name\"",
+      "user_time": "5/13/2026, 8:10:43 PM",
+      "unix_timestamp": 1778728243240
+    },
+    {
+      "action": "User edited #jspsych-survey-text-response-0",
+      "user_time": "5/13/2026, 8:10:47 PM",
+      "unix_timestamp": 1778728247078
+    },
+    {
+      "action": "User submitted jspsych-survey-text-form",
+      "user_time": "5/13/2026, 8:10:48 PM",
+      "unix_timestamp": 1778728248137
+    },
+    {
+      "action": "Page became hidden",
+      "user_time": "5/13/2026, 8:11:14 PM",
+      "unix_timestamp": 1778728274323
+    },
+    {
+      "action": "Page became visible",
+      "user_time": "5/13/2026, 8:15:17 PM",
+      "unix_timestamp": 1778728517270
+    }
+  ],
+  "biometric_checks": {
+    "agent_behavior": "Not detected",
+    "programmatic_typing": "Not detected",
+    "teleporting_mouse": "Not detected",
+    "jump_scrolling": "Not detected",
+    "center_clicks": "Not detected",
+    "no_corrections": "Detected",
+    "all_pasted": "Not detected"
+  },
+  "device_checks": {
+    "bot": "Not detected",
+    "virtual_machine": "Not detected",
+    "software_renderer": "Not detected",
+    "tor": "Not detected",
+    "vpn": "Not detected",
+    "location_spoofing": "Not detected"
+  }
+}

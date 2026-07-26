@@ -1,0 +1,7 @@
+{
+  "dataDir": "./tests/cli/fixtures",
+  "filePattern": "*_participant.json",
+  "participantIdField": "participantId",
+  "integrityField": "integrity",
+  "outputDir": "./tests/cli/output"
+}

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>cyborg-hunter bench — harness</title>
+
+  <!--
+    jsPsych core + plugins are loaded from jsDelivr at the PR-3661 preview SHA
+    pinned in bench/harness/trials/replay-test-suite.js (the upstream
+    jspsych-replay-test demo uses the same SHA). The PR adds the `record_session`
+    feature; we mirror it so the bench is a faithful reproduction of the demo.
+
+    PIN: jspsych/jsPsych @ 4706a5e751c572c09a44a1b9a60d910e0c251d4a
+  -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/jspsych/css/jspsych.css">
+
+  <!-- jsPsych core -->
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/jspsych/dist/index.browser.min.js"></script>
+
+  <!-- jsPsych plugins: the 10 used by the replay-test suite + 2 for grafted trials -->
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-instructions/dist/index.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-fullscreen/dist/index.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-html-keyboard-response/dist/index.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-html-button-response/dist/index.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-html-slider-response/dist/index.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-canvas-keyboard-response/dist/index.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-sketchpad/dist/index.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-free-sort/dist/index.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-survey-multi-choice/dist/index.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-survey-text/dist/index.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@4706a5e751c572c09a44a1b9a60d910e0c251d4a/packages/plugin-html-audio-response/dist/index.browser.min.js"></script>
+
+  <!--
+    Cyborg-Hunter (vendored locally; see bench/vendor/COMMIT for upstream SHA).
+    Load order matters: the base library (cyborg-hunter.min.js) exposes
+    window.IntegrityMonitor; the cyborg-hunter extension reads it during
+    initialize(). The two guard extensions are self-contained — each bundles
+    its core IIFE (defining window.GuardFriction / window.GuardHoneypot via
+    Object.defineProperty) and its jsPsych extension adapter
+    (window.jsPsychGuardFriction / window.jsPsychGuardHoneypot).
+  -->
+  <script src="../vendor/cyborg-hunter/cyborg-hunter.min.js"></script>
+  <script src="../vendor/cyborg-hunter/extension-cyborg-hunter.js"></script>
+  <script src="../vendor/cyborg-hunter/extension-guard-friction.js"></script>
+  <script src="../vendor/cyborg-hunter/extension-guard-honeypot.js"></script>
+
+  <!--
+    Roundtable Proof-of-Human (rt.js). Site key is loaded from the gitignored
+    bench/config.local.js (template at bench/config.example.js). The same runId
+    that timeline.js uses for CH's participantId is passed to RT as data-user-id
+    and embedded in data-tags so the two tools' outputs can be joined per-run.
+  -->
+  <script type="module">
+    import { ROUNDTABLE_SITE_KEY } from '../config.local.js';
+    import { getOrMakeRunId, getScenarioFromUrl, getGuardConfigFromUrl }
+      from './run-meta.js';
+    const runId = getOrMakeRunId();
+    const scenario = getScenarioFromUrl();
+    const guards = getGuardConfigFromUrl();
+    const s = document.createElement('script');
+    s.src = 'https://cdn.roundtable.ai/v1/rt.js';
+    s.dataset.siteKey = ROUNDTABLE_SITE_KEY;
+    s.dataset.userId = runId;
+    s.dataset.tags = `scenario:${scenario},guards:${guards},runId:${runId}`;
+    document.head.appendChild(s);
+    // Surface RT load failure to the console for debug. RT itself is silent.
+    s.onerror = (e) => console.error('[bench] Roundtable rt.js failed to load:', e);
+    s.onload  = () => console.log('[bench] Roundtable rt.js loaded; runId =', runId);
+  </script>
+
+  <script type="module" src="./timeline.js"></script>
+</head>
+<body></body>
+</html>

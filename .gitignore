@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Regenerable output
+pilot-report/
+tests/cli/output/
+tests/browser/replay/artifacts/
+tools/investigate/artifacts/
+
+# Local working files (not part of the project)
+CLAUDE.md
+.claude/
+docs/plans/
+test-data/

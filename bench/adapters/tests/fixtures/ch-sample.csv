@@ -1,0 +1,7 @@
+participantId,trialId,eventType,timestamp,duration_ms,text
+P_fixture_001,all_same_color,paste,12500.5,,hello world
+P_fixture_001,all_same_color,copy,13200,,
+P_fixture_001,all_same_color,synthetic,14000.25,,injected text
+P_fixture_001,red_majority,tabAway,15500,2500,windowBlur
+P_fixture_001,red_majority,mysteryFlag,16200,,unknown payload
+P_fixture_001,red_majority,tamper,17800,,hook_removed

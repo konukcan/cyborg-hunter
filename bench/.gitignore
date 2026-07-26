@@ -1,0 +1,5 @@
+runs/*
+!runs/manifest.csv
+!runs/.gitkeep
+config.local.js
+adapters/tests/fixtures/*-raw.json

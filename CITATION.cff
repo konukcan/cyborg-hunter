@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: cyborg-hunter
+message: >-
+  If you use this software in academic work, please cite it as below.
+type: software
+authors:
+  - family-names: Konuk
+    given-names: Can
+  - family-names: Btesh
+    given-names: Victor
+  - family-names: Nunez
+    given-names: Jose Luis
+repository-code: https://github.com/konukcan/cyborg-hunter
+abstract: >-
+  A JavaScript library and CLI for detecting AI-tool use during browser-based
+  behavioral experiments. Captures paste, copy, drag, tab-away, mouse
+  trajectories, browser sidebar openings, and other signals that compromise
+  data quality on Prolific, MTurk, and classroom studies. Produces a triage
+  report ranking participants by suspiciousness.
+keywords:
+  - integrity-monitoring
+  - cheating-detection
+  - online-experiments
+  - jspsych
+  - prolific
+  - behavioral-research
+license: MIT
+version: 0.7.0
+date-released: '2026-07-14'

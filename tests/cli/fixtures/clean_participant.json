@@ -1,0 +1,46 @@
+{
+  "participantId": "P-CLEAN",
+  "trials": [
+    {
+      "trialId": "t1",
+      "integrity": {
+        "trialId": "t1",
+        "libraryVersion": "0.3.0",
+        "participantId": "P-CLEAN",
+        "startTime": 1000,
+        "duration_ms": 30000,
+        "pasteEvents": [],
+        "copyEvents": [],
+        "dropEvents": [],
+        "tabAwayEvents": [],
+        "mouseEvents": [
+          {"x": 100, "y": 200, "t": 1100, "type": "move"},
+          {"x": 150, "y": 250, "t": 1150, "type": "move"},
+          {"x": 200, "y": 300, "t": 1200, "type": "move"}
+        ],
+        "trialSoftScore": 0,
+        "trialSignals": {"hard": {}, "soft": {}}
+      }
+    },
+    {
+      "trialId": "t2",
+      "integrity": {
+        "trialId": "t2",
+        "libraryVersion": "0.3.0",
+        "participantId": "P-CLEAN",
+        "startTime": 32000,
+        "duration_ms": 25000,
+        "pasteEvents": [],
+        "copyEvents": [],
+        "dropEvents": [],
+        "tabAwayEvents": [],
+        "mouseEvents": [
+          {"x": 300, "y": 400, "t": 32100, "type": "move"},
+          {"x": 350, "y": 450, "t": 32200, "type": "move"}
+        ],
+        "trialSoftScore": 0,
+        "trialSignals": {"hard": {}, "soft": {}}
+      }
+    }
+  ]
+}

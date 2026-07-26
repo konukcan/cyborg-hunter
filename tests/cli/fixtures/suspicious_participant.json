@@ -1,0 +1,51 @@
+{
+  "participantId": "P-SUS",
+  "trials": [
+    {
+      "trialId": "t1",
+      "integrity": {
+        "trialId": "t1",
+        "libraryVersion": "0.3.0",
+        "participantId": "P-SUS",
+        "startTime": 1000,
+        "duration_ms": 15000,
+        "pasteEvents": [{"t": 5000, "text": "some pasted text"}],
+        "copyEvents": [],
+        "dropEvents": [],
+        "tabAwayEvents": [{"start": 3000, "duration_ms": 8000}],
+        "mouseEvents": [
+          {"x": 5, "y": 300, "t": 2800, "type": "move"},
+          {"x": 5, "y": 300, "t": 2900, "type": "move"}
+        ],
+        "extensionsDetected": ["ChatGPT"],
+        "charsPerSec": 15,
+        "trialSoftScore": 4,
+        "trialSignals": {
+          "hard": {"paste": {"triggered": true, "count": 1}},
+          "soft": {"tabAway": {"weight": 2}, "typing": {"weight": 2}}
+        }
+      }
+    },
+    {
+      "trialId": "t2",
+      "integrity": {
+        "trialId": "t2",
+        "libraryVersion": "0.3.0",
+        "participantId": "P-SUS",
+        "startTime": 20000,
+        "duration_ms": 12000,
+        "pasteEvents": [{"t": 25000, "text": "another paste"}],
+        "copyEvents": [],
+        "dropEvents": [],
+        "tabAwayEvents": [{"start": 22000, "duration_ms": 6000}],
+        "mouseEvents": [],
+        "charsPerSec": 12,
+        "trialSoftScore": 3,
+        "trialSignals": {
+          "hard": {"paste": {"triggered": true, "count": 1}},
+          "soft": {"tabAway": {"weight": 1}, "typing": {"weight": 2}}
+        }
+      }
+    }
+  ]
+}
