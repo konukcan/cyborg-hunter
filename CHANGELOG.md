@@ -3,6 +3,13 @@
 All notable changes to **cyborg-hunter** are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [0.7.1] — 2026-07-29
+
+### Fixed
+- The npm package now includes `dist/` — 0.7.0 shipped without it, so every
+  documented unpkg/script-tag URL returned 404.
+- `cyborg-hunter --version` prints the version instead of "Unknown command".
+
 ## [0.7.0] — 2026-07-14
 
 ### Added

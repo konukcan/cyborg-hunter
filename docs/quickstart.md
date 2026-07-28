@@ -20,8 +20,8 @@ The CLI runs on your machine after data collection. Nothing about it touches the
 In your experiment HTML, after jsPsych itself and before your own `script.js`:
 
 ```html
-<script src="https://unpkg.com/cyborg-hunter@0.7.0/dist/cyborg-hunter.min.js"></script>
-<script src="https://unpkg.com/cyborg-hunter@0.7.0/dist/extension-cyborg-hunter.js"></script>
+<script src="https://unpkg.com/cyborg-hunter@0.7.1/dist/cyborg-hunter.min.js"></script>
+<script src="https://unpkg.com/cyborg-hunter@0.7.1/dist/extension-cyborg-hunter.js"></script>
 ```
 
 Order matters: the extension references `window.CyborgHunter`, which the first file defines. Pin the version for production studies (as above), or copy both files from `dist/` into your project and serve them yourself.
