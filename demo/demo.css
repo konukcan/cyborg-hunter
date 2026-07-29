@@ -167,6 +167,11 @@ button:focus-visible, a:focus-visible{
 .filetext-dialog h3{margin:0 0 10px;font:600 13px/1 ui-monospace,Menlo,monospace;}
 .filetext-dialog pre{max-height:60vh;overflow:auto;user-select:text;margin:0 0 14px;}
 
+/* Step 6 autotype: field visually "disables" while characters are inserted
+ * programmatically (real disabled/readonly state is set in JS — this just
+ * matches the visual language a disabled control already has). */
+.autotype-field.busy{background:var(--chrome);color:var(--ink-2);cursor:not-allowed;}
+
 /* Welcome-step teaser ASIDE: pre-recorded scrub player + honeypot
  * agent-trace list (demo/teaser.js). */
 .teaser{border:1px solid var(--line);border-radius:4px;padding:14px 16px;margin:18px 0 0;background:var(--panel);}

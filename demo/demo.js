@@ -205,6 +205,19 @@ function startTour(participantId, capabilities, manifest) {
   // to the payload task); navigating Back into the tour restarts it.
   var lampWiringActive = false;
   var sessionPollId = null;
+  // Step 6 (autotype)'s char-by-char animation runs its own setInterval,
+  // outside the library entirely — tracked here so goTo() can cancel a
+  // still-running animation on navigation (Back/Continue/skip are all valid
+  // mid-animation, per "advance is always available"), instead of leaving it
+  // ticking against a detached DOM node until it finishes on its own.
+  var autotypeIntervalId = null;
+
+  function stopAutotype() {
+    if (autotypeIntervalId) {
+      clearInterval(autotypeIntervalId);
+      autotypeIntervalId = null;
+    }
+  }
 
   function startLampWiring() {
     if (lampWiringActive) return;
@@ -644,6 +657,52 @@ function startTour(participantId, capabilities, manifest) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
+  // ----- Step 6: autotype ------------------------------------------------
+  // Drives synthetic insertion + fast typing FOR REAL, not just visually.
+  // src/core/signals/typing.js flags an 'input' event as synthetic when it
+  // carries inputType 'insertText' and arrives more than syntheticGapMs
+  // (100ms, standard preset) after the last keydown — so every character
+  // here is written via .value + a manually dispatched InputEvent, and no
+  // keydown is ever fired. The same dispatched events push editTimestamps,
+  // so computeTypingSpeed() (called at endTrial) sees real per-character
+  // timestamps ~28ms apart and reports genuine charsPerSec — comfortably
+  // over both the copy's ">20cps" claim and the library's real 10cps
+  // threshold (signal-manifest.json). No library changes; this is the
+  // library's own detector, driven honestly.
+  function runAutotype(button) {
+    if (button.disabled) return;
+    var task = STEPS[state.stepIndex].task;
+    var field = cardEl.querySelector('[data-role="autotype-field"]');
+    if (!field) return;
+
+    var text = task.autotypeText;
+    var caret = '▏'; // ▏ — visible caret glyph, part of the field's own text
+    var typed = '';
+    var i = 0;
+
+    button.disabled = true;
+    button.textContent = tpl(task.busyLabel);
+    field.readOnly = true;
+    field.classList.add('busy');
+    field.value = caret;
+
+    autotypeIntervalId = setInterval(function () {
+      if (i >= text.length) {
+        stopAutotype();
+        field.value = typed;
+        field.readOnly = false;
+        field.classList.remove('busy');
+        button.textContent = tpl(task.doneLabel);
+        return;
+      }
+      var ch = text[i];
+      typed += ch;
+      field.value = typed + caret;
+      field.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch }));
+      i++;
+    }, 35);
+  }
+
   // Renders step 10's task panel: a mount point for the two live jsPsych
   // trials (finale.js's display_element target) plus the labeled code-
   // snippet split (steps.js's task.snippetSplit — actual code, not just a
@@ -684,6 +743,13 @@ function startTour(participantId, capabilities, manifest) {
     if (ruleText) parts.push('<p class="rule">' + tpl(ruleText) + '</p>');
     if (task.kind === 'type-answer' || task.kind === 'copy-paste') {
       parts.push('<textarea rows="3" placeholder="Type your answer here"></textarea>');
+    }
+    if (task.kind === 'autotype') {
+      parts.push('<textarea rows="3" class="autotype-field" data-role="autotype-field"></textarea>');
+      parts.push(
+        '<div class="btnrow"><button class="btn" data-action="autotype" data-role="autotype-button">' +
+        tpl(task.buttonLabel) + '</button></div>'
+      );
     }
     if (task.kind === 'fullscreen-entry') {
       parts.push('<p class="rule fallback-note" hidden></p>');
@@ -829,6 +895,7 @@ function startTour(participantId, capabilities, manifest) {
   }
 
   function goTo(i) {
+    stopAutotype();
     state.stepIndex = i;
     var step = STEPS[i];
     // Reaching guard-finish means Act 2 enforcement is over — stop it
@@ -896,6 +963,8 @@ function startTour(participantId, capabilities, manifest) {
   cardEl.addEventListener('click', function (e) {
     var back = e.target.closest('[data-action="back"]');
     if (back) { goTo(state.stepIndex - 1); return; }
+    var autotypeBtn = e.target.closest('[data-action="autotype"]');
+    if (autotypeBtn) { runAutotype(autotypeBtn); return; }
     var primary = e.target.closest('[data-action="primary"]');
     if (primary) {
       var currentStep = STEPS[state.stepIndex];

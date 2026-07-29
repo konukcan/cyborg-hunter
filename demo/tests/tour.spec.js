@@ -26,6 +26,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BIN_PATH = resolve(__dirname, '..', '..', 'bin', 'cyborg-hunter.js');
 const RULE_TEXT = 'Rule: a hand wins when both cards share a suit and neither is below five.';
+const AUTOTYPE_TEXT = "No one is typing this — it's appearing entirely on its own.";
 
 // ---------------------------------------------------------------------------
 // a. Full 12-step happy path
@@ -58,6 +59,10 @@ test('full 12-step happy path: welcome through replicate-locally', async ({ page
   await expect(page.locator('.eyebrow')).toContainText('Step 4 of 12');
   await frozenClock.tabAway(0, 11000);
   await expect(railRow(page, 'tabAwayLong')).toHaveClass(/lit/);
+  // tabAway() freezes performance.now() and never unfreezes it — harmless
+  // for every earlier step, but step 6 below needs REAL elapsed time between
+  // edit timestamps for computeTypingSpeed() to see a nonzero span.
+  await frozenClock.unfreeze();
   await primaryButton(page).click();
 
   // ----- Step 5: resize (never ends the tour; may light sidebar/viewport) -----
@@ -71,15 +76,26 @@ test('full 12-step happy path: welcome through replicate-locally', async ({ page
   await page.setViewportSize({ width: 1280, height: 900 });
   await primaryButton(page).click();
 
-  // ----- Step 6: autotype -----
-  // NOTE: steps.js's copy describes pressing a button that types on its own,
-  // but demo.js's renderTaskPanel() never renders a button or textarea for
-  // task.kind 'autotype' (only 'type-answer'/'copy-paste' get a textarea),
-  // and no click handler exists for it — there's nothing to press. Advancing
-  // without interacting is the only path available, consistent with "advance
-  // is always available" for every other invitation-only step.
+  // ----- Step 6: autotype (real synthetic insertion + fast typing) -----
+  // Pressing the button drives the field via .value + dispatched
+  // InputEvent('insertText') with no preceding keydown — the exact gap
+  // src/core/signals/typing.js's synthetic-insertion detector watches for —
+  // so the rail lamp lights immediately. Fast typing is only computable at
+  // endTrial() (no onSignal event for it), so its lamp lights on advance,
+  // once the trial actually closes.
   await expect(page.locator('.eyebrow')).toContainText('Step 6 of 12');
-  await primaryButton(page).click();
+  const autotypeButton = page.locator('[data-role="autotype-button"]');
+  const autotypeField = page.locator('[data-role="autotype-field"]');
+  await autotypeButton.click();
+  await expect(autotypeButton).toBeDisabled();
+  await expect(railRow(page, 'syntheticInsertion')).toHaveClass(/lit/);
+  await expect(railRow(page, 'syntheticInsertion')).toHaveClass(/hardlit/);
+  await expect(railRow(page, 'fastTyping')).not.toHaveClass(/lit/); // not yet — trial's still open
+  await expect(autotypeButton).toHaveText('Typed ✓', { timeout: 5000 });
+  await expect(autotypeField).toHaveValue(AUTOTYPE_TEXT);
+  await expect(autotypeField).not.toHaveJSProperty('readOnly', true); // re-enabled
+  await primaryButton(page).click(); // closes the trial -> fast-typing lamp
+  await expect(railRow(page, 'fastTyping')).toHaveClass(/lit/);
 
   // ----- Step 7: guard fair-warning (mocked fullscreen entry) -----
   await expect(page.locator('.eyebrow')).toContainText('Step 7 of 12');
