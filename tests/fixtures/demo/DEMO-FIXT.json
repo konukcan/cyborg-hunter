@@ -645,7 +645,7 @@
       "anyHardTriggered": true,
       "config": {
         "preset": "standard",
-        "participantId": "DEMO-rtpi",
+        "participantId": "DEMO-FIXT",
         "thresholds": {
           "tabAwayDurationMs": 3000,
           "typingSpeedCps": 10

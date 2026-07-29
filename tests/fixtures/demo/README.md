@@ -85,14 +85,22 @@ fixture needs a stable id so the test doesn't depend on incidental random
 output. After capture, the id was rewritten to `DEMO-FIXT` in place of
 whatever the session actually generated:
 
-- `DEMO-FIXT.json`: top-level `participantId`, plus each trial's
-  `trials[].integrity.participantId` (present on some trial reports).
-- `DEMO-FIXT-replay-<epoch>.json`: the filename's pid segment, and the
-  embedded `metadata.participant_id` inside the file. `ingest.js`'s
-  `attachReplayArtifacts()` cross-checks the embedded id against the
-  filename/participant record, so both must agree or the replay silently
-  fails to attach.
+- `DEMO-FIXT.json`: top-level `participantId`, each trial's
+  `trials[].integrity.participantId` (present on some trial reports), and
+  the nested `metadata.integritySession.config.participantId`. The monitor
+  echoes its init config into the session report, which makes this one easy
+  to miss; a first regeneration did miss it.
+- `DEMO-FIXT-replay-<epoch>.json`: the filename's pid segment, the embedded
+  `metadata.participant_id`, and the pid text inside each trial's
+  `initial_dom` snapshot (the topbar renders the pid, so the DOM capture
+  embeds it; grep the whole file for the old id rather than trusting a
+  field list). `ingest.js`'s `attachReplayArtifacts()` cross-checks the
+  embedded `metadata.participant_id` against the filename/participant
+  record, so those two must agree or the replay silently fails to attach.
 - `cyborg-hunter.config.json`: untouched. It carries no participant id.
+
+After rewriting, verify completeness with a whole-directory grep for the
+capture session's original random id. It must return nothing.
 
 The epoch in the replay filename stays as the real capture timestamp; only
 the participant id segment was rewritten.
