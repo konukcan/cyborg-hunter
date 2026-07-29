@@ -14,3 +14,19 @@ it('close-then-open is idempotent across advance/back/skip', () => {
   lc.transitionTo('s2'); lc.transitionTo('s3'); lc.transitionTo(null); lc.transitionTo('s9');
   assert.deepStrictEqual(calls, [['start','s2'],['end'],['start','s3'],['end'],['start','s9']]);
 });
+
+it('onTrialReport receives each closed trial\'s report, and nothing when no trial was open', () => {
+  const reports = [];
+  let seq = 0;
+  const monitor = {
+    _open: false,
+    startTrial(){ this._open = true; },
+    endTrial(){ if (!this._open) return null; this._open = false; seq++; return { trialId: 'r' + seq }; },
+  };
+  const lc = makeLifecycle(monitor, { onTrialReport: (r) => reports.push(r) });
+  lc.transitionTo('a');   // nothing open yet -> no report
+  lc.transitionTo('b');   // closes 'a' -> report r1
+  lc.transitionTo(null);  // closes 'b' -> report r2
+  lc.transitionTo(null);  // nothing open -> no report
+  assert.deepStrictEqual(reports, [{ trialId: 'r1' }, { trialId: 'r2' }]);
+});

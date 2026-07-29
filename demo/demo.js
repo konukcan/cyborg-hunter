@@ -4,10 +4,17 @@
 // the idempotent lifecycle helper (lifecycle.js) so every advance/Back/skip
 // closes any open trial before optionally opening the next.
 //
-// Live-signal rail wiring (onSignal → lamps) lands in demo/rail.js.
+// Live-signal rail: event-driven via the monitor's onSignal callback +
+// aggregation of completed trial reports (fast typing has no onSignal event —
+// it's only computable at endTrial()), plus a 5s poll for session-only
+// signals (viewport-width shifts have no onSignal event either; sidebar gets
+// BOTH — see pollSessionSignals()).
 
-import { STEPS, POSITIONING, CLOSING_CTA } from './steps.js';
+import { STEPS, POSITIONING, CLOSING_CTA, RAIL_GROUPS, RAIL_INTRO } from './steps.js';
 import { makeLifecycle } from './lifecycle.js';
+import { renderRail, light, acknowledge } from './rail.js';
+
+var SESSION_POLL_MS = 5000;
 
 console.log('cyborg-hunter demo · library', (window.CyborgHunter && CyborgHunter.VERSION) || 'unknown');
 
@@ -66,11 +73,16 @@ function boot() {
     });
 }
 
+// Row label lookup (RAIL_GROUPS -> {key: label}), used by acknowledge() so
+// the inline "✓ detected" strip text lives in one place (steps.js) rather
+// than being retyped at every signal call site.
+var RAIL_LABELS = {};
+['detectors', 'guard', 'recording'].forEach(function (g) {
+  RAIL_GROUPS[g].forEach(function (r) { RAIL_LABELS[r.key] = r.label; });
+});
+
 function startTour(participantId, capabilities, manifest) {
   var version = (window.CyborgHunter && CyborgHunter.VERSION) || 'unknown';
-  var monitor = window.CyborgHunter.init({ participantId: participantId, preset: 'standard' });
-  monitor.startSession();
-  var lifecycle = makeLifecycle(monitor);
 
   var state = {
     stepIndex: 0,
@@ -83,6 +95,122 @@ function startTour(participantId, capabilities, manifest) {
 
   var cardEl = document.getElementById('card');
   var progressEl = document.getElementById('progress');
+  var railEl = document.getElementById('rail');
+
+  renderRail(railEl, { groups: RAIL_GROUPS, intro: RAIL_INTRO });
+
+  // Lights `key` only if `count` is a new high — makes both the event-driven
+  // path (increments a running local count) and the 5s poll (recomputes the
+  // true count from the library's own data) safe to call without double-
+  // counting or re-pulsing a lamp that hasn't actually changed.
+  function syncCountLamp(key, count, hard, label) {
+    if (count > (state.lampCounts[key] || 0)) {
+      state.lampCounts[key] = count;
+      light(key, count, { hard: hard });
+      if (label) acknowledge(cardEl, label);
+    }
+  }
+
+  function handleSignal(sig) {
+    var n;
+    switch (sig.type) {
+      case 'paste':
+        n = (state.lampCounts.paste || 0) + 1;
+        syncCountLamp('paste', n, n >= manifest.signals.paste.hardCountThreshold, RAIL_LABELS.paste);
+        break;
+      case 'copy':
+      case 'cut':
+        n = (state.lampCounts.copy || 0) + 1;
+        syncCountLamp('copy', n, false, RAIL_LABELS.copy);
+        break;
+      case 'drop':
+        n = (state.lampCounts.drop || 0) + 1;
+        syncCountLamp('drop', n, n >= manifest.signals.drop.hardCountThreshold, RAIL_LABELS.drop);
+        break;
+      case 'tabReturn':
+        var duration = (sig.data && sig.data.duration_ms) || 0;
+        if (duration >= 10000) {
+          n = (state.lampCounts.tabAwayLong || 0) + 1;
+          syncCountLamp('tabAwayLong', n, false, RAIL_LABELS.tabAwayLong);
+        } else if (duration >= manifest.signals.tabAway.durationMs) {
+          n = (state.lampCounts.tabAwayMid || 0) + 1;
+          syncCountLamp('tabAwayMid', n, false, RAIL_LABELS.tabAwayMid);
+        }
+        break;
+      case 'sidebarOpened':
+        n = (state.lampCounts.sidebar || 0) + 1;
+        syncCountLamp('sidebar', n, false, RAIL_LABELS.sidebar);
+        break;
+      case 'typingOutsideExperiment':
+        n = (state.lampCounts.foreignInput || 0) + 1;
+        syncCountLamp('foreignInput', n, false, RAIL_LABELS.foreignInput);
+        break;
+      case 'syntheticInsertion':
+        n = (state.lampCounts.syntheticInsertion || 0) + 1;
+        syncCountLamp('syntheticInsertion', n, true, RAIL_LABELS.syntheticInsertion);
+        break;
+      case 'keyboardShortcut':
+        n = (state.lampCounts.devTools || 0) + 1;
+        syncCountLamp('devTools', n, false, RAIL_LABELS.devTools);
+        break;
+      default:
+        break;
+    }
+  }
+
+  // Fast typing has no onSignal event — computeTypingSpeed() only runs
+  // inside endTrial() (src/core/signals/typing.js), so it's only observable
+  // once a trial closes, via the lifecycle helper's onTrialReport hook.
+  function handleTrialReport(report) {
+    var typingSpeed = report.trialSignals && report.trialSignals.soft && report.trialSignals.soft.typingSpeed;
+    if (typingSpeed && typingSpeed.hit) {
+      var n = (state.lampCounts.fastTyping || 0) + 1;
+      syncCountLamp('fastTyping', n, false, RAIL_LABELS.fastTyping);
+    }
+  }
+
+  // Session-only signals with no (or incomplete) onSignal coverage:
+  //   - viewportWidthShifts: browser.js's ResizeObserver never calls
+  //     fireSignal() at all — the poll is its only path.
+  //   - sidebarEvents: the innerWidth_delta method fires 'sidebarOpened'
+  //     (handled instantly above), but the layout_compression method does
+  //     NOT fire a signal — the poll is a backstop that also catches those.
+  //   - honeypot bait: GuardHoneypot has no event callback, only polled getters.
+  function pollSessionSignals() {
+    var report = monitor.getSessionReport();
+
+    var sidebarOpens = report.sidebarEvents.filter(function (e) { return e.type === 'opened'; }).length;
+    syncCountLamp('sidebar', sidebarOpens, false, RAIL_LABELS.sidebar);
+
+    syncCountLamp('viewport', report.viewportWidthShifts.length, false, RAIL_LABELS.viewport);
+
+    if (window.GuardHoneypot) {
+      var hp = window.GuardHoneypot.getHoneypotData();
+      if (hp.ai_use) syncCountLamp('honeypot', 1, true, RAIL_LABELS.honeypot);
+    }
+  }
+
+  var monitor = window.CyborgHunter.init({
+    participantId: participantId,
+    preset: 'standard',
+    onSignal: handleSignal
+  });
+  monitor.startSession();
+  var lifecycle = makeLifecycle(monitor, { onTrialReport: handleTrialReport });
+
+  setInterval(pollSessionSignals, SESSION_POLL_MS);
+
+  // Act-2 violations (GuardFriction is a separate global, not part of the
+  // CyborgHunter monitor). Counts each violation the moment it starts, for
+  // an immediately responsive lamp — not the same count as the honeypot's
+  // own start/end-paired violations log.
+  if (window.GuardFriction && typeof window.GuardFriction.onViolation === 'function') {
+    window.GuardFriction.onViolation(function (violation) {
+      if (violation.phase !== 'start') return;
+      var n = (state.lampCounts.guardViolations || 0) + 1;
+      syncCountLamp('guardViolations', n, true, RAIL_LABELS.guardViolations);
+    });
+  }
 
   function tpl(str) {
     return substitute(str, manifest.signals, version);
