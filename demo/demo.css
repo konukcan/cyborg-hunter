@@ -94,6 +94,10 @@ textarea{width:100%;min-height:74px;padding:10px 12px;border:1px solid var(--lin
 .file small{display:block;color:var(--ink-2);font-size:11px;}
 .file .file-desc{display:block;color:var(--ink-2);font-size:11px;}
 .file .file-actions{display:flex;gap:12px;align-items:center;}
+/* Config caveat (spec :182/:288): sits below the Save/show-as-text row for
+ * the config file card only — muted + smaller, same tokens as .file-desc. */
+.file .file-caveat{color:var(--ink-2);font-size:11px;font-style:italic;
+  max-width:220px;margin:0;}
 .file .file-actions a{color:var(--live);font-size:12px;}
 pre{background:var(--code-bg);color:var(--code-ink);padding:14px 16px;border-radius:4px;
   overflow-x:auto;font-size:13.5px;margin:0 0 18px;}

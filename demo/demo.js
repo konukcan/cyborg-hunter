@@ -10,7 +10,7 @@
 // signals (viewport-width shifts have no onSignal event either; sidebar gets
 // BOTH — see pollSessionSignals()).
 
-import { STEPS, POSITIONING, CLOSING_CTA, RAIL_GROUPS, RAIL_INTRO } from './steps.js';
+import { STEPS, POSITIONING, CLOSING_CTA, CONFIG_CAVEAT, RAIL_GROUPS, RAIL_INTRO } from './steps.js';
 import { makeLifecycle } from './lifecycle.js';
 import { renderRail, light, acknowledge } from './rail.js';
 import { buildPayload } from './payload.js';
@@ -634,6 +634,13 @@ function startTour(participantId, capabilities, manifest) {
     // this step, but the class is applied uniformly regardless of step).
     var parts = ['<div class="task jspsych-content">', '<p class="label">' + task.kind + '</p>'];
     parts.push('<div class="files">' + files.map(function (f) {
+      // Config caveat (spec :182/:288): first-party copy, so innerHTML is
+      // safe here the same as every other steps.js string this panel
+      // renders (task.description, f.label, etc.) — rendered directly under
+      // the config file's Save/show-as-text row, not restructuring the panel.
+      var caveat = f.key === 'config'
+        ? '<p class="file-caveat" data-role="config-caveat">' + tpl(CONFIG_CAVEAT) + '</p>'
+        : '';
       return (
         '<div class="file">' +
         '<div class="file-info">' + f.label + '<small>' + f.filename + '</small>' +
@@ -642,7 +649,7 @@ function startTour(participantId, capabilities, manifest) {
         '<button class="btn" data-action="download" data-key="' + f.key +
         '" data-saved-label="' + f.savedLabel + '">Save</button>' +
         '<a href="#" data-action="showtext" data-key="' + f.key + '">show as text</a>' +
-        '</div></div>'
+        '</div>' + caveat + '</div>'
       );
     }).join('') + '</div>');
     parts.push(

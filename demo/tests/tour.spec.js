@@ -146,6 +146,10 @@ test('full 12-step happy path: welcome through replicate-locally', async ({ page
   await expect(page.locator('.eyebrow')).toContainText('Step 12 of 12');
   await expect(page.locator('[data-action="download"][data-key="sessionData"]')).toBeVisible();
   await expect(page.locator('[data-action="download"][data-key="config"]')).toBeVisible();
+  // Config caveat (spec :182/:288): visible next to the config download.
+  await expect(page.locator('[data-role="config-caveat"]')).toBeVisible();
+  await expect(page.locator('[data-role="config-caveat"]')).toContainText('subject_ID');
+  await expect(page.locator('[data-role="config-caveat"]')).toContainText('quickstart');
 });
 
 // ---------------------------------------------------------------------------
