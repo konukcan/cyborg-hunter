@@ -13,6 +13,7 @@
 import { STEPS, POSITIONING, CLOSING_CTA, RAIL_GROUPS, RAIL_INTRO } from './steps.js';
 import { makeLifecycle } from './lifecycle.js';
 import { renderRail, light, acknowledge } from './rail.js';
+import { buildPayload } from './payload.js';
 
 var SESSION_POLL_MS = 5000;
 
@@ -91,7 +92,8 @@ function startTour(participantId, capabilities, manifest) {
     replayOptIn: false,
     lampCounts: {},
     act2Skipped: false,
-    violations: []
+    violations: [],
+    trialReports: []
   };
 
   var cardEl = document.getElementById('card');
@@ -188,6 +190,11 @@ function startTour(participantId, capabilities, manifest) {
   // inside endTrial() (src/core/signals/typing.js), so it's only observable
   // once a trial closes, via the lifecycle helper's onTrialReport hook.
   function handleTrialReport(report) {
+    // Accumulated for the payload regardless of lamp-wiring state — the
+    // monitor keeps recording after stopLampWiring() (interactive tasks
+    // being over doesn't mean trials stop closing), and the download step
+    // needs every trial the visitor actually ran.
+    state.trialReports.push(report);
     if (!lampWiringActive) return;
     var typingSpeed = report.trialSignals && report.trialSignals.soft && report.trialSignals.soft.typingSpeed;
     if (typingSpeed && typingSpeed.hit) {
@@ -234,6 +241,9 @@ function startTour(participantId, capabilities, manifest) {
   // own start/end-paired violations log.
   if (window.GuardFriction && typeof window.GuardFriction.onViolation === 'function') {
     window.GuardFriction.onViolation(function (violation) {
+      // Recorded for the payload's guardFriction.violations[] regardless of
+      // lamp-wiring state (see handleTrialReport's comment above — same reasoning).
+      state.violations.push(violation);
       if (!lampWiringActive) return;
       if (violation.phase !== 'start') return;
       var n = (state.lampCounts.guardViolations || 0) + 1;
@@ -264,8 +274,100 @@ function startTour(participantId, capabilities, manifest) {
     return '<span class="act2">' + prefix + '</span> ' + rest;
   }
 
+  // Builds the { filename, data } pair for one downloads-step file button.
+  // Called both by the download click handler and the "show as text"
+  // fallback, so both always agree on exactly what would have been saved.
+  function buildDownloadFile(key) {
+    if (key === 'sessionData') {
+      // Wrap each raw endTrial() report the way the jsPsych extension's
+      // on_finish() does — { integrity: report } — so ingest.js's Shape-1
+      // reader (t[intField], default 'integrity') finds it (demo/payload.js).
+      var trials = state.trialReports.map(function (r) {
+        return { trialId: r.trialId, integrity: r };
+      });
+      var payload = buildPayload({
+        pid: participantId,
+        trials: trials,
+        sessionReport: monitor.getSessionReport(),
+        violations: state.violations
+      });
+      return { filename: participantId + '.json', data: payload };
+    }
+    if (key === 'replay') {
+      // TODO(C8): the real replay recording lands in a later task. Until
+      // then this button downloads a labeled placeholder rather than
+      // pretending a recording exists.
+      return {
+        filename: participantId + '-replay-' + Date.now() + '.json',
+        data: { note: 'replay recording lands in task C8' }
+      };
+    }
+    if (key === 'config') {
+      return {
+        filename: 'cyborg-hunter.config.json',
+        data: { dataDir: '.', filePattern: 'DEMO-*.json', participantIdField: 'participantId' }
+      };
+    }
+    return null;
+  }
+
+  // Synchronously builds a Blob + object URL and clicks a throwaway <a
+  // download> — must run inside the same call stack as the button's click
+  // handler (its own user gesture) so the browser never treats it as a
+  // popup/auto-download.
+  function triggerDownload(filename, data) {
+    var json = JSON.stringify(data, null, 2);
+    var blob = new Blob([json], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Download-failure fallback: opens the shared per-step <dialog> with the
+  // file's JSON in a selectable <pre> for manual copy/save.
+  function openFileTextDialog(filename, json) {
+    var dlg = cardEl.querySelector('dialog.filetext-dialog');
+    if (!dlg) return;
+    dlg.querySelector('h3').textContent = filename;
+    dlg.querySelector('pre').textContent = json;
+    dlg.showModal();
+  }
+
+  function renderDownloadsPanel(task) {
+    // Replay opt-out drops the replay file from the download step entirely
+    // (spec: "downloads drop the replay file").
+    var files = task.files.filter(function (f) {
+      return f.key !== 'replay' || state.replayOptIn;
+    });
+    var parts = ['<div class="task">', '<p class="label">' + task.kind + '</p>'];
+    parts.push('<div class="files">' + files.map(function (f) {
+      return (
+        '<div class="file">' +
+        '<div class="file-info">' + f.label + '<small>' + f.filename + '</small>' +
+        '<span class="file-desc">' + f.description + '</span></div>' +
+        '<div class="file-actions">' +
+        '<button class="btn" data-action="download" data-key="' + f.key +
+        '" data-saved-label="' + f.savedLabel + '">Save</button>' +
+        '<a href="#" data-action="showtext" data-key="' + f.key + '">show as text</a>' +
+        '</div></div>'
+      );
+    }).join('') + '</div>');
+    parts.push(
+      '<dialog class="filetext-dialog"><h3></h3><pre></pre>' +
+      '<button class="btn" data-action="close-dialog">Close</button></dialog>'
+    );
+    parts.push('</div>');
+    return parts.join('');
+  }
+
   function renderTaskPanel(task) {
     if (!task) return '';
+    if (task.kind === 'downloads') return renderDownloadsPanel(task);
     var parts = ['<div class="task">', '<p class="label">' + task.kind + '</p>'];
     var ruleText = task.prompt || task.ruleText;
     if (ruleText) parts.push('<p class="rule">' + tpl(ruleText) + '</p>');
@@ -291,11 +393,6 @@ function startTour(participantId, capabilities, manifest) {
       parts.push('<ul class="hint">' + task.snippetSplit.map(function (s) {
         return '<li>' + s.label + ' — ' + s.file + '</li>';
       }).join('') + '</ul>');
-    }
-    if (task.files) {
-      parts.push('<div class="files">' + task.files.map(function (f) {
-        return '<div class="file">' + f.label + '<small>' + f.filename + '</small></div>';
-      }).join('') + '</div>');
     }
     parts.push('</div>');
     return parts.join('');
@@ -360,6 +457,32 @@ function startTour(participantId, capabilities, manifest) {
     var primary = e.target.closest('[data-action="primary"]');
     if (primary) {
       if (state.stepIndex < STEPS.length - 1) goTo(state.stepIndex + 1);
+      return;
+    }
+    var downloadBtn = e.target.closest('[data-action="download"]');
+    if (downloadBtn) {
+      var toSave = buildDownloadFile(downloadBtn.dataset.key);
+      if (toSave) {
+        try {
+          triggerDownload(toSave.filename, toSave.data);
+          downloadBtn.textContent = downloadBtn.dataset.savedLabel;
+        } catch (err) {
+          openFileTextDialog(toSave.filename, JSON.stringify(toSave.data, null, 2));
+        }
+      }
+      return;
+    }
+    var showTextBtn = e.target.closest('[data-action="showtext"]');
+    if (showTextBtn) {
+      e.preventDefault();
+      var toShow = buildDownloadFile(showTextBtn.dataset.key);
+      if (toShow) openFileTextDialog(toShow.filename, JSON.stringify(toShow.data, null, 2));
+      return;
+    }
+    var closeDialogBtn = e.target.closest('[data-action="close-dialog"]');
+    if (closeDialogBtn) {
+      var dlg = closeDialogBtn.closest('dialog');
+      if (dlg) dlg.close();
       return;
     }
     var link = e.target.closest('a[data-key]');

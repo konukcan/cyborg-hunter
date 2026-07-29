@@ -88,9 +88,13 @@ textarea{width:100%;min-height:74px;padding:10px 12px;border:1px solid var(--lin
 
 /* Finish view */
 .files{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 14px;}
-.file{border:1px solid var(--line);background:var(--panel);border-radius:4px;padding:10px 14px;
+.file{display:flex;flex-direction:column;gap:10px;min-width:190px;
+  border:1px solid var(--line);background:var(--panel);border-radius:4px;padding:10px 14px;
   font:13px/1.4 ui-monospace,Menlo,monospace;}
 .file small{display:block;color:var(--ink-2);font-size:11px;}
+.file .file-desc{display:block;color:var(--ink-2);font-size:11px;}
+.file .file-actions{display:flex;gap:12px;align-items:center;}
+.file .file-actions a{color:var(--live);font-size:12px;}
 pre{background:var(--code-bg);color:var(--code-ink);padding:14px 16px;border-radius:4px;
   overflow-x:auto;font-size:13.5px;margin:0 0 18px;}
 .yourreport{border-left:3px solid var(--live);padding:2px 0 2px 16px;margin:0 0 18px;}
@@ -142,3 +146,11 @@ button:focus-visible, a:focus-visible{
   outline:2px solid var(--live);
   outline-offset:2px;
 }
+
+/* Downloads step: "show file as text" fallback dialog (spec: "a per-file
+ * 'show as text' fallback link opens a <dialog> with the JSON in a <pre>"). */
+.filetext-dialog{max-width:640px;width:90vw;padding:18px;
+  border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--ink);}
+.filetext-dialog::backdrop{background:rgba(0,0,0,.4);}
+.filetext-dialog h3{margin:0 0 10px;font:600 13px/1 ui-monospace,Menlo,monospace;}
+.filetext-dialog pre{max-height:60vh;overflow:auto;user-select:text;margin:0 0 14px;}
