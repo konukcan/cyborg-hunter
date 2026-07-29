@@ -166,3 +166,21 @@ button:focus-visible, a:focus-visible{
 .filetext-dialog::backdrop{background:rgba(0,0,0,.4);}
 .filetext-dialog h3{margin:0 0 10px;font:600 13px/1 ui-monospace,Menlo,monospace;}
 .filetext-dialog pre{max-height:60vh;overflow:auto;user-select:text;margin:0 0 14px;}
+
+/* Welcome-step teaser ASIDE: pre-recorded scrub player + honeypot
+ * agent-trace list (demo/teaser.js). */
+.teaser{border:1px solid var(--line);border-radius:4px;padding:14px 16px;margin:18px 0 0;background:var(--panel);}
+.teaser-label{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--live);margin:0 0 6px;}
+.teaser-stage{position:relative;height:120px;border:1px solid var(--line);border-radius:4px;
+  background:var(--ground);overflow:hidden;margin:10px 0 8px;}
+.teaser-dot{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;
+  background:var(--live);transition:left .08s linear,top .08s linear;}
+.teaser-ticker{position:absolute;left:8px;bottom:6px;margin:0;font-size:12px;color:var(--ink-2);}
+.teaser-controls{display:flex;gap:10px;align-items:center;}
+.teaser-controls input[type="range"]{flex:1;}
+@media (prefers-reduced-motion: reduce){.teaser-dot{transition:none;}}
+.teaser-trace{margin:14px 0 0;padding-top:12px;border-top:1px dashed var(--line);}
+.teaser-trace-label{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);margin:0 0 8px;}
+.teaser-trace ul{list-style:none;margin:0;padding:0;font-size:13px;}
+.teaser-trace li{padding:4px 0;color:var(--ink-2);}
+.teaser-trace .t{color:var(--live);font-family:ui-monospace,Menlo,monospace;margin-right:8px;}

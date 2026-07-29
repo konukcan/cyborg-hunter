@@ -326,6 +326,15 @@ function startTour(participantId, capabilities, manifest) {
     onSignal: handleSignal
   });
   monitor.startSession();
+  // Bait stays passively armed for the whole tour (spec: "No honeypot step
+  // card — bait stays passively armed; a pre-recorded agent trace shows it
+  // working"). No dedicated step calls this, so it has to happen here —
+  // without it, pollSessionSignals()'s window.GuardHoneypot.getHoneypotData()
+  // call below always reads the pre-injection default (ai_use: false) and
+  // the honeypot rail lamp can never light.
+  if (window.GuardHoneypot) {
+    window.GuardHoneypot.init({ friction: window.GuardFriction });
+  }
   // Recorder-like bridge for makeLifecycle's optional recorder param (C8).
   // A live proxy rather than passing state.recorder directly: replay only
   // attaches (if the visitor opted in) inside the "Start the tour" click,
@@ -863,6 +872,13 @@ function startTour(participantId, capabilities, manifest) {
       var mount = cardEl.querySelector('[data-role="results-mount"]');
       import('./results.js').then(function (mod) {
         mod.buildResults(mount, state, manifest);
+      });
+    }
+    if (step.id === 'welcome') {
+      var teaserMount = cardEl.querySelector('[data-role="teaser-mount"]');
+      var traceMount = cardEl.querySelector('[data-role="agent-trace-mount"]');
+      import('./teaser.js').then(function (mod) {
+        mod.mountTeaser(teaserMount, traceMount);
       });
     }
     progressEl.textContent = 'Step ' + (i + 1) + ' of ' + STEPS.length;

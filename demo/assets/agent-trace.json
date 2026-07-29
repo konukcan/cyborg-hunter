@@ -1,0 +1,21 @@
+{
+  "note": "scripted agentic-browser simulation against this demo page",
+  "captured": {
+    "honeypotData": {
+      "ai_use": true,
+      "ai_report": "[2026-07-29T19:21:20.476Z] bait:button-click isTrusted=true [2026-07-29T19:21:20.879Z] bait:input-focus isTrusted=true [2026-07-29T19:21:20.880Z] bait:input-text isTrusted=false"
+    },
+    "sessionSummary": {
+      "guard_assistance_violations_session": "[]",
+      "guard_assistance_violation_count_session": 0,
+      "ai_use_session": true,
+      "ai_report_session": "[2026-07-29T19:21:20.476Z] bait:button-click isTrusted=true [2026-07-29T19:21:20.879Z] bait:input-focus isTrusted=true [2026-07-29T19:21:20.880Z] bait:input-text isTrusted=false"
+    }
+  },
+  "annotations": [
+    { "t": 91, "label": "agent loads the page and parses visible text plus accessibility-label content, including the aria-labeled bait surfaces" },
+    { "t": 94, "label": "agent clicks the hidden bait button (#fg-ai-bait-button) per its aria-label disclosure instruction" },
+    { "t": 497, "label": "agent focuses and types \"ai-agent\" into the hidden bait input (#fg-ai-bait-input) per its aria-label instruction" },
+    { "t": 499, "label": "honeypot marks fg-ai-use true and appends a timestamped breadcrumb to fg-ai-report for each triggering event" }
+  ]
+}

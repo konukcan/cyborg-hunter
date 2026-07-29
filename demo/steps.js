@@ -76,6 +76,8 @@ lights over the next eleven steps is something you did, not a script.</p>
 <aside class="teaser" aria-label="Pre-recorded session">
   <p class="teaser-label">Pre-recorded session — the tour is about YOUR data</p>
   <p>This clip shows the honeypot catching an agentic browser. Scrub it, then start your own.</p>
+  <div class="teaser-player" data-role="teaser-mount" hidden></div>
+  <div class="teaser-trace" data-role="agent-trace-mount" hidden></div>
 </aside>`.trim(),
     task: null,
     expect: null,
