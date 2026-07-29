@@ -1,0 +1,39 @@
+{
+  "preset": "standard",
+  "generated": true,
+  "signals": {
+    "paste": {
+      "hardCountThreshold": 2
+    },
+    "drop": {
+      "hardCountThreshold": 2
+    },
+    "copy": {
+      "softWeight": 2,
+      "maxPerTrial": 2
+    },
+    "tabAway": {
+      "softWeight": 1,
+      "maxPerTrial": 2,
+      "durationMs": 3000
+    },
+    "typingSpeed": {
+      "softWeight": 2,
+      "cps": 10
+    },
+    "sidebarEvent": {
+      "softWeight": 3
+    },
+    "devTools": {
+      "softWeight": 1
+    },
+    "foreignInput": {
+      "softWeight": 2
+    },
+    "softScoreThreshold": 6,
+    "screenout": {
+      "enabled": true,
+      "gracePeriodTrials": 3
+    }
+  }
+}
