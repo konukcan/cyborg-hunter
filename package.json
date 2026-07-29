@@ -14,7 +14,8 @@
     "test:core": "node --test tests/core/*.test.js",
     "test:jspsych": "node --test tests/jspsych/*.test.js",
     "test:tools": "node --test tests/tools/*.test.js",
-    "test": "npm run test:core && npm run test:replay && npm run test:cli && npm run test:jspsych && npm run test:tools",
+    "test:demo": "node --test tests/demo/*.test.js",
+    "test": "npm run test:core && npm run test:replay && npm run test:cli && npm run test:jspsych && npm run test:tools && npm run test:demo",
     "test:replay": "node --test tests/replay/*.test.js",
     "test:browser:replay": "node tests/browser/replay/run-replay-tests.mjs",
     "test:browser:alignment": "node tests/browser/replay/cursor-alignment.battery.mjs"
