@@ -4,6 +4,8 @@ Detects AI-tool use during browser-based behavioral experiments. Captures paste,
 
 Optional companion deterrence modules (`extension-guard-friction.js`, `extension-guard-honeypot.js`) ship in the same package: friction enforces fullscreen + blocks sidebars + scrambles content during violations + asks cooperative LLMs to refuse; honeypot exposes both hidden and visible bait fields that AI agents fill while human participants don't see them.
 
+**[Try the live demo →](https://konukcan.github.io/cyborg-hunter/)** — run the tour in your browser; nothing leaves your machine.
+
 ### Example: what a report looks like
 
 The bundled three-participant synthetic dataset (`examples/synthetic-pilot/` — every number hand-authored, no real participant behind any of it) triages like this:
