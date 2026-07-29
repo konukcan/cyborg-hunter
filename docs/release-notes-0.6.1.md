@@ -1,6 +1,6 @@
 # Release notes — cyborg-hunter 0.6.1
 
-*0.6.1 is not the current release; for the current one (0.7.0, the session-replay feature) see [release-notes-0.7.0.md](release-notes-0.7.0.md).*
+*0.6.1 is not the current release; for the current line (0.7.x, the session-replay feature) see [release-notes-0.7.0.md](release-notes-0.7.0.md).*
 
 *Released 2026-07-06. The complete change list is in [CHANGELOG.md](../CHANGELOG.md). This page summarizes what changes in **collected data**, **configuration**, and **reports**.*
 
