@@ -1,0 +1,675 @@
+{
+  "participantId": "DEMO-FIXT",
+  "trials": [
+    {
+      "trialId": "act1-baseline",
+      "integrity": {
+        "trialId": "act1-baseline",
+        "phase": "default",
+        "startTime": 114.79999995231628,
+        "pasteEvents": [],
+        "copyEvents": [],
+        "dropEvents": [],
+        "editTimestamps": [],
+        "mouseEvents": [
+          {
+            "x": 191,
+            "y": 494,
+            "t": 1,
+            "type": "click"
+          },
+          {
+            "x": 276,
+            "y": 626,
+            "t": 5526,
+            "type": "move"
+          },
+          {
+            "x": 276,
+            "y": 626,
+            "t": 5526,
+            "type": "down"
+          },
+          {
+            "x": 276,
+            "y": 626,
+            "t": 5527,
+            "type": "up"
+          }
+        ],
+        "tabAwayEvents": [],
+        "idleGaps": [],
+        "foreignInputEvents": [],
+        "syntheticInsertions": [],
+        "mouseTrackingCapped": false,
+        "mouseTrackingCappedAtMs": null,
+        "duration_ms": 5526.800000071526,
+        "libraryVersion": "0.7.2",
+        "participantId": "DEMO-FIXT",
+        "timestamp": "2026-07-29T19:11:08.871Z",
+        "charsPerSec": 9.1,
+        "trialSoftScore": 0,
+        "trialSignals": {
+          "hard": {
+            "paste": {
+              "trialHits": 0,
+              "sessionTotal": 0,
+              "countThreshold": 2
+            },
+            "drop": {
+              "trialHits": 0,
+              "sessionTotal": 0,
+              "countThreshold": 2
+            }
+          },
+          "soft": {
+            "copy": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            },
+            "tabAway": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            },
+            "typingSpeed": {
+              "charsPerSec": 9.1,
+              "threshold": 10,
+              "hit": 0,
+              "score": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "trialId": "act1-paste",
+      "integrity": {
+        "trialId": "act1-paste",
+        "phase": "default",
+        "startTime": 5641.600000023842,
+        "pasteEvents": [
+          {
+            "type": "paste",
+            "t": 5660,
+            "pastedLength": 73,
+            "isKnownInput": null,
+            "text": "Rule: a hand wins when both cards share a suit and neither is below five."
+          },
+          {
+            "type": "paste",
+            "t": 5812.799999952316,
+            "pastedLength": 73,
+            "isKnownInput": null,
+            "text": "Rule: a hand wins when both cards share a suit and neither is below five."
+          }
+        ],
+        "copyEvents": [],
+        "dropEvents": [],
+        "editTimestamps": [],
+        "mouseEvents": [
+          {
+            "x": 276,
+            "y": 626,
+            "t": 1,
+            "type": "click"
+          },
+          {
+            "x": 480,
+            "y": 406,
+            "t": 17,
+            "type": "move"
+          },
+          {
+            "x": 480,
+            "y": 406,
+            "t": 17,
+            "type": "down"
+          },
+          {
+            "x": 480,
+            "y": 406,
+            "t": 17,
+            "type": "up"
+          },
+          {
+            "x": 480,
+            "y": 406,
+            "t": 17,
+            "type": "click"
+          },
+          {
+            "x": 291,
+            "y": 658,
+            "t": 337,
+            "type": "move"
+          },
+          {
+            "x": 291,
+            "y": 658,
+            "t": 337,
+            "type": "down"
+          },
+          {
+            "x": 291,
+            "y": 658,
+            "t": 337,
+            "type": "up"
+          }
+        ],
+        "tabAwayEvents": [],
+        "idleGaps": [],
+        "foreignInputEvents": [],
+        "syntheticInsertions": [],
+        "mouseTrackingCapped": false,
+        "mouseTrackingCappedAtMs": null,
+        "duration_ms": 337.10000002384186,
+        "libraryVersion": "0.7.2",
+        "participantId": "DEMO-FIXT",
+        "timestamp": "2026-07-29T19:11:09.209Z",
+        "trialSoftScore": 0,
+        "trialSignals": {
+          "hard": {
+            "paste": {
+              "trialHits": 2,
+              "sessionTotal": 2,
+              "countThreshold": 2
+            },
+            "drop": {
+              "trialHits": 0,
+              "sessionTotal": 0,
+              "countThreshold": 2
+            }
+          },
+          "soft": {
+            "copy": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            },
+            "tabAway": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "trialId": "act1-tabaway",
+      "integrity": {
+        "trialId": "act1-tabaway",
+        "phase": "default",
+        "startTime": 5978.799999952316,
+        "pasteEvents": [],
+        "copyEvents": [],
+        "dropEvents": [],
+        "editTimestamps": [],
+        "mouseEvents": [
+          {
+            "x": 291,
+            "y": 658,
+            "t": 1,
+            "type": "click"
+          },
+          {
+            "x": 265,
+            "y": 170,
+            "t": 5105,
+            "type": "move"
+          },
+          {
+            "x": 263,
+            "y": 504,
+            "t": 11427,
+            "type": "move"
+          },
+          {
+            "x": 263,
+            "y": 504,
+            "t": 11428,
+            "type": "down"
+          },
+          {
+            "x": 263,
+            "y": 504,
+            "t": 11428,
+            "type": "up"
+          }
+        ],
+        "tabAwayEvents": [
+          {
+            "start": 5986,
+            "duration_ms": 11202,
+            "type": "windowBlur",
+            "timestamp": "2026-07-29T19:11:09.215Z"
+          }
+        ],
+        "idleGaps": [],
+        "foreignInputEvents": [],
+        "syntheticInsertions": [],
+        "mouseTrackingCapped": false,
+        "mouseTrackingCappedAtMs": null,
+        "duration_ms": 11427.800000071526,
+        "libraryVersion": "0.7.2",
+        "participantId": "DEMO-FIXT",
+        "timestamp": "2026-07-29T19:11:20.636Z",
+        "trialSoftScore": 1,
+        "trialSignals": {
+          "hard": {
+            "paste": {
+              "trialHits": 0,
+              "sessionTotal": 2,
+              "countThreshold": 2
+            },
+            "drop": {
+              "trialHits": 0,
+              "sessionTotal": 0,
+              "countThreshold": 2
+            }
+          },
+          "soft": {
+            "copy": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            },
+            "tabAway": {
+              "hits": 1,
+              "capped": 1,
+              "score": 1
+            }
+          }
+        }
+      }
+    },
+    {
+      "trialId": "act1-sidebar",
+      "integrity": {
+        "trialId": "act1-sidebar",
+        "phase": "default",
+        "startTime": 17406.700000047684,
+        "pasteEvents": [],
+        "copyEvents": [],
+        "dropEvents": [],
+        "editTimestamps": [],
+        "mouseEvents": [
+          {
+            "x": 263,
+            "y": 504,
+            "t": 1,
+            "type": "click"
+          },
+          {
+            "x": 291,
+            "y": 457,
+            "t": 24,
+            "type": "move"
+          },
+          {
+            "x": 291,
+            "y": 457,
+            "t": 24,
+            "type": "down"
+          },
+          {
+            "x": 291,
+            "y": 457,
+            "t": 24,
+            "type": "up"
+          }
+        ],
+        "tabAwayEvents": [],
+        "idleGaps": [],
+        "foreignInputEvents": [],
+        "syntheticInsertions": [],
+        "mouseTrackingCapped": false,
+        "mouseTrackingCappedAtMs": null,
+        "duration_ms": 24.199999928474426,
+        "libraryVersion": "0.7.2",
+        "participantId": "DEMO-FIXT",
+        "timestamp": "2026-07-29T19:11:20.661Z",
+        "trialSoftScore": 0,
+        "trialSignals": {
+          "hard": {
+            "paste": {
+              "trialHits": 0,
+              "sessionTotal": 2,
+              "countThreshold": 2
+            },
+            "drop": {
+              "trialHits": 0,
+              "sessionTotal": 0,
+              "countThreshold": 2
+            }
+          },
+          "soft": {
+            "copy": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            },
+            "tabAway": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "trialId": "act1-autotype",
+      "integrity": {
+        "trialId": "act1-autotype",
+        "phase": "default",
+        "startTime": 17431,
+        "pasteEvents": [],
+        "copyEvents": [],
+        "dropEvents": [],
+        "editTimestamps": [],
+        "mouseEvents": [
+          {
+            "x": 291,
+            "y": 457,
+            "t": 1,
+            "type": "click"
+          },
+          {
+            "x": 265,
+            "y": 504,
+            "t": 18,
+            "type": "move"
+          },
+          {
+            "x": 265,
+            "y": 504,
+            "t": 18,
+            "type": "down"
+          },
+          {
+            "x": 265,
+            "y": 504,
+            "t": 18,
+            "type": "up"
+          }
+        ],
+        "tabAwayEvents": [],
+        "idleGaps": [],
+        "foreignInputEvents": [],
+        "syntheticInsertions": [],
+        "mouseTrackingCapped": false,
+        "mouseTrackingCappedAtMs": null,
+        "duration_ms": 18.5,
+        "libraryVersion": "0.7.2",
+        "participantId": "DEMO-FIXT",
+        "timestamp": "2026-07-29T19:11:20.679Z",
+        "trialSoftScore": 0,
+        "trialSignals": {
+          "hard": {
+            "paste": {
+              "trialHits": 0,
+              "sessionTotal": 2,
+              "countThreshold": 2
+            },
+            "drop": {
+              "trialHits": 0,
+              "sessionTotal": 0,
+              "countThreshold": 2
+            }
+          },
+          "soft": {
+            "copy": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            },
+            "tabAway": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "trialId": "act2-fullscreen-entry",
+      "integrity": {
+        "trialId": "act2-fullscreen-entry",
+        "phase": "default",
+        "startTime": 17449.600000023842,
+        "pasteEvents": [],
+        "copyEvents": [],
+        "dropEvents": [],
+        "editTimestamps": [],
+        "mouseEvents": [
+          {
+            "x": 265,
+            "y": 504,
+            "t": 1,
+            "type": "click"
+          }
+        ],
+        "tabAwayEvents": [],
+        "idleGaps": [],
+        "foreignInputEvents": [],
+        "syntheticInsertions": [],
+        "mouseTrackingCapped": false,
+        "mouseTrackingCappedAtMs": null,
+        "duration_ms": 5.699999928474426,
+        "libraryVersion": "0.7.2",
+        "participantId": "DEMO-FIXT",
+        "timestamp": "2026-07-29T19:11:20.685Z",
+        "trialSoftScore": 0,
+        "trialSignals": {
+          "hard": {
+            "paste": {
+              "trialHits": 0,
+              "sessionTotal": 2,
+              "countThreshold": 2
+            },
+            "drop": {
+              "trialHits": 0,
+              "sessionTotal": 0,
+              "countThreshold": 2
+            }
+          },
+          "soft": {
+            "copy": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            },
+            "tabAway": {
+              "hits": 0,
+              "capped": 0,
+              "score": 0
+            }
+          }
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "integritySession": {
+      "pasteCount": 2,
+      "copyCount": 0,
+      "dropCount": 0,
+      "tabAwaySums": [
+        11202
+      ],
+      "tabAwayEvents": [
+        {
+          "start": 5986,
+          "duration_ms": 11202,
+          "type": "windowBlur",
+          "timestamp": "2026-07-29T19:11:09.215Z"
+        }
+      ],
+      "charsPerSec": [
+        9.1
+      ],
+      "sidebarEvents": [],
+      "devToolsEvents": [],
+      "aiExtensionsFound": [],
+      "keyboardShortcuts": [],
+      "windowPositions": [
+        {
+          "x": 22,
+          "y": 61,
+          "w": 1200,
+          "h": 906,
+          "iw": 1280,
+          "ih": 900,
+          "sw": 1280,
+          "sh": 900,
+          "dpr": 1,
+          "vvScale": 1,
+          "t": 2068.2000000476837
+        },
+        {
+          "x": 22,
+          "y": 61,
+          "w": 1200,
+          "h": 906,
+          "iw": 1280,
+          "ih": 900,
+          "sw": 1280,
+          "sh": 900,
+          "dpr": 1,
+          "vvScale": 1,
+          "t": 4068.399999976158
+        },
+        {
+          "x": 22,
+          "y": 61,
+          "w": 1200,
+          "h": 906,
+          "iw": 1280,
+          "ih": 900,
+          "sw": 1280,
+          "sh": 900,
+          "dpr": 1,
+          "vvScale": 1,
+          "t": 6068.299999952316
+        },
+        {
+          "x": 22,
+          "y": 61,
+          "w": 1200,
+          "h": 906,
+          "iw": 1280,
+          "ih": 900,
+          "sw": 1280,
+          "sh": 900,
+          "dpr": 1,
+          "vvScale": 1,
+          "t": 8067.700000047684
+        },
+        {
+          "x": 22,
+          "y": 61,
+          "w": 1200,
+          "h": 906,
+          "iw": 1280,
+          "ih": 900,
+          "sw": 1280,
+          "sh": 900,
+          "dpr": 1,
+          "vvScale": 1,
+          "t": 10068.100000023842
+        },
+        {
+          "x": 22,
+          "y": 61,
+          "w": 1200,
+          "h": 906,
+          "iw": 1280,
+          "ih": 900,
+          "sw": 1280,
+          "sh": 900,
+          "dpr": 1,
+          "vvScale": 1,
+          "t": 12067.600000023842
+        },
+        {
+          "x": 22,
+          "y": 61,
+          "w": 1200,
+          "h": 906,
+          "iw": 1280,
+          "ih": 900,
+          "sw": 1280,
+          "sh": 900,
+          "dpr": 1,
+          "vvScale": 1,
+          "t": 14068
+        },
+        {
+          "x": 22,
+          "y": 61,
+          "w": 1200,
+          "h": 906,
+          "iw": 1280,
+          "ih": 900,
+          "sw": 1280,
+          "sh": 900,
+          "dpr": 1,
+          "vvScale": 1,
+          "t": 16067.299999952316
+        }
+      ],
+      "idleGaps": [],
+      "extensionInjections": [],
+      "viewportWidthShifts": [],
+      "layoutShifts": [],
+      "zoomChanges": [],
+      "hardScore": {
+        "paste": {
+          "count": 2,
+          "threshold": 2,
+          "triggered": true
+        },
+        "drop": {
+          "count": 0,
+          "threshold": 2,
+          "triggered": false
+        }
+      },
+      "softScore": 1,
+      "trialsCompleted": 6,
+      "softScoreThreshold": 6,
+      "anyHardTriggered": true,
+      "config": {
+        "preset": "standard",
+        "participantId": "DEMO-rtpi",
+        "thresholds": {
+          "tabAwayDurationMs": 3000,
+          "typingSpeedCps": 10
+        }
+      },
+      "libraryVersion": "0.7.2"
+    },
+    "integrityScore": {
+      "hardScore": {
+        "paste": {
+          "count": 2,
+          "threshold": 2,
+          "triggered": true
+        },
+        "drop": {
+          "count": 0,
+          "threshold": 2,
+          "triggered": false
+        }
+      },
+      "softScore": 1,
+      "anyHardTriggered": true,
+      "trialsCompleted": 6,
+      "softScoreThreshold": 6
+    }
+  }
+}
