@@ -100,6 +100,8 @@ pre{background:var(--code-bg);color:var(--code-ink);padding:14px 16px;border-rad
 .yourreport{border-left:3px solid var(--live);padding:2px 0 2px 16px;margin:0 0 18px;}
 .yourreport li{margin:0 0 8px;max-width:60ch;}
 .yourreport .t-hard{color:var(--hard);font-weight:700;}
+.yourreport .t-soft{color:var(--soft);font-weight:700;}
+.yourreport .t-clean{color:var(--clean);font-weight:700;}
 
 /* checklist rail */
 aside{position:sticky;top:20px;align-self:start;background:var(--panel);
@@ -145,6 +147,10 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
  * layout doesn't sprawl the page while it's degraded/empty pre-load. */
 .finale-mount{min-height:100px;border:1px solid var(--line);border-radius:4px;
   padding:16px;margin:0 0 12px;background:var(--panel);}
+
+/* Step 11 results: the sandboxed report iframe (demo/results.js). */
+.results-frame{width:100%;min-height:70vh;border:1px solid var(--line);
+  border-radius:4px;background:#fff;}
 
 /* Visible keyboard-focus outlines on every button and link (buttons already
  * carry a :hover/:active look via .btn; this is the keyboard-only case). */

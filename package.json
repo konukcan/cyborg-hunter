@@ -10,6 +10,7 @@
   "scripts": {
     "build": "node build.js",
     "demo:vendor": "node tools/vendor-jspsych.mjs",
+    "demo:preview": "node tools/build-preview-core.mjs",
     "test:browser": "echo 'Open tests/browser/integrity-monitor.test.html in a browser'",
     "test:cli": "node --test tests/cli/*.test.js",
     "test:core": "node --test tests/core/*.test.js",

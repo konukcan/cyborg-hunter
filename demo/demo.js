@@ -150,6 +150,14 @@ function startTour(participantId, capabilities, manifest) {
 
   var state = {
     stepIndex: 0,
+    // C10 (results): results.js only receives (container, state, manifest) —
+    // not the monitor/participantId closures below — so it needs its own
+    // copy to build the SAME payload buildDownloadFile('sessionData') does.
+    participantId: participantId,
+    // Snapshotted once, in goTo(), the moment the results step is entered
+    // (see below) — later than that and the tour's own interactive steps
+    // are over anyway, so a live reference isn't needed.
+    sessionReport: null,
     capabilities: capabilities,
     replayOptIn: false,
     lampCounts: {},
@@ -743,6 +751,15 @@ function startTour(participantId, capabilities, manifest) {
       html += '<div class="violations" data-role="violation-chips"></div>';
     }
     html += renderTaskPanel(step.task);
+    // Results screen (step 11): renderTaskPanel(null) is '' (task: null in
+    // steps.js) — this mount point is what goTo() hands to results.js's
+    // buildResults(), which owns everything inside it (loading state,
+    // walkthrough, iframe report). The surrounding eyebrow/title/body/expect/
+    // buttons stay the normal generic layout; .results-mode (toggled by
+    // goTo()) makes the WHOLE card full-width, not just this mount.
+    if (step.id === 'results') {
+      html += '<div class="results-mount" data-role="results-mount"></div>';
+    }
     if (step.expect) {
       html += '<div class="expect"><span class="tag">Expect</span><span>' + tpl(step.expect) + '</span></div>';
     }
@@ -827,11 +844,27 @@ function startTour(participantId, capabilities, manifest) {
     // restarts if the visitor navigates Back into the tour. Both idempotent.
     if (i >= resultsIndex) stopLampWiring(); else startLampWiring();
     document.body.dataset.view = step.act;
+    // Full-width payoff (spec: "not inside the tour card") — toggled here
+    // (not by results.js) so every OTHER step deterministically clears it,
+    // the same single-chokepoint pattern as dataset.view above.
+    document.body.classList.toggle('results-mode', step.id === 'results');
     renderStep(i);
     // Repaints from state.chipCounts (not a reset) so Back-then-forward into
     // guard-cheat shows the tally already accumulated this session.
     if (step.task && step.task.kind === 'guard-cheat') renderViolationChips();
     if (step.task && step.task.kind === 'jspsych-finale') runFinaleStep(step.task);
+    if (step.id === 'results') {
+      // Snapshot here (not earlier): getSessionReport() reflects everything
+      // up to and including the finale, and by this point the outer monitor
+      // may already be the destroyed-but-still-readable instance finale.js
+      // left behind (see finale.js's docblock) — getSessionReport() doesn't
+      // check lifecycle state, so this is safe either way.
+      state.sessionReport = monitor.getSessionReport();
+      var mount = cardEl.querySelector('[data-role="results-mount"]');
+      import('./results.js').then(function (mod) {
+        mod.buildResults(mount, state, manifest);
+      });
+    }
     progressEl.textContent = 'Step ' + (i + 1) + ' of ' + STEPS.length;
   }
 
