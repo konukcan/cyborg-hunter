@@ -51,7 +51,8 @@ export async function renderIndexHtml(summaries, triage, participants, config, v
   // `hidden` attribute on the others. Each pane carries its own
   // `visualsRendered=false` fallback note inline (see renderDetail), so we no
   // longer need a top-level swap — the per-participant fallback is the contract
-  // exercised by the second smoke test.
+  // exercised by html-index.test.js (wrapper default) and
+  // html-index-core.test.js (injected override).
   const detailHtml = triage.map((t, i) => {
     const participant = participants.find(p => p.participantId === t.participantId);
     return renderDetail(t, participant, config, visualsRendered, visualsUnavailableNote, /* defaultVisible */ i === 0);

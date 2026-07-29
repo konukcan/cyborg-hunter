@@ -24,6 +24,18 @@ describe('renderIndexHtml (pure core)', () => {
     assert.ok(html.includes('/*__MARKER__*/'), 'injected replay client source appears');
     assert.ok(html.includes('v0.7.1'), 'version string appears in topbar meta');
   });
+  it('renders the injected visualsUnavailableNote in a detail pane', async () => {
+    // Unlike the empty-triage case above, a single triage row forces a detail
+    // pane to render, and visualsRendered=false routes that pane through the
+    // fallback branch where the injected note must appear.
+    const triage = [{ participantId: 'p1', hardTriggered: false, softFlagged: false, score: 0, summary: {} }];
+    const participants = [{ participantId: 'p1' }];
+    const html = await renderIndexHtml([], triage, participants,
+      { outputDir: '/unused', participantIdField: 'participantId' }, false,
+      { replayClientSrc: '/*__MARKER__*/', visualsUnavailableNote: 'NOTE_MARKER' });
+    assert.ok(html.includes('NOTE_MARKER'));
+    assert.ok(html.includes('/*__MARKER__*/'));
+  });
   it('module source has no fs/path imports', () => {
     const src = readFileSync(new URL('../../src/cli/renderers/html-index-core.js', import.meta.url), 'utf8');
     assert.doesNotMatch(src, /from ['"](node:)?(fs|path)['"]/);
