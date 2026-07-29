@@ -42,6 +42,67 @@ function substitute(str, signals, version) {
   });
 }
 
+function fullscreenIsActive() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement);
+}
+
+// Step 7's 1.5s fullscreen-entry race. Calls OUR OWN requestFullscreen() —
+// not GuardFriction.requestFullscreen(), which fires the request and
+// swallows any promise rejection (prior eng review) — so we get a real
+// promise to race against a timeout and the 'fullscreenchange' event.
+// Resolves once fullscreen is confirmed active; rejects on timeout,
+// rejection, an unavailable API, or fullscreen ending before it settled.
+function raceFullscreenEntry() {
+  var el = document.documentElement;
+  var reqFn = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen;
+
+  return new Promise(function (resolve, reject) {
+    var settled = false;
+    var timerId = null;
+
+    function cleanup() {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+      document.removeEventListener('mozfullscreenchange', onChange);
+      if (timerId) clearTimeout(timerId);
+    }
+    function succeed() {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    }
+    function fail(err) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    }
+    function onChange() {
+      if (fullscreenIsActive()) succeed(); else fail(new Error('fullscreen exited before entry settled'));
+    }
+
+    document.addEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    document.addEventListener('mozfullscreenchange', onChange);
+    timerId = setTimeout(function () { fail(new Error('fullscreen entry timed out')); }, 1500);
+
+    if (!reqFn) { fail(new Error('fullscreen API unavailable')); return; }
+    var ownPromise;
+    try {
+      ownPromise = reqFn.call(el);
+    } catch (e) {
+      fail(e);
+      return;
+    }
+    // Older prefixed APIs don't return a promise at all — fall through to
+    // the fullscreenchange/timeout race above in that case.
+    if (ownPromise && typeof ownPromise.then === 'function') {
+      ownPromise.then(succeed, fail);
+    }
+  });
+}
+
 function showSmallMode() {
   var cols = document.querySelector('.cols');
   if (cols) cols.style.display = 'none';
@@ -93,7 +154,12 @@ function startTour(participantId, capabilities, manifest) {
     lampCounts: {},
     act2Skipped: false,
     violations: [],
-    trialReports: []
+    trialReports: [],
+    // C7 (guard act): the token GuardFriction.start() returns — needed by
+    // stop() — and per-reason violation tallies for the guard-cheat step's
+    // chip row.
+    guardStopToken: null,
+    chipCounts: {}
   };
 
   var cardEl = document.getElementById('card');
@@ -244,10 +310,108 @@ function startTour(participantId, capabilities, manifest) {
       // Recorded for the payload's guardFriction.violations[] regardless of
       // lamp-wiring state (see handleTrialReport's comment above — same reasoning).
       state.violations.push(violation);
+      // Violation chips (type × count) live only in the guard-cheat step's
+      // task panel — tally + repaint them only while that step is showing.
+      var currentTask = STEPS[state.stepIndex].task;
+      if (violation.phase === 'start' && currentTask && currentTask.kind === 'guard-cheat') {
+        state.chipCounts[violation.reason] = (state.chipCounts[violation.reason] || 0) + 1;
+        renderViolationChips();
+      }
       if (!lampWiringActive) return;
       if (violation.phase !== 'start') return;
       var n = (state.lampCounts.guardViolations || 0) + 1;
       syncCountLamp('guardViolations', n, true, RAIL_LABELS.guardViolations);
+    });
+  }
+
+  // ----- C7: guard act -------------------------------------------------
+
+  // Standalone GuardFriction.start() — not the jsPsych entryTrial() helper,
+  // since this demo has no jsPsych instance until the finale trials. Only
+  // called after raceFullscreenEntry() already confirmed fullscreen is
+  // active: start() runs an immediate is-fullscreen check and would log a
+  // false 'not_fullscreen' violation if called first.
+  function startGuardFriction() {
+    try {
+      if (window.GuardFriction && typeof window.GuardFriction.start === 'function') {
+        state.guardStopToken = window.GuardFriction.start({});
+      }
+    } catch (err) {
+      console.warn('cyborg-hunter demo: GuardFriction.start failed', err);
+      state.guardStopToken = null;
+    }
+  }
+
+  // Idempotent: state.guardStopToken is cleared after the first successful
+  // stop() call, so reaching guard-finish normally AND skipping past it
+  // (skipToFinale()/Alt+S) never double-stops.
+  function finalizeGuard() {
+    if (!state.guardStopToken) return;
+    var token = state.guardStopToken;
+    state.guardStopToken = null;
+    try {
+      if (window.GuardFriction && typeof window.GuardFriction.stop === 'function') {
+        window.GuardFriction.stop(token);
+      }
+    } catch (err) {
+      console.warn('cyborg-hunter demo: GuardFriction.stop failed', err);
+    }
+  }
+
+  function renderViolationChips() {
+    var container = cardEl.querySelector('[data-role="violation-chips"]');
+    if (!container) return;
+    container.innerHTML = Object.keys(state.chipCounts).map(function (reason) {
+      return '<span class="chip hot">' + reason + ' × ' + state.chipCounts[reason] + '</span>';
+    }).join('');
+  }
+
+  // Renders the fallback note (steps.js copy if the task defines one, else
+  // a minimal inline string) and, if not already offered, a "Skip to
+  // finale" link — reusing the same data-key the card's click delegation
+  // already handles. The primary "Enter fullscreen" button stays enabled
+  // for a retry either way (advance is never fully blocked).
+  function showFullscreenFallback() {
+    state.act2Skipped = true;
+    var step = STEPS[state.stepIndex];
+    var note = cardEl.querySelector('.fallback-note');
+    if (note) {
+      note.textContent = (step.task && step.task.fallbackNote) ||
+        "Fullscreen didn't engage in time, so Act 2's enforcement can't run in this browser. That's fine — skip ahead; everything else in the tour still works.";
+      note.hidden = false;
+    }
+    if (!cardEl.querySelector('a[data-key="skipToFinale"]')) {
+      var secondary = document.createElement('p');
+      secondary.className = 'secondary';
+      secondary.innerHTML = '<a href="#" data-key="skipToFinale">Skip to finale</a>';
+      cardEl.appendChild(secondary);
+    }
+  }
+
+  // Drives step 7's fullscreen-entry race. A guard API absence (bundle
+  // failed to load) is treated the same as a failed race — fallback + skip,
+  // never a throw — since advancing into guard-cheat with no guard running
+  // would silently pretend enforcement is active when it isn't.
+  function handleFullscreenEntry(button) {
+    var stepAtAttempt = state.stepIndex;
+    if (button) button.disabled = true;
+    raceFullscreenEntry().then(function () {
+      if (state.stepIndex !== stepAtAttempt) return; // navigated away mid-race
+      if (button) button.disabled = false;
+      if (!window.GuardFriction || typeof window.GuardFriction.start !== 'function') {
+        console.warn('cyborg-hunter demo: GuardFriction unavailable — degrading to fallback');
+        showFullscreenFallback();
+        return;
+      }
+      // Clears a flag a PRIOR failed attempt may have set — this retry
+      // actually got into Act 2, so it's no longer accurate to call it skipped.
+      state.act2Skipped = false;
+      startGuardFriction();
+      goTo(state.stepIndex + 1);
+    }).catch(function () {
+      if (state.stepIndex !== stepAtAttempt) return;
+      if (button) button.disabled = false;
+      showFullscreenFallback();
     });
   }
 
@@ -344,7 +508,7 @@ function startTour(participantId, capabilities, manifest) {
     var files = task.files.filter(function (f) {
       return f.key !== 'replay' || state.replayOptIn;
     });
-    var parts = ['<div class="task">', '<p class="label">' + task.kind + '</p>'];
+    var parts = ['<div class="task jspsych-content">', '<p class="label">' + task.kind + '</p>'];
     parts.push('<div class="files">' + files.map(function (f) {
       return (
         '<div class="file">' +
@@ -368,11 +532,18 @@ function startTour(participantId, capabilities, manifest) {
   function renderTaskPanel(task) {
     if (!task) return '';
     if (task.kind === 'downloads') return renderDownloadsPanel(task);
-    var parts = ['<div class="task">', '<p class="label">' + task.kind + '</p>'];
+    // scramble coupling: GuardFriction's obfuscateContent() only touches
+    // getJsPsychContent()'s match (.jspsych-content / .jspsych-display-element
+    // / #jspsych-content) — this class makes every task panel a valid target,
+    // not just Act 2's, so a violation during any step scrambles the task.
+    var parts = ['<div class="task jspsych-content">', '<p class="label">' + task.kind + '</p>'];
     var ruleText = task.prompt || task.ruleText;
     if (ruleText) parts.push('<p class="rule">' + tpl(ruleText) + '</p>');
     if (task.kind === 'type-answer' || task.kind === 'copy-paste') {
       parts.push('<textarea rows="3" placeholder="Type your answer here"></textarea>');
+    }
+    if (task.kind === 'fullscreen-entry') {
+      parts.push('<p class="rule fallback-note" hidden></p>');
     }
     if (task.targetPastes) {
       parts.push('<p class="hint">Target pastes: ' + tpl(task.targetPastes) + '</p>');
@@ -413,12 +584,46 @@ function startTour(participantId, capabilities, manifest) {
     }).join(' ');
   }
 
+  // Counts-by-type traces summary for the guard-finish step, built from
+  // every violation GuardFriction reported this session (start events only
+  // — 'end'/'tamper' phases describe the same violation, not a new one).
+  function renderTracesSummary() {
+    var counts = {};
+    state.violations.forEach(function (v) {
+      if (v.phase !== 'start') return;
+      counts[v.reason] = (counts[v.reason] || 0) + 1;
+    });
+    var reasons = Object.keys(counts);
+    // Not .jspsych-content — this is supplementary info rendered above the
+    // actual task panel, not "the task container" the scramble targets
+    // (moot anyway: finalizeGuard() already stopped the guard before this
+    // renders, but the class doesn't belong on it regardless).
+    if (reasons.length === 0) {
+      return '<div class="task"><p class="label">traces</p>' +
+        '<p class="hint">No violations recorded this run.</p></div>';
+    }
+    var rows = reasons.map(function (reason) {
+      return '<li>' + reason + ' — ' + counts[reason] + '</li>';
+    }).join('');
+    return '<div class="task"><p class="label">traces</p><ul class="hint">' + rows + '</ul></div>';
+  }
+
   function renderStep(i) {
     var step = STEPS[i];
     var html = '';
     html += '<p class="eyebrow">' + renderEyebrow(step) + '</p>';
     html += '<h2>' + tpl(step.title) + '</h2>';
+    if (step.task && step.task.kind === 'guard-finish') html += renderTracesSummary();
     html += '<div class="stepcopy">' + tpl(step.body) + '</div>';
+    // Violation chips render OUTSIDE the task panel deliberately: the panel
+    // carries .jspsych-content, and GuardFriction's obfuscateContent() walks
+    // and scrambles every text node inside its match — a chip row nested in
+    // there would scramble its own "you triggered X" text the instant it's
+    // written (confirmed while verifying: the chip text came back as
+    // ciphertext). Chips need to stay legible while a violation is live.
+    if (step.task && step.task.kind === 'guard-cheat') {
+      html += '<div class="violations" data-role="violation-chips"></div>';
+    }
     html += renderTaskPanel(step.task);
     if (step.expect) {
       html += '<div class="expect"><span class="tag">Expect</span><span>' + tpl(step.expect) + '</span></div>';
@@ -437,17 +642,28 @@ function startTour(participantId, capabilities, manifest) {
   function goTo(i) {
     state.stepIndex = i;
     var step = STEPS[i];
+    // Reaching guard-finish means Act 2 enforcement is over — stop it
+    // (idempotent) before rendering, so the traces summary sees the final
+    // 'end' event for whatever violation was open.
+    if (step.task && step.task.kind === 'guard-finish') finalizeGuard();
     lifecycle.transitionTo(step.task ? step.task.trialId : null);
     // Lamp wiring stops at the results step (interactive tasks are over) and
     // restarts if the visitor navigates Back into the tour. Both idempotent.
     if (i >= resultsIndex) stopLampWiring(); else startLampWiring();
     document.body.dataset.view = step.act;
     renderStep(i);
+    // Repaints from state.chipCounts (not a reset) so Back-then-forward into
+    // guard-cheat shows the tally already accumulated this session.
+    if (step.task && step.task.kind === 'guard-cheat') renderViolationChips();
     progressEl.textContent = 'Step ' + (i + 1) + ' of ' + STEPS.length;
   }
 
   function skipToFinale() {
     if (STEPS[state.stepIndex].act === 'act2') state.act2Skipped = true;
+    // Skipping out of Act 2 (the "Skip to finale" link or Alt+S from
+    // anywhere) must stop an active guard the same as reaching guard-finish
+    // normally would — finalizeGuard() no-ops if it's already stopped.
+    finalizeGuard();
     goTo(finaleIndex());
   }
 
@@ -456,6 +672,14 @@ function startTour(participantId, capabilities, manifest) {
     if (back) { goTo(state.stepIndex - 1); return; }
     var primary = e.target.closest('[data-action="primary"]');
     if (primary) {
+      var currentStep = STEPS[state.stepIndex];
+      // Step 7's primary button drives the fullscreen race instead of a
+      // plain advance — it only moves to step 8 once guard-friction is
+      // actually armed (see handleFullscreenEntry).
+      if (currentStep.task && currentStep.task.kind === 'fullscreen-entry') {
+        handleFullscreenEntry(primary);
+        return;
+      }
       if (state.stepIndex < STEPS.length - 1) goTo(state.stepIndex + 1);
       return;
     }

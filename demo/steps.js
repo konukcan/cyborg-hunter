@@ -200,6 +200,10 @@ begin.</p>`.trim(),
     task: {
       kind: 'fullscreen-entry',
       trialId: 'act2-fullscreen-entry',
+      fallbackNote:
+        "Fullscreen didn't engage in time, so Act 2's enforcement can't run in " +
+        "this browser. That's fine — skip ahead below; everything else in the " +
+        'tour still works.',
     },
     expect:
       "Entering fullscreen arms guard_assistance_violations tracking. Nothing's logged yet — that starts the moment you leave.",
