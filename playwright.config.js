@@ -13,6 +13,8 @@ export default defineConfig({
   testDir: 'demo/tests',
   retries: 0,
   timeout: 60000,
+  workers: 1, // single shared webServer/.demo-site/ — parallel workers would race the assemble+serve step
+
   use: {
     baseURL: `http://localhost:${PORT}`,
     acceptDownloads: true,
