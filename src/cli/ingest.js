@@ -16,6 +16,7 @@ import { gunzipSync } from 'zlib';
 import Papa from 'papaparse';
 import { TRIAL_REPORT_FIELDS } from '../shared/schema.js';
 import { sanitizeId } from '../shared/constants.js';
+import { getByPath } from '../shared/paths.js';
 
 // Replay artifacts saved by the replay extension:
 //   <sanitizedPid>-replay-<sessionStartEpochMs>.json[.gz]
@@ -297,22 +298,7 @@ function attachReplayArtifacts(participants, config, warnings) {
   }
 }
 
-// Resolves a possibly-dotted field path against an object (0.6.1).
-// A flat key wins over a dotted walk, so data that literally contains a
-// "metadata.sessionId" column stays addressable; otherwise the path is
-// walked one segment at a time. Returns undefined when any segment is
-// missing or a non-object is hit mid-path.
-export function getByPath(obj, path) {
-  if (obj == null || typeof path !== 'string' || path.length === 0) return undefined;
-  if (Object.prototype.hasOwnProperty.call(obj, path)) return obj[path];
-  if (!path.includes('.')) return undefined;
-  let cur = obj;
-  for (const seg of path.split('.')) {
-    if (cur == null || typeof cur !== 'object') return undefined;
-    cur = cur[seg];
-  }
-  return cur;
-}
+export { getByPath };
 
 // Extracts integrity trial data from a single participant's raw JSON.
 // Returns { participantId, trials, warnings, metadata }.
