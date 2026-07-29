@@ -99,6 +99,27 @@ function startTour(participantId, capabilities, manifest) {
 
   renderRail(railEl, { groups: RAIL_GROUPS, intro: RAIL_INTRO });
 
+  // Lamp wiring is lifecycle-bound (spec: "starts and stops with the tour").
+  // startLampWiring/stopLampWiring are idempotent: entering the results step
+  // stops the poll and turns every lamp handler into a no-op (the interactive
+  // tasks are over; the monitor itself keeps running — finalization belongs
+  // to the payload task); navigating Back into the tour restarts it.
+  var lampWiringActive = false;
+  var sessionPollId = null;
+
+  function startLampWiring() {
+    if (lampWiringActive) return;
+    lampWiringActive = true;
+    sessionPollId = setInterval(pollSessionSignals, SESSION_POLL_MS);
+  }
+
+  function stopLampWiring() {
+    if (!lampWiringActive) return;
+    lampWiringActive = false;
+    clearInterval(sessionPollId);
+    sessionPollId = null;
+  }
+
   // Lights `key` only if `count` is a new high — makes both the event-driven
   // path (increments a running local count) and the 5s poll (recomputes the
   // true count from the library's own data) safe to call without double-
@@ -112,6 +133,7 @@ function startTour(participantId, capabilities, manifest) {
   }
 
   function handleSignal(sig) {
+    if (!lampWiringActive) return;
     var n;
     switch (sig.type) {
       case 'paste':
@@ -132,7 +154,10 @@ function startTour(participantId, capabilities, manifest) {
         if (duration >= 10000) {
           n = (state.lampCounts.tabAwayLong || 0) + 1;
           syncCountLamp('tabAwayLong', n, false, RAIL_LABELS.tabAwayLong);
-        } else if (duration >= manifest.signals.tabAway.durationMs) {
+        } else if (duration > manifest.signals.tabAway.durationMs) {
+          // Strict > matches the library convention: a tab-away exactly at
+          // the cutoff is an unscored flicker (scoring.js:63, summary.js
+          // "same `>` boundary" comment, session-timeline.js flicker bin).
           n = (state.lampCounts.tabAwayMid || 0) + 1;
           syncCountLamp('tabAwayMid', n, false, RAIL_LABELS.tabAwayMid);
         }
@@ -162,6 +187,7 @@ function startTour(participantId, capabilities, manifest) {
   // inside endTrial() (src/core/signals/typing.js), so it's only observable
   // once a trial closes, via the lifecycle helper's onTrialReport hook.
   function handleTrialReport(report) {
+    if (!lampWiringActive) return;
     var typingSpeed = report.trialSignals && report.trialSignals.soft && report.trialSignals.soft.typingSpeed;
     if (typingSpeed && typingSpeed.hit) {
       var n = (state.lampCounts.fastTyping || 0) + 1;
@@ -198,7 +224,8 @@ function startTour(participantId, capabilities, manifest) {
   monitor.startSession();
   var lifecycle = makeLifecycle(monitor, { onTrialReport: handleTrialReport });
 
-  setInterval(pollSessionSignals, SESSION_POLL_MS);
+  // Tab-close hygiene: don't leave the poll running into page teardown.
+  window.addEventListener('pagehide', stopLampWiring);
 
   // Act-2 violations (GuardFriction is a separate global, not part of the
   // CyborgHunter monitor). Counts each violation the moment it starts, for
@@ -206,6 +233,7 @@ function startTour(participantId, capabilities, manifest) {
   // own start/end-paired violations log.
   if (window.GuardFriction && typeof window.GuardFriction.onViolation === 'function') {
     window.GuardFriction.onViolation(function (violation) {
+      if (!lampWiringActive) return;
       if (violation.phase !== 'start') return;
       var n = (state.lampCounts.guardViolations || 0) + 1;
       syncCountLamp('guardViolations', n, true, RAIL_LABELS.guardViolations);
@@ -306,10 +334,15 @@ function startTour(participantId, capabilities, manifest) {
     cardEl.innerHTML = html;
   }
 
+  var resultsIndex = STEPS.findIndex(function (s) { return s.id === 'results'; });
+
   function goTo(i) {
     state.stepIndex = i;
     var step = STEPS[i];
     lifecycle.transitionTo(step.task?.trialId ?? null);
+    // Lamp wiring stops at the results step (interactive tasks are over) and
+    // restarts if the visitor navigates Back into the tour. Both idempotent.
+    if (i >= resultsIndex) stopLampWiring(); else startLampWiring();
     document.body.dataset.view = step.act;
     renderStep(i);
     progressEl.textContent = 'Step ' + (i + 1) + ' of ' + STEPS.length;
