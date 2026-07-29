@@ -38,7 +38,8 @@ export const RAIL_GROUPS = {
     { key: 'paste', label: 'paste', hardSignal: true },
     { key: 'copy', label: 'copy', hardSignal: false },
     { key: 'drop', label: 'drag & drop', hardSignal: true },
-    { key: 'tabAway', label: 'tab-away', hardSignal: false },
+    { key: 'tabAwayLong', label: 'tab-away ≥10s', hardSignal: false },
+    { key: 'tabAwayMid', label: 'tab-away 3–10s', hardSignal: false },
     { key: 'sidebar', label: 'browser sidebar', hardSignal: false },
     { key: 'viewport', label: 'viewport shift', hardSignal: false },
     { key: 'fastTyping', label: 'fast typing', hardSignal: false },
@@ -73,7 +74,7 @@ upload — the report at the end is built locally, from your own session.</p>
 watches during a real study. It's inert until you start. Every lamp that
 lights over the next eleven steps is something you did, not a script.</p>
 <aside class="teaser" aria-label="Pre-recorded session">
-  <p class="teaser-label">Pre-recorded session — the tour ahead is about YOUR data</p>
+  <p class="teaser-label">Pre-recorded session — the tour is about YOUR data</p>
   <p>This clip shows the honeypot catching an agentic browser. Scrub it, then start your own.</p>
 </aside>`.trim(),
     task: null,
@@ -110,7 +111,7 @@ Everything after this step is you deliberately breaking that baseline.</p>`.trim
     title: 'Leave two fingerprints on the clipboard',
     body: `
 <p>Select the rule text, copy it, and paste it into the answer box. Then
-paste it again. {{paste.hardCountThreshold}} pastes is what crosses the
+paste it again. {{paste.hardCountThreshold}} pastes are what crosses the
 standard preset's HARD threshold — that's today's main instruction, though
 like every task here, you can advance without doing it.</p>`.trim(),
     task: {
@@ -140,7 +141,7 @@ story, and your report will show exactly how long you were gone.</p>`.trim(),
       suggestedSeconds: 10,
     },
     expect:
-      'session-timeline bar in your report gets a red span for as long as you were gone. event-log.csv logs the exact away and return timestamps.',
+      'The tab-away ≥10s row lights — a quick glance would only light 3–10s. Your session-timeline bar gets a red span for as long as you were gone, with exact timestamps in event-log.csv.',
     primaryLabel: "I'm back →",
     secondary: [{ kind: 'link', key: 'skipToGuardedAct', label: 'Skip to the guarded act' }],
   },
