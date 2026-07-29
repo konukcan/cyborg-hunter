@@ -14,6 +14,7 @@ import { STEPS, POSITIONING, CLOSING_CTA, RAIL_GROUPS, RAIL_INTRO } from './step
 import { makeLifecycle } from './lifecycle.js';
 import { renderRail, light, acknowledge } from './rail.js';
 import { buildPayload } from './payload.js';
+import { runFinale } from './finale.js';
 
 var SESSION_POLL_MS = 5000;
 
@@ -165,7 +166,22 @@ function startTour(participantId, capabilities, manifest) {
     // and its finalized recording, cached so the download button and the
     // "show as text" fallback always agree.
     recorder: null,
-    replayRecording: null
+    replayRecording: null,
+    // C9 (jsPsych finale): guards step 10 against re-running on a Back-then-
+    // forward revisit — CyborgHunter.init() is a module-level singleton, so
+    // a second run would destroy-and-recreate yet another instance and push
+    // duplicate trial reports into state.trialReports (see finale.js).
+    // finaleFailed remembers WHICH outcome so a revisit's status text is
+    // accurate instead of the stale "Loading jsPsych…" default.
+    finaleStarted: false,
+    finaleFailed: false,
+    // True once finale.js's vendor load succeeded and it's about to call
+    // initJsPsych() — i.e. about to destroy the outer CyborgHunter monitor
+    // (see goTo()'s lifecycle.transitionTo guard below). Deliberately NOT
+    // the same as finaleStarted: in the degraded (vendor-missing) path the
+    // outer monitor is never touched, so Back-navigation through earlier
+    // steps must keep working normally there.
+    monitorDestroyed: false
   };
 
   var cardEl = document.getElementById('card');
@@ -581,6 +597,11 @@ function startTour(participantId, capabilities, manifest) {
     var files = task.files.filter(function (f) {
       return f.key !== 'replay' || state.replayOptIn;
     });
+    // scramble coupling: same .jspsych-content convention as renderTaskPanel
+    // below — GuardFriction's obfuscateContent() only touches
+    // getJsPsychContent()'s match, so this class keeps the downloads panel a
+    // valid scramble target too (moot in practice: guard is long stopped by
+    // this step, but the class is applied uniformly regardless of step).
     var parts = ['<div class="task jspsych-content">', '<p class="label">' + task.kind + '</p>'];
     parts.push('<div class="files">' + files.map(function (f) {
       return (
@@ -602,9 +623,41 @@ function startTour(participantId, capabilities, manifest) {
     return parts.join('');
   }
 
+  function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // Renders step 10's task panel: a mount point for the two live jsPsych
+  // trials (finale.js's display_element target) plus the labeled code-
+  // snippet split (steps.js's task.snippetSplit — actual code, not just a
+  // label/file reference). The live-trial status paragraph and the
+  // vendor/load-failure degradation note (task.degradedNote) are updated by
+  // runFinaleStep() below once finale.js's promise settles; advance stays
+  // available the whole time (spec: "advance always available").
+  function renderFinalePanel(task) {
+    var parts = ['<div class="task jspsych-content">', '<p class="label">' + task.kind + '</p>'];
+    parts.push('<p class="hint">' + task.trialCount + ' trials via jsPsych</p>');
+    parts.push(
+      '<div class="finale-run">' +
+      '<div class="finale-mount" data-role="finale-mount"></div>' +
+      '<p class="hint" data-role="finale-status">Loading jsPsych…</p>' +
+      '<p class="rule finale-note" hidden></p>' +
+      '</div>'
+    );
+    parts.push('<div class="finale-snippets">' + task.snippetSplit.map(function (s) {
+      return (
+        '<p class="hint">' + s.label + ' — <code>' + s.file + '</code></p>' +
+        '<pre><code>' + escHtml(s.code) + '</code></pre>'
+      );
+    }).join('') + '</div>');
+    parts.push('</div>');
+    return parts.join('');
+  }
+
   function renderTaskPanel(task) {
     if (!task) return '';
     if (task.kind === 'downloads') return renderDownloadsPanel(task);
+    if (task.kind === 'jspsych-finale') return renderFinalePanel(task);
     // scramble coupling: GuardFriction's obfuscateContent() only touches
     // getJsPsychContent()'s match (.jspsych-content / .jspsych-display-element
     // / #jspsych-content) — this class makes every task panel a valid target,
@@ -629,14 +682,6 @@ function startTour(participantId, capabilities, manifest) {
         '<p class="hint">Visual speed: ' + task.visualCps + ' cps &middot; real threshold: ' +
         tpl(String(task.realThresholdCps)) + ' cps</p>'
       );
-    }
-    if (task.trialCount) {
-      parts.push('<p class="hint">' + task.trialCount + ' trials via jsPsych</p>');
-    }
-    if (task.snippetSplit) {
-      parts.push('<ul class="hint">' + task.snippetSplit.map(function (s) {
-        return '<li>' + s.label + ' — ' + s.file + '</li>';
-      }).join('') + '</ul>');
     }
     parts.push('</div>');
     return parts.join('');
@@ -712,6 +757,51 @@ function startTour(participantId, capabilities, manifest) {
 
   var resultsIndex = STEPS.findIndex(function (s) { return s.id === 'results'; });
 
+  // Drives step 10's live jsPsych trials (finale.js). Guarded by
+  // state.finaleStarted so a Back-then-forward revisit doesn't re-init
+  // CyborgHunter a second/third time or push duplicate trial reports.
+  // Degrades to the code-panel-only view (spec: "advance always available")
+  // on any failure — missing vendor files, a load error, or missing globals.
+  function runFinaleStep(task) {
+    var mount = cardEl.querySelector('[data-role="finale-mount"]');
+    var status = cardEl.querySelector('[data-role="finale-status"]');
+    var note = cardEl.querySelector('.finale-note');
+    if (state.finaleStarted) {
+      // Back-then-forward revisit: the mount stays empty (re-running would
+      // re-init CyborgHunter and duplicate trial reports — see finale.js),
+      // but the status text should say what actually happened instead of
+      // showing the stale "Loading jsPsych…" default forever.
+      if (state.finaleFailed) {
+        if (status) status.hidden = true;
+        if (note) { note.textContent = task.degradedNote; note.hidden = false; }
+      } else if (status) {
+        status.textContent = 'Already ran earlier this session — both reports are in your payload.';
+      }
+      return;
+    }
+    state.finaleStarted = true;
+    if (!mount) return;
+    runFinale(mount, {
+      participantId: participantId,
+      onTrialReport: handleTrialReport,
+      onReady: function () {
+        // Vendor loaded — finale.js is about to call initJsPsych(), which
+        // destroys the outer monitor (see state.monitorDestroyed's comment).
+        state.monitorDestroyed = true;
+        if (status) status.textContent = "Running below — press a key to continue.";
+      }
+    })
+      .then(function () {
+        if (status) status.textContent = 'Both trials complete — their reports are in your payload.';
+      })
+      .catch(function (err) {
+        console.warn('cyborg-hunter demo: jsPsych finale unavailable, showing the code panel only', err);
+        state.finaleFailed = true;
+        if (status) status.hidden = true;
+        if (note) { note.textContent = task.degradedNote; note.hidden = false; }
+      });
+  }
+
   function goTo(i) {
     state.stepIndex = i;
     var step = STEPS[i];
@@ -719,7 +809,20 @@ function startTour(participantId, capabilities, manifest) {
     // (idempotent) before rendering, so the traces summary sees the final
     // 'end' event for whatever violation was open.
     if (step.task && step.task.kind === 'guard-finish') finalizeGuard();
-    lifecycle.transitionTo(step.task ? step.task.trialId : null);
+    // Skipped once the outer monitor is destroyed: CyborgHunter.init() is a
+    // module-level singleton, and finale.js's jsPsych-owned instance
+    // destroys the outer monitor the moment it initializes (see finale.js's
+    // docblock and state.monitorDestroyed above) — its state machine only
+    // accepts transitions TO 'destroyed' after that, so calling
+    // startTrial() again (e.g. Back-navigating to step 9, whose
+    // task.trialId is real) throws "cannot transition from 'destroyed' to
+    // 'trial'". Every step from here on (results, replicate-locally)
+    // already has task.trialId null, so this only ever short-circuits a
+    // Back revisit into an earlier real-trialId step — which the outer
+    // monitor can no longer safely bracket anyway.
+    if (!state.monitorDestroyed) {
+      lifecycle.transitionTo(step.task ? step.task.trialId : null);
+    }
     // Lamp wiring stops at the results step (interactive tasks are over) and
     // restarts if the visitor navigates Back into the tour. Both idempotent.
     if (i >= resultsIndex) stopLampWiring(); else startLampWiring();
@@ -728,6 +831,7 @@ function startTour(participantId, capabilities, manifest) {
     // Repaints from state.chipCounts (not a reset) so Back-then-forward into
     // guard-cheat shows the tally already accumulated this session.
     if (step.task && step.task.kind === 'guard-cheat') renderViolationChips();
+    if (step.task && step.task.kind === 'jspsych-finale') runFinaleStep(step.task);
     progressEl.textContent = 'Step ' + (i + 1) + ' of ' + STEPS.length;
   }
 

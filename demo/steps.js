@@ -264,12 +264,57 @@ using-cyborg-hunter.md. That's the whole integration, not a simplified
 version of it.</p>`.trim(),
     task: {
       kind: 'jspsych-finale',
-      trialId: 'finale-jspsych',
+      // null, not a trialId: the outer lifecycle helper's bookkeeping trial
+      // is deliberately skipped for this step — the finale's two REAL trials
+      // run through their own jsPsych-owned CyborgHunter monitor instance
+      // (CyborgHunter.init() is a module-level singleton; a second init()
+      // from the jsPsych extension destroys whichever instance is currently
+      // active, so the outer monitor must have no open trial and never be
+      // asked to start/end one again after this step — see demo/finale.js).
+      trialId: null,
       trialCount: 2,
       snippetSplit: [
-        { label: 'base monitoring (quickstart)', file: 'docs/quickstart.md' },
-        { label: 'add enforcement (guard-friction — using-cyborg-hunter.md)', file: 'docs/using-cyborg-hunter.md' },
+        {
+          label: 'base monitoring (quickstart)',
+          file: 'docs/quickstart.md',
+          code:
+`const jsPsych = initJsPsych({
+  extensions: [
+    { type: jsPsychCyborgHunter, params: { participantId: subject.id, preset: 'standard' } }
+  ],
+  on_finish: function () {
+    jsPsych.extensions['cyborg-hunter'].finalize();
+    jsPsych.data.get().localSave('csv', 'data.csv');
+  }
+});
+
+timeline.forEach(t => {
+  t.extensions = (t.extensions || []).concat([{ type: jsPsychCyborgHunter }]);
+});
+jsPsych.run(timeline);`,
+        },
+        {
+          label: 'add enforcement (guard-friction — using-cyborg-hunter.md)',
+          file: 'docs/using-cyborg-hunter.md',
+          code:
+`extensions: [
+  { type: jsPsychCyborgHunter, params: { participantId: subject.id, preset: 'standard' } },
+  { type: jsPsychGuardFriction }                    // + one extension
+],
+on_finish: function () {
+  jsPsych.extensions['guard-friction'].finalize();  // stop friction first
+  jsPsych.extensions['cyborg-hunter'].finalize();   // then save
+  jsPsych.data.get().localSave('csv', 'data.csv');
+}
+
+timeline.push(jsPsychGuardFriction.entryTrial());   // user-gesture fullscreen entry
+timeline.forEach(t => t.extensions.push({ type: jsPsychGuardFriction }));`,
+        },
       ],
+      degradedNote:
+        "jsPsych didn't load in this browser (offline, or the vendored files " +
+        "are missing), so the two live trials can't run here — the code above " +
+        'is the real integration either way. Advance whenever you\'re ready.',
     },
     expect:
       "Both trials append to the same trials array you've been building since step 2 — nothing about the finale is special-cased.",

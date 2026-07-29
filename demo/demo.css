@@ -140,6 +140,12 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
  * rail's grid column collapses and main spans both tracks. */
 .results-mode main{grid-column:1 / -1}
 
+/* Step 10 finale: mount point for the two live jsPsych trials (finale.js's
+ * display_element target) — bounded box so the plugin's own jspsych.css
+ * layout doesn't sprawl the page while it's degraded/empty pre-load. */
+.finale-mount{min-height:100px;border:1px solid var(--line);border-radius:4px;
+  padding:16px;margin:0 0 12px;background:var(--panel);}
+
 /* Visible keyboard-focus outlines on every button and link (buttons already
  * carry a :hover/:active look via .btn; this is the keyboard-only case). */
 button:focus-visible, a:focus-visible{
