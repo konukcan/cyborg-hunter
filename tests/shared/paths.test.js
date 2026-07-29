@@ -1,5 +1,5 @@
 import { describe, it } from 'node:test';
-import assert from 'node:assert/strict';
+import assert from 'node:assert';
 import { getByPath } from '../../src/shared/paths.js';
 
 describe('getByPath (pure module)', () => {
@@ -10,6 +10,7 @@ describe('getByPath (pure module)', () => {
     assert.equal(getByPath({ 'a.b': 1, a: { b: 2 } }, 'a.b'), 1);
   });
   it('returns undefined on missing path', () => {
-    assert.equal(getByPath({}, 'x.y'), undefined);
+    // strictEqual: with plain assert, equal() would let null pass (null == undefined).
+    assert.strictEqual(getByPath({}, 'x.y'), undefined);
   });
 });

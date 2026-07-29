@@ -1,4 +1,6 @@
+// src/shared/paths.js
 // Pure path-walking helper. No Node APIs — shared by CLI and browser preview.
+// Used by: CLI ingest/renderers and the browser preview bundle.
 
 // Resolves a possibly-dotted field path against an object (0.6.1).
 // A flat key wins over a dotted walk, so data that literally contains a

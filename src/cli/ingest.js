@@ -298,6 +298,7 @@ function attachReplayArtifacts(participants, config, warnings) {
   }
 }
 
+// Load-bearing re-export: html-index.js (and external adopters) import getByPath from ingest.js.
 export { getByPath };
 
 // Extracts integrity trial data from a single participant's raw JSON.
