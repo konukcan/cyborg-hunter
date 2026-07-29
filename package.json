@@ -1,6 +1,6 @@
 {
   "name": "cyborg-hunter",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Detect LLM-assisted 'cyborg' behavior in online behavioral experiments",
   "main": "dist/cyborg-hunter.min.js",
   "module": "dist/cyborg-hunter.esm.js",

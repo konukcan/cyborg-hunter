@@ -22,7 +22,7 @@ describe('renderIndexHtml (pure core)', () => {
     // string always renders in the topbar meta line — both hold regardless
     // of triage content, so those are what we pin here.
     assert.ok(html.includes('/*__MARKER__*/'), 'injected replay client source appears');
-    assert.ok(html.includes('v0.7.1'), 'version string appears in topbar meta');
+    assert.ok(html.includes('v0.7.2'), 'version string appears in topbar meta');
   });
   it('renders the injected visualsUnavailableNote in a detail pane', async () => {
     // Unlike the empty-triage case above, a single triage row forces a detail

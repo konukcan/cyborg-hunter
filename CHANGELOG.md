@@ -3,6 +3,14 @@
 All notable changes to **cyborg-hunter** are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [0.7.2] — 2026-07-29
+
+### Changed
+- Internal refactor, no behavior change: the report index renderer is split into
+  a pure string-returning core (`html-index-core.js`) plus a thin fs wrapper;
+  `buildViewerModel` and `getByPath` moved to pure shared modules. Enables the
+  live demo's in-browser report preview. Report output is byte-identical.
+
 ## [0.7.1] — 2026-07-29
 
 ### Fixed
