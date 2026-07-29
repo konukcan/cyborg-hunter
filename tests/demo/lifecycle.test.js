@@ -11,8 +11,25 @@ it('close-then-open is idempotent across advance/back/skip', () => {
     endTrial(){ if (!this._open) return null; this._open = false; calls.push(['end']); },
   };
   const lc = makeLifecycle(monitor);
-  lc.transitionTo('s2'); lc.transitionTo('s3'); lc.transitionTo(null); lc.transitionTo('s9');
+  lc.transitionTo('s2');
+  assert.strictEqual(lc.isOpen(), true);
+  lc.transitionTo('s3'); lc.transitionTo(null);
+  assert.strictEqual(lc.isOpen(), false);
+  lc.transitionTo('s9');
   assert.deepStrictEqual(calls, [['start','s2'],['end'],['start','s3'],['end'],['start','s9']]);
+});
+
+it('transitionTo the same trialId twice in a row still closes then reopens', () => {
+  const calls = [];
+  const monitor = {
+    _open: false,
+    startTrial(o){ if (this._open) throw new Error('invalid lifecycle call');
+                   this._open = true; calls.push(['start', o.trialId]); },
+    endTrial(){ if (!this._open) return null; this._open = false; calls.push(['end']); },
+  };
+  const lc = makeLifecycle(monitor);
+  lc.transitionTo('same'); lc.transitionTo('same');
+  assert.deepStrictEqual(calls, [['start','same'],['end'],['start','same']]);
 });
 
 it('onTrialReport receives each closed trial\'s report, and nothing when no trial was open', () => {

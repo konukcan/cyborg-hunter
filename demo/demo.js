@@ -19,9 +19,10 @@ var SESSION_POLL_MS = 5000;
 console.log('cyborg-hunter demo · library', (window.CyborgHunter && CyborgHunter.VERSION) || 'unknown');
 
 function randomParticipantId() {
-  // Pad before slicing so a rare short toString(36) result (e.g. Math.random()
-  // landing near 0) still yields 4 characters.
-  return 'DEMO-' + (Math.random().toString(36) + '0000').slice(2, 6);
+  // Math.random() === 0 renders as the 1-char string '0' (no decimal point),
+  // which would slice down to only 3 characters without padding — padEnd to
+  // 6 chars first so the slice below always has 4 to take.
+  return 'DEMO-' + Math.random().toString(36).padEnd(6, '0').slice(2, 6);
 }
 
 // Resolves {{path.to.value}} against `signals` (signal-manifest.json's
@@ -339,7 +340,7 @@ function startTour(participantId, capabilities, manifest) {
   function goTo(i) {
     state.stepIndex = i;
     var step = STEPS[i];
-    lifecycle.transitionTo(step.task?.trialId ?? null);
+    lifecycle.transitionTo(step.task ? step.task.trialId : null);
     // Lamp wiring stops at the results step (interactive tasks are over) and
     // restarts if the visitor navigates Back into the tour. Both idempotent.
     if (i >= resultsIndex) stopLampWiring(); else startLampWiring();
