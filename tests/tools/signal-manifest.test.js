@@ -36,4 +36,13 @@ describe('buildManifest', () => {
     const effective = { ...DEFAULT_THRESHOLDS, ...PRESETS.standard.thresholds };
     assert.strictEqual(m.signals.tabAway.durationMs, effective.tabAwayDurationMs);
   });
+
+  it('gives preset thresholds precedence over defaults (order-sensitive case)', () => {
+    // standard's thresholds override is {}, so both merge orders coincide
+    // there — strict overrides both values, catching a swapped spread order.
+    const strict = buildManifest('strict');
+    const effective = { ...DEFAULT_THRESHOLDS, ...PRESETS.strict.thresholds };
+    assert.strictEqual(strict.signals.tabAway.durationMs, effective.tabAwayDurationMs); // 5000, not 3000
+    assert.strictEqual(strict.signals.typingSpeed.cps, effective.typingSpeedCps);       // 8, not 10
+  });
 });
