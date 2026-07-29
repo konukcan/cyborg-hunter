@@ -26,6 +26,11 @@ tools/investigate/artifacts/
 demo/vendor/
 demo/preview-core.js
 
+# Playwright E2E suite artifacts
+.demo-site/
+playwright-report/
+test-results/
+
 # Local working files (not part of the project)
 CLAUDE.md
 .claude/
