@@ -13,12 +13,38 @@
 # (PROLIFIC_PID env var, Prolific completionCode) are treated as leakage.
 #
 # Likewise github.com/konukcan/... (the public repo URL) is fine; only the
-# personal Pages host konukcan.github.io is banned.
+# personal Pages host konukcan.github.io is banned — EXCEPT this repo's own
+# live-demo URL (konukcan.github.io/cyborg-hunter), which is the intended
+# public link and gets allowlisted below. A hit on any OTHER path under that
+# host (e.g. a different personal project's Pages URL pasted by accident)
+# still fails the gate.
 #
-# Runs from anywhere in the repo. Scans tracked files only (git grep).
+# GATE_SCAN_DIR: when set, this script ALSO plain-greps that directory (in
+# addition to the normal git-tracked-file scan) with the same patterns and
+# the same allowlist filter. Use it to scan the assembled Pages artifact
+# (.demo-site/), which contains generated files git grep can't see because
+# they're gitignored/untracked.
+#
+# Runs from anywhere in the repo. Scans tracked files (git grep) plus,
+# optionally, $GATE_SCAN_DIR (plain grep).
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+
+PAGES_ALLOWLIST='konukcan.github.io/cyborg-hunter'
+
+# Filters raw hit lines for a given pattern through the Pages allowlist when
+# the pattern is the personal-host ban; every other pattern passes through
+# unfiltered. The trailing `|| true` keeps this 0-exit under `set -e` even
+# when grep -v filters out every line (its normal "no output" exit is 1).
+filter_hits() {
+  local pat="$1"
+  if [ "$pat" = 'konukcan\.github\.io' ]; then
+    grep -vF "$PAGES_ALLOWLIST" || true
+  else
+    cat
+  fi
+}
 
 # Each entry is an extended-regex (ERE) banned token. Case is encoded in the
 # pattern where it matters (e.g. C-prime must stay upper-case to avoid matching
@@ -53,11 +79,26 @@ fail=0
 self='scripts/check-public-hygiene.sh'  # this file lists the tokens; don't scan it
 for pat in "${patterns[@]}"; do
   # -I skips binary files; -n adds line numbers; -E extended regex.
-  if hits=$(git grep -I -nE "$pat" -- ":(exclude)$self" 2>/dev/null); then
-    echo "BANNED TOKEN /$pat/:"
-    printf '%s\n' "$hits" | sed 's/^/  /'
-    echo
-    fail=1
+  if raw=$(git grep -I -nE "$pat" -- ":(exclude)$self" 2>/dev/null); then
+    hits=$(printf '%s\n' "$raw" | filter_hits "$pat")
+    if [ -n "$hits" ]; then
+      echo "BANNED TOKEN /$pat/:"
+      printf '%s\n' "$hits" | sed 's/^/  /'
+      echo
+      fail=1
+    fi
+  fi
+
+  if [ -n "${GATE_SCAN_DIR:-}" ] && [ -d "$GATE_SCAN_DIR" ]; then
+    if raw=$(grep -rnE "$pat" "$GATE_SCAN_DIR" 2>/dev/null); then
+      hits=$(printf '%s\n' "$raw" | filter_hits "$pat")
+      if [ -n "$hits" ]; then
+        echo "BANNED TOKEN /$pat/ in \$GATE_SCAN_DIR ($GATE_SCAN_DIR):"
+        printf '%s\n' "$hits" | sed 's/^/  /'
+        echo
+        fail=1
+      fi
+    fi
   fi
 done
 

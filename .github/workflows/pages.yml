@@ -1,0 +1,163 @@
+# .github/workflows/pages.yml
+# First GitHub workflow in this repo. Builds and tests the live demo
+# (docs/superpowers/specs/2026-07-29-ch-demo-page-design.md, "Hosting & CI"),
+# then deploys it to GitHub Pages on push to main.
+#
+# Two jobs, least-privilege permissions:
+#   test   — runs on every PR and every push to main; no elevated permissions.
+#   deploy — needs: test; only runs on push to main; the only job with the
+#            pages/id-token write access GitHub Pages deployment requires.
+#
+# Both jobs assemble the site via the SAME tools/assemble-demo-site.mjs used
+# by the local Playwright suite (playwright.config.js) — one source of
+# assembly logic, so "what CI deploys" and "what the E2E suite runs against"
+# can never drift apart.
+
+name: Pages
+
+on:
+  pull_request:
+    paths:
+      - 'demo/**'
+      - 'src/**'
+      - 'scripts/**'
+      - 'tools/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'build.js'
+      - 'playwright.config.js'
+      - '.github/workflows/pages.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'demo/**'
+      - 'src/**'
+      - 'scripts/**'
+      - 'tools/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'build.js'
+      - 'playwright.config.js'
+      - '.github/workflows/pages.yml'
+
+# Baseline for every job: read-only. The deploy job below adds pages/
+# id-token write, scoped to itself only (job-level permissions REPLACE this
+# block rather than extend it, so deploy re-declares contents: read too —
+# it still needs to check out the repo).
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Node test suites (core, replay, cli, jspsych, tools, demo)
+        run: npm test
+
+      - name: Manifest freshness (demo/signal-manifest.json vs constants.js PRESETS)
+        run: |
+          node tools/gen-signal-manifest.mjs
+          git diff --exit-code demo/signal-manifest.json
+
+      - name: Build library dist/ + demo preview bundle + vendored jsPsych
+        run: |
+          node build.js
+          node tools/build-preview-core.mjs
+          node tools/vendor-jspsych.mjs
+
+      - name: Assemble demo site (demo/* minus tests/, plus dist/)
+        run: node tools/assemble-demo-site.mjs
+
+      - name: Pack-install handoff smoke (PR-side pack test)
+        # A resolvability check alone would have passed 0.7.0's dist-less
+        # package (npm view doesn't inspect package contents). This installs
+        # the actual `npm pack` tarball into a clean project and drives the
+        # real handoff: a researcher's `npx cyborg-hunter report` over the
+        # demo's own download-trio fixture.
+        run: |
+          PACKDIR=$(mktemp -d)
+          npm pack --silent --pack-destination "$PACKDIR"
+          PROJDIR=$(mktemp -d)
+          pushd "$PROJDIR" >/dev/null
+          npm init -y >/dev/null
+          npm i "$PACKDIR"/cyborg-hunter-*.tgz
+          cp "$GITHUB_WORKSPACE"/tests/fixtures/demo/* .
+          npx cyborg-hunter report
+          test -f cyborg-hunter-report/index.html
+          popd >/dev/null
+
+      - name: npm-pin resolvability (soft — pinned version may not be published yet)
+        # The "Replicate locally" screen stamps this version into its npx
+        # line. On a PR the pinned version legitimately may not be on npm
+        # yet (release ordering: 0.7.2 publish precedes the Pages deploy
+        # that uses it), so this warns rather than blocks. The deploy job
+        # repeats the same check as a hard gate.
+        run: |
+          npm view cyborg-hunter@$(node -p "require('./package.json').version") version \
+            || echo "::warning::pinned version not on npm yet"
+
+      - name: Public-tree hygiene gate (assembled artifact)
+        run: GATE_SCAN_DIR=.demo-site bash scripts/check-public-hygiene.sh
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E (Playwright, 12-step tour + boundaries + downloads-to-CLI + variants)
+        run: npm run test:e2e
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Build library dist/ + demo preview bundle + vendored jsPsych
+        run: |
+          node build.js
+          node tools/build-preview-core.mjs
+          node tools/vendor-jspsych.mjs
+
+      - name: Assemble demo site (demo/* minus tests/, plus dist/)
+        run: node tools/assemble-demo-site.mjs
+
+      - name: npm-pin resolvability (hard gate)
+        # Unlike the PR-side check, this has no fallback: deploy must not
+        # ship a "Replicate locally" screen whose pinned npx version 404s.
+        run: npm view cyborg-hunter@$(node -p "require('./package.json').version") version
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .demo-site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
