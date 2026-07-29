@@ -11,19 +11,28 @@
 // the only place fast-typing is observable (endTrial() computes it; there's
 // no onSignal event for it), so the rail aggregates it here rather than
 // polling.
+//
+// Optional opts.recorder is a recorder-like object (same startTrial(opts)/
+// endTrial() semantics as monitor) whose brackets are mirrored onto the
+// SAME transitionTo() calls as the monitor's — C8's replay opt-in uses this
+// to keep the replay recording's trial boundaries aligned with the
+// integrity monitor's, without a second lifecycle path to keep in sync.
 
 export function makeLifecycle(monitor, opts) {
   var onTrialReport = opts && typeof opts.onTrialReport === 'function' ? opts.onTrialReport : null;
+  var recorder = opts && opts.recorder ? opts.recorder : null;
   var openTrialId = null;
 
   function transitionTo(trialId) {
     if (openTrialId !== null) {
       var report = monitor.endTrial();
+      if (recorder && typeof recorder.endTrial === 'function') recorder.endTrial();
       openTrialId = null;
       if (report && onTrialReport) onTrialReport(report);
     }
     if (trialId != null) {
       monitor.startTrial({ trialId: trialId });
+      if (recorder && typeof recorder.startTrial === 'function') recorder.startTrial({ trialId: trialId });
       openTrialId = trialId;
     }
   }

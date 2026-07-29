@@ -159,7 +159,13 @@ function startTour(participantId, capabilities, manifest) {
     // stop() — and per-reason violation tallies for the guard-cheat step's
     // chip row.
     guardStopToken: null,
-    chipCounts: {}
+    chipCounts: {},
+    // C8 (replay opt-in): the attached CyborgHunterReplay instance (stays
+    // null unless the welcome-screen toggle was ON at "Start the tour"),
+    // and its finalized recording, cached so the download button and the
+    // "show as text" fallback always agree.
+    recorder: null,
+    replayRecording: null
   };
 
   var cardEl = document.getElementById('card');
@@ -296,7 +302,16 @@ function startTour(participantId, capabilities, manifest) {
     onSignal: handleSignal
   });
   monitor.startSession();
-  var lifecycle = makeLifecycle(monitor, { onTrialReport: handleTrialReport });
+  // Recorder-like bridge for makeLifecycle's optional recorder param (C8).
+  // A live proxy rather than passing state.recorder directly: replay only
+  // attaches (if the visitor opted in) inside the "Start the tour" click,
+  // which runs AFTER this lifecycle is constructed — reading state.recorder
+  // at call time lets the very first trial (step 2) get bracketed too.
+  var recorderBridge = {
+    startTrial: function (opts) { if (state.recorder) state.recorder.startTrial(opts); },
+    endTrial: function () { if (state.recorder) state.recorder.endTrial(); }
+  };
+  var lifecycle = makeLifecycle(monitor, { onTrialReport: handleTrialReport, recorder: recorderBridge });
 
   // Tab-close hygiene: don't leave the poll running into page teardown.
   window.addEventListener('pagehide', stopLampWiring);
@@ -415,6 +430,53 @@ function startTour(participantId, capabilities, manifest) {
     });
   }
 
+  // ----- C8: replay opt-in ----------------------------------------------
+
+  // Attaches the standalone replay recorder if the welcome-screen toggle
+  // was ON. Runs synchronously inside the "Start the tour" click handler,
+  // before goTo(1) opens step 2's trial — recorderBridge reads
+  // state.recorder live, so as long as this finishes first, the very first
+  // trial gets bracketed too.
+  function startReplayIfOptedIn() {
+    if (!state.replayOptIn) return;
+    try {
+      if (!window.CyborgHunterReplay || typeof window.CyborgHunterReplay.attach !== 'function') {
+        throw new Error('CyborgHunterReplay unavailable');
+      }
+      state.recorder = window.CyborgHunterReplay.attach({
+        participantId: participantId,
+        tier: 'dom',
+        autoSave: { mode: 'none' }
+      });
+      state.recorder.startSession();
+      var recEl = document.getElementById('rec');
+      if (recEl) recEl.hidden = false;
+    } catch (err) {
+      console.warn('cyborg-hunter demo: replay opt-in failed, continuing without a recording', err);
+      state.replayOptIn = false;
+      state.recorder = null;
+    }
+  }
+
+  // Idempotent: recorder.stopSession() throws if called on an
+  // already-stopped recorder (recorder.js's lifecycle state machine), so
+  // the serialized recording is cached after the first call and handed
+  // back unchanged to every later caller (download click, then "show as
+  // text").
+  function finalizeReplay() {
+    if (!state.recorder) return null;
+    if (!state.replayRecording) {
+      try {
+        state.recorder.stopSession('finished');
+        state.replayRecording = state.recorder.getRecording();
+      } catch (err) {
+        console.warn('cyborg-hunter demo: replay finalize failed', err);
+        state.replayRecording = null;
+      }
+    }
+    return state.replayRecording;
+  }
+
   function tpl(str) {
     return substitute(str, manifest.signals, version);
   }
@@ -458,12 +520,23 @@ function startTour(participantId, capabilities, manifest) {
       return { filename: participantId + '.json', data: payload };
     }
     if (key === 'replay') {
-      // TODO(C8): the real replay recording lands in a later task. Until
-      // then this button downloads a labeled placeholder rather than
-      // pretending a recording exists.
+      // renderDownloadsPanel() already drops this button when
+      // !state.replayOptIn, so this is only reachable with a real attempt
+      // to attach — but guard anyway in case opt-in silently failed.
+      if (!state.replayOptIn) return null;
+      var recording = finalizeReplay();
+      if (!recording) return null;
+      // Epoch from the recording's own meta when present (mirrors
+      // persistence.js's replayFilename(), which isn't exposed on the
+      // standalone window.CyborgHunterReplay global) else Date.now().
+      var epoch = Date.now();
+      if (recording.metadata && recording.metadata.start_time) {
+        var parsedEpoch = Date.parse(recording.metadata.start_time);
+        if (!isNaN(parsedEpoch)) epoch = parsedEpoch;
+      }
       return {
-        filename: participantId + '-replay-' + Date.now() + '.json',
-        data: { note: 'replay recording lands in task C8' }
+        filename: participantId + '-replay-' + epoch + '.json',
+        data: recording
       };
     }
     if (key === 'config') {
@@ -673,6 +746,9 @@ function startTour(participantId, capabilities, manifest) {
     var primary = e.target.closest('[data-action="primary"]');
     if (primary) {
       var currentStep = STEPS[state.stepIndex];
+      // "Start the tour" is the trigger point for C8's replay opt-in — must
+      // run before goTo(1) below so the first trial (step 2) is bracketed.
+      if (currentStep.id === 'welcome') startReplayIfOptedIn();
       // Step 7's primary button drives the fullscreen race instead of a
       // plain advance — it only moves to step 8 once guard-friction is
       // actually armed (see handleFullscreenEntry).

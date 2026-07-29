@@ -47,3 +47,25 @@ it('onTrialReport receives each closed trial\'s report, and nothing when no tria
   lc.transitionTo(null);  // nothing open -> no report
   assert.deepStrictEqual(reports, [{ trialId: 'r1' }, { trialId: 'r2' }]);
 });
+
+it('mirrors trial brackets onto an optional recorder-like object (C8: replay opt-in)', () => {
+  const calls = [];
+  const monitor = {
+    _open: false,
+    startTrial(o){ this._open = true; calls.push(['monitor.start', o.trialId]); },
+    endTrial(){ if (!this._open) return null; this._open = false; calls.push(['monitor.end']); return { trialId: 'r' }; },
+  };
+  const recorder = {
+    startTrial(o){ calls.push(['recorder.start', o.trialId]); },
+    endTrial(){ calls.push(['recorder.end']); },
+  };
+  const lc = makeLifecycle(monitor, { recorder });
+  lc.transitionTo('a');
+  lc.transitionTo('b');
+  lc.transitionTo(null);
+  assert.deepStrictEqual(calls, [
+    ['monitor.start', 'a'], ['recorder.start', 'a'],
+    ['monitor.end'], ['recorder.end'], ['monitor.start', 'b'], ['recorder.start', 'b'],
+    ['monitor.end'], ['recorder.end'],
+  ]);
+});
