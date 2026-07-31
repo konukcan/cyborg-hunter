@@ -1008,15 +1008,16 @@ function startTour(participantId, capabilities, manifest) {
       finalizeGuard();
       railEl.hidden = true;
       var mount = cardEl.querySelector('[data-role="results-mount"]');
-      // Dynamic import: results.js is mid-rewrite (C2) and currently fails
-      // to load (imports an export steps.js no longer has) — a static
-      // import here would break the whole module graph at page load. This
-      // bridge renders a temporary hint instead of crashing; C2 removes it.
+      // Dynamic import: results.js (and its plot-adapter.js dependency) are
+      // only needed once, at this last step — lazy-loading them keeps every
+      // earlier step's page weight down. buildResults() takes an optional
+      // 4th `hooks` arg (C3's playground wires hooks.onReady); omitted here,
+      // results.js tolerates its absence.
       import('./results.js').then(function (mod) {
         mod.buildResults(mount, state, manifest);
       }).catch(function (err) {
-        console.warn('cyborg-hunter demo: results.js unavailable (C2 lands the full report)', err);
-        if (mount) mount.innerHTML = '<p class="hint">Results build lands in C2.</p>';
+        console.warn('cyborg-hunter demo: results build failed to load', err);
+        if (mount) mount.innerHTML = '<p class="hint">Couldn’t load the report builder in this browser.</p>';
       });
     }
     progressEl.textContent = 'Step ' + (i + 1) + ' of ' + STEPS.length;

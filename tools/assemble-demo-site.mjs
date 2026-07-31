@@ -12,6 +12,9 @@
 //   2. `node tools/build-preview-core.mjs` -> demo/preview-core.js.
 //   3. Copy demo/* (excluding demo/tests/ — Playwright specs must not ship
 //      in the public artifact) and dist/ into .demo-site/.
+//   4. Copy src/cli/renderers/replay-viewer.client.js to the site root —
+//      demo/results.js fetches it as text to embed in the in-browser
+//      report, the same source html-index.js reads for the CLI report.
 //
 // Usage: node tools/assemble-demo-site.mjs
 
@@ -71,6 +74,14 @@ function main() {
   mkdirSync(SITE_DIR, { recursive: true });
   cpSync(DEMO_DIR, SITE_DIR, { recursive: true, filter: isRuntimeFile });
   cpSync(join(ROOT, 'dist'), join(SITE_DIR, 'dist'), { recursive: true });
+  // demo/assets/ (example-participants.json, C1) is copied above as part of
+  // demo/* — it isn't excluded by isRuntimeFile. The replay viewer client
+  // lives outside demo/ (it's the CLI's own renderer asset), so it needs its
+  // own copy into the site root, alongside index.html and the other *.js.
+  cpSync(
+    join(ROOT, 'src', 'cli', 'renderers', 'replay-viewer.client.js'),
+    join(SITE_DIR, 'replay-viewer.client.js')
+  );
 
   console.log('assemble-demo-site: assembled ' + SITE_DIR);
 }
