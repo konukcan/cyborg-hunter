@@ -35,5 +35,67 @@
       "enabled": true,
       "gracePeriodTrials": 3
     }
+  },
+  "presets": {
+    "standard": {
+      "controls": {
+        "pasteHardCount": 2,
+        "tabAwayCutoffMs": 3000,
+        "typingSpeedCps": 10
+      },
+      "scoring": {
+        "soft": {
+          "copy": {
+            "weight": 2,
+            "maxPerTrial": 2
+          },
+          "tabAway": {
+            "weight": 1,
+            "maxPerTrial": 2
+          },
+          "typingSpeed": {
+            "weight": 2
+          },
+          "sidebarEvent": {
+            "weight": 3
+          },
+          "devTools": {
+            "weight": 1
+          },
+          "foreignInput": {
+            "weight": 2
+          }
+        },
+        "softScoreThreshold": 6
+      }
+    },
+    "strict": {
+      "controls": {
+        "pasteHardCount": 1,
+        "tabAwayCutoffMs": 5000,
+        "typingSpeedCps": 8
+      },
+      "scoring": {
+        "soft": {
+          "tabAway": {
+            "weight": 2,
+            "maxPerTrial": 1
+          },
+          "typingSpeed": {
+            "weight": 3
+          },
+          "sidebarEvent": {
+            "weight": 2
+          },
+          "devTools": {
+            "weight": 2
+          },
+          "foreignInput": {
+            "weight": 3
+          }
+        },
+        "softScoreThreshold": 4
+      }
+    }
   }
 }

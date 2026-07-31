@@ -198,7 +198,12 @@ function startTour(participantId, capabilities, manifest) {
     // Live session pane (demo/live-pane.js) + its own clock zero, set right
     // after creation below.
     pane: null,
-    t0: 0
+    t0: 0,
+    // C3 playground: the last settled control values (set via ctx.onControls
+    // after each successful rebuild; null until the visitor touches a
+    // control). buildDownloadFile('config') reads these so the downloaded
+    // config reflects the report as last built, tweaks included.
+    playgroundControls: null
   };
 
   var cardEl = document.getElementById('card');
@@ -667,9 +672,31 @@ function startTour(participantId, capabilities, manifest) {
       };
     }
     if (key === 'config') {
+      // "The scoring config the report used" — honestly. Beyond the ingest
+      // keys, the file carries the scoring settings the in-browser report
+      // last ran with (playground tweaks included; manifest defaults when
+      // the controls were never touched), limited to keys the CLI actually
+      // honors (src/cli/config.js merges the file wholesale; summary.js
+      // reads thresholds.tabAwayDurationMs / typingSpeedThreshold_cps as
+      // fallbacks behind each participant's saved runtime thresholds, and
+      // triage.js honors scoring.softScoreThreshold as an analyst-side
+      // override). The paste control has no CLI config key — the hard tier
+      // is data-carried — so it is deliberately absent here.
+      var pc = state.playgroundControls || {
+        tabAwayCutoffMs: manifest.signals.tabAway.durationMs,
+        typingSpeedCps: manifest.signals.typingSpeed.cps,
+        softScoreThreshold: manifest.signals.softScoreThreshold
+      };
       return {
         filename: 'cyborg-hunter.config.json',
-        data: { dataDir: '.', filePattern: 'DEMO-*.json', participantIdField: 'participantId' }
+        data: {
+          dataDir: '.',
+          filePattern: 'DEMO-*.json',
+          participantIdField: 'participantId',
+          thresholds: { tabAwayDurationMs: pc.tabAwayCutoffMs },
+          typingSpeedThreshold_cps: pc.typingSpeedCps,
+          scoring: { softScoreThreshold: pc.softScoreThreshold }
+        }
       };
     }
     return null;
@@ -1019,7 +1046,15 @@ function startTour(participantId, capabilities, manifest) {
       // same "degrade, don't block" posture as replay/guard elsewhere here.
       import('./results.js').then(function (resultsMod) {
         import('./playground.js').then(function (playgroundMod) {
-          resultsMod.buildResults(mount, state, manifest, { onReady: playgroundMod.mountPlayground });
+          resultsMod.buildResults(mount, state, manifest, {
+            onReady: function (ctx) {
+              // Settled playground settings, reported after each successful
+              // rebuild — buildDownloadFile('config') reads these so the
+              // downloaded config matches what the report actually ran with.
+              ctx.onControls = function (controls) { state.playgroundControls = controls; };
+              playgroundMod.mountPlayground(ctx);
+            }
+          });
         }).catch(function (err) {
           console.warn('cyborg-hunter demo: playground failed to load, showing the report without it', err);
           resultsMod.buildResults(mount, state, manifest);

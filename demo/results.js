@@ -227,6 +227,14 @@ export function buildResults(container, state, manifest, hooks) {
       catch (e) { console.warn('cyborg-hunter demo: viewer model build failed', e); }
     }
 
+    // Back-reentry blob-URL orphan (known, accepted): each buildResults()
+    // call creates a fresh closure with its own currentUrl starting at null,
+    // so when the visitor navigates Back out of the results step and returns
+    // (goTo() calls buildResults() again), the PRIOR invocation's last blob
+    // URL is never revoked by the new one — it stays alive until document
+    // unload reclaims it. Tab-lifetime-bounded (one orphaned report string
+    // per re-entry); revisit with an explicit revoke handoff only if
+    // re-entering results turns out to be a common path.
     var currentUrl = null;
     // Resolves once the swap's iframe actually loads; rejects on any swap
     // failure (error event or its own load watchdog). The FIRST call is what

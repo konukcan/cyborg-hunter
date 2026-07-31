@@ -11,6 +11,29 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { PRESETS, DEFAULT_THRESHOLDS } from '../src/shared/constants.js';
 
+// One selectable-preset entry for the playground (demo/playground.js):
+//   controls — the three values its inputs are prefilled with on preset select
+//   scoring  — the preset's soft-scoring map (verbatim from constants.js) +
+//              softScoreThreshold, which recomputeSignals mirrors scoring.js
+//              with. Emitted here so the demo never hand-mirrors weights —
+//              this generator is the single source, and the manifest test
+//              pins every value against constants.js.
+function buildPresetEntry(name) {
+  const preset = PRESETS[name];
+  const thresholds = { ...DEFAULT_THRESHOLDS, ...(preset.thresholds || {}) };
+  return {
+    controls: {
+      pasteHardCount: preset.scoring.hard?.paste?.countThreshold,
+      tabAwayCutoffMs: thresholds.tabAwayDurationMs,
+      typingSpeedCps: thresholds.typingSpeedCps
+    },
+    scoring: {
+      soft: preset.scoring.soft,
+      softScoreThreshold: preset.scoring.softScoreThreshold
+    }
+  };
+}
+
 // Builds the manifest for a given preset. Merge order matches
 // src/core/monitor.js: DEFAULT_THRESHOLDS, then the preset's own overrides.
 export function buildManifest(presetName = 'standard') {
@@ -59,6 +82,12 @@ export function buildManifest(presetName = 'standard') {
         enabled: preset.screenout?.enabled,
         gracePeriodTrials: preset.screenout?.gracePeriodTrials
       }
+    },
+    // Both playground-selectable presets, always emitted regardless of the
+    // top-level `preset` (the playground switches between them at runtime).
+    presets: {
+      standard: buildPresetEntry('standard'),
+      strict: buildPresetEntry('strict')
     }
   };
 }

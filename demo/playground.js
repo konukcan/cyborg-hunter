@@ -2,24 +2,26 @@
 // Step 12's config playground (spec §7.4): curated scoring controls next to
 // the report — move a threshold, the FULL pipeline re-runs (plots included)
 // via the rerun hook results.js's buildResults() hands mountPlayground
-// through hooks.onReady, and the visitor's own tier + the triage order can
-// visibly change.
+// through hooks.onReady, and both tier boundaries can visibly move: the
+// paste control flips HARD, the tab-away/typing controls (with the preset's
+// weights) move the SOFT/CLEAN line, and the triage order follows.
 //
-// C3 correction (see the plan's Codex-review note): config overrides alone
-// can NEVER flip a HARD tier. summary.js's hardTriggered prefers the
-// DATA-CARRIED metadata.integritySession.anyHardTriggered (falling back to
-// trialSignals.hard.*.sessionTotal/countThreshold) over anything the CLI
-// config passes in — that's deliberate, it's what makes the hard tier
-// "trust the record, not the analyst's dial." So instead of inventing
-// thresholds.pasteHardCount/typingSpeedCps config keys (which the analyzers
-// don't read — see src/shared/constants.js's real PRESETS/DEFAULT_THRESHOLDS
-// shape), recomputeSignals() is a PURE pre-pass: it rewrites the raw
-// session/trial records themselves, as if the participant had been screened
-// under the playground's thresholds from the start. The standard pipeline
-// then runs unchanged against that rewritten data, plus a real config
-// override for the one knob analyzers DO read post-hoc
-// (thresholds.tabAwayDurationMs / typingSpeedThreshold_cps — see the
-// docblock on recomputeSignals for why both are needed together).
+// Why a data pre-pass and not just config overrides (the plan's C3
+// correction + its review follow-up): the analyzers trust DATA-CARRIED
+// verdicts over analyst config on BOTH tiers —
+//   HARD: summary.js prefers metadata.integritySession.anyHardTriggered
+//         (falling back to trialSignals.hard.*.sessionTotal/countThreshold);
+//   SOFT: triage.js flags against authoritativeSoftScore — the session's
+//         softScore, computed once at collection (scoring.js) and never
+//         re-derived by the CLI — and the participant's SAVED runtime
+//         thresholds (session.config.thresholds.*) shadow CLI-side ones.
+// So recomputeSignals() rewrites the records themselves, as if the
+// participant had been screened under the playground's settings from the
+// start, and the standard pipeline runs unchanged on the rewritten copy.
+// The scoring weights are NOT hand-mirrored here: they arrive via the
+// manifest's `presets` block, generated from src/shared/constants.js by
+// tools/gen-signal-manifest.mjs and pinned to it by
+// tests/tools/signal-manifest.test.js — single source, zero drift.
 import { escHtml } from './util.js';
 
 // JSON round-trip: every payload here is plain JSON (the exact shape saved
@@ -42,9 +44,10 @@ export function makeDebounced(fn, ms) {
 
 // Pure pre-pass: deep-copies `payloads`, then rewrites them as if the
 // participant(s) had been screened under `controls` (pasteHardCount,
-// tabAwayCutoffMs, typingSpeedCps) instead of whatever thresholds actually
-// ran. Two things this has to mirror faithfully, read from the source
-// rather than guessed:
+// tabAwayCutoffMs, typingSpeedCps) with `scoring` — one manifest
+// presets[*].scoring entry, {soft: {signal: {weight, maxPerTrial?}},
+// softScoreThreshold} — instead of whatever actually ran. A faithful mirror
+// of the library's collection-time logic, read from the source:
 //
 // 1. The paste HARD signal (src/core/scoring.js computeTrialScores +
 //    src/core/monitor.js endTrial/getSessionReport):
@@ -55,61 +58,152 @@ export function makeDebounced(fn, ms) {
 //    - session.hardScore.paste = {count, threshold, triggered} and
 //      session.anyHardTriggered = "any hard signal's triggered flag"
 //      (monitor.js:428-433) — recomputed from that same running total vs.
-//      controls.pasteHardCount. Other hard signals (copy/drop) have no
-//      playground control, so their own collection-time triggered flag is
-//      left as-is and still contributes to anyHardTriggered.
-//    - metadata.integrityScore is payload.js's mirror of the same fields —
-//      extract-core.js prefers THIS over metadata.integritySession when
-//      both are present, so it has to be kept in sync too.
+//      controls.pasteHardCount. Other hard signals (drop; copy under
+//      strict) have no playground control, so their collection-time
+//      triggered flag carries through unchanged and still contributes to
+//      anyHardTriggered.
 //
-// 2. The tab-away/typing thresholds: config.thresholds.tabAwayDurationMs
-//    and config.typingSpeedThreshold_cps are real analysis-time CLI config
-//    keys (src/cli/analyzers/summary.js:22,33-36) — but summary.js and
-//    session-timeline-core.js/typing-profile-core.js all resolve them as
-//    `participant.session?.config?.thresholds?.X ?? config...X`, i.e. a
-//    participant's OWN saved runtime thresholds win over any CLI override.
-//    Every payload here carries those (monitor.js's getSessionReport always
-//    stamps report.config.thresholds), so a bare config override would be
-//    silently shadowed — the playground's tab-away/typing controls have to
-//    land on metadata.integritySession.config.thresholds directly to have
-//    any visible effect. (results.js's rerun ALSO threads a real config
-//    override for these two keys, so a hand-crafted payload without saved
-//    thresholds still responds.)
-export function recomputeSignals(payloads, controls) {
+// 2. The FULL soft score (scoring.js's soft section, lines 50-125),
+//    recomputed per trial from raw stored events with the manifest's
+//    weights, then summed into session.softScore — the authoritative
+//    number triage.js flags against:
+//    - copy: copyEvents.length, capped at maxPerTrial, × weight (only when
+//      the preset scores copy soft — strict doesn't);
+//    - tabAway: tabAwayEvents with duration_ms STRICTLY > the control's
+//      cutoff (same `>` boundary as scoring.js:63), capped, × weight;
+//    - typingSpeed: stored raw charsPerSec > control cps → 1 hit × weight
+//      (charsPerSec is measured data and never changes — only the verdict
+//      on it does); skipped when the trial has no charsPerSec, same as
+//      collection;
+//    - sidebarEvent / devTools: the session-level event logs
+//      (session.sidebarEvents / keyboardShortcuts) filtered to the trial's
+//      [startTime, startTime + duration_ms] window, weight counted ONCE
+//      when any hit lands in-window (scoring.js:95-117);
+//    - foreignInput: weight once when the trial has any foreignInputEvents.
+//    trialSignals.soft is rebuilt exactly as scoring.js builds it (copy/
+//    tabAway entries always present when the preset scores them;
+//    typingSpeed only with a charsPerSec; the last three only on hits).
+//    All six soft signals' raw inputs ARE persisted in the payload (the
+//    per-trial event arrays plus the session logs), so no term is carried
+//    stale; a hand-crafted payload missing an array recomputes that term
+//    to 0 hits — the same result collection-time scoring gives a genuinely
+//    empty log.
+//
+// 3. session.softScoreThreshold ← scoring.softScoreThreshold, and the
+//    saved runtime thresholds (session.config.thresholds.*) ← the controls:
+//    summary.js / session-timeline-core.js / typing-profile-core.js resolve
+//    thresholds as `participant.session?.config?.thresholds?.X ?? config…`
+//    — the participant's saved values win — so the controls must land there
+//    to move the binning and plots. metadata.integrityScore (payload.js's
+//    mirror, which extract-core.js prefers when present) is kept in sync
+//    throughout.
+//
+// Known non-emulated knob, disclosed: the strict preset's hard.copy
+// countThreshold has no playground control, so the preset select re-scores
+// with strict weights/thresholds but never flags copy as HARD — the
+// curated controls expose paste as the single hard knob.
+export function recomputeSignals(payloads, controls, scoring) {
+  var soft = (scoring && scoring.soft) || {};
   return (payloads || []).map(function (payload) {
     var p = deepCopy(payload);
     var trials = p.trials || [];
-    var pasteHardCount = controls.pasteHardCount;
-    var typingSpeedCps = controls.typingSpeedCps;
+    var session = p.metadata && p.metadata.integritySession;
+    var sessionSidebarEvents = (session && session.sidebarEvents) || [];
+    var sessionKeyboardShortcuts = (session && session.keyboardShortcuts) || [];
 
     var runningPasteTotal = 0;
+    var sessionSoftScore = 0;
     trials.forEach(function (t) {
       var integ = t && t.integrity;
       if (!integ) return;
 
+      // ── Hard: paste — running session total vs. the control threshold ──
       var trialHits = (integ.pasteEvents || []).length;
       runningPasteTotal += trialHits;
       if (integ.trialSignals && integ.trialSignals.hard && integ.trialSignals.hard.paste) {
         integ.trialSignals.hard.paste = {
           trialHits: trialHits,
           sessionTotal: runningPasteTotal,
-          countThreshold: pasteHardCount,
+          countThreshold: controls.pasteHardCount,
         };
       }
 
-      // Typing "flag": scoring.js's soft.typingSpeed.hit is derived from
-      // the trial's own stored raw charsPerSec vs. the runtime cps
-      // threshold — recomputed the same way against controls.typingSpeedCps
-      // (report.charsPerSec itself is measured data; it never changes).
-      if (typeof integ.charsPerSec === 'number' &&
-          integ.trialSignals && integ.trialSignals.soft && integ.trialSignals.soft.typingSpeed) {
-        integ.trialSignals.soft.typingSpeed.threshold = typingSpeedCps;
-        integ.trialSignals.soft.typingSpeed.hit = integ.charsPerSec > typingSpeedCps ? 1 : 0;
-      }
-    });
-    var pasteTriggered = runningPasteTotal >= pasteHardCount;
+      // ── Soft: full per-trial recompute, mirroring scoring.js:50-125 ──
+      var trialSoftScore = 0;
+      var softSignals = {};
 
-    var session = p.metadata && p.metadata.integritySession;
+      if (soft.copy) {
+        var copyHits = (integ.copyEvents || []).length;
+        var copyCapped = soft.copy.maxPerTrial != null
+          ? Math.min(copyHits, soft.copy.maxPerTrial) : copyHits;
+        var copyScore = copyCapped * soft.copy.weight;
+        trialSoftScore += copyScore;
+        softSignals.copy = { hits: copyHits, capped: copyCapped, score: copyScore };
+      }
+
+      if (soft.tabAway) {
+        var tabHits = (integ.tabAwayEvents || []).filter(function (e) {
+          return (e.duration_ms || 0) > controls.tabAwayCutoffMs;
+        }).length;
+        var tabCapped = soft.tabAway.maxPerTrial != null
+          ? Math.min(tabHits, soft.tabAway.maxPerTrial) : tabHits;
+        var tabScore = tabCapped * soft.tabAway.weight;
+        trialSoftScore += tabScore;
+        softSignals.tabAway = { hits: tabHits, capped: tabCapped, score: tabScore };
+      }
+
+      if (soft.typingSpeed && integ.charsPerSec != null) {
+        var speedHit = integ.charsPerSec > controls.typingSpeedCps ? 1 : 0;
+        var speedScore = speedHit * soft.typingSpeed.weight;
+        trialSoftScore += speedScore;
+        softSignals.typingSpeed = {
+          charsPerSec: integ.charsPerSec, threshold: controls.typingSpeedCps,
+          hit: speedHit, score: speedScore,
+        };
+      }
+
+      // Session-scoped signals count toward this trial only inside its time
+      // window — scoring.js's "trial window upper bound". Stored reports
+      // always carry startTime + duration_ms; a payload missing either gets
+      // an empty window (0 hits), never a widened one.
+      var windowOk = typeof integ.startTime === 'number' && typeof integ.duration_ms === 'number';
+      var trialEnd = windowOk ? integ.startTime + integ.duration_ms : 0;
+      function hitsInWindow(events) {
+        if (!windowOk) return 0;
+        return events.filter(function (e) {
+          return e.t >= integ.startTime && e.t <= trialEnd;
+        }).length;
+      }
+
+      if (soft.sidebarEvent) {
+        var sidebarHits = hitsInWindow(sessionSidebarEvents);
+        if (sidebarHits > 0) {
+          trialSoftScore += soft.sidebarEvent.weight;
+          softSignals.sidebarEvent = { hits: sidebarHits, score: soft.sidebarEvent.weight };
+        }
+      }
+
+      if (soft.devTools) {
+        var devToolsHits = hitsInWindow(sessionKeyboardShortcuts);
+        if (devToolsHits > 0) {
+          trialSoftScore += soft.devTools.weight;
+          softSignals.devTools = { hits: devToolsHits, score: soft.devTools.weight };
+        }
+      }
+
+      if (soft.foreignInput && (integ.foreignInputEvents || []).length > 0) {
+        trialSoftScore += soft.foreignInput.weight;
+        softSignals.foreignInput = {
+          hits: integ.foreignInputEvents.length, score: soft.foreignInput.weight,
+        };
+      }
+
+      integ.trialSoftScore = trialSoftScore;
+      if (integ.trialSignals) integ.trialSignals.soft = softSignals;
+      sessionSoftScore += trialSoftScore;
+    });
+    var pasteTriggered = runningPasteTotal >= controls.pasteHardCount;
+
     if (session) {
       var otherHardTriggered = session.hardScore
         ? Object.keys(session.hardScore).some(function (k) {
@@ -117,13 +211,17 @@ export function recomputeSignals(payloads, controls) {
           })
         : false;
       var anyHardTriggered = pasteTriggered || otherHardTriggered;
-      var newPasteHardScore = { count: runningPasteTotal, threshold: pasteHardCount, triggered: pasteTriggered };
+      var newPasteHardScore = {
+        count: runningPasteTotal, threshold: controls.pasteHardCount, triggered: pasteTriggered,
+      };
 
       if (session.hardScore && session.hardScore.paste) session.hardScore.paste = newPasteHardScore;
       session.anyHardTriggered = anyHardTriggered;
+      session.softScore = sessionSoftScore;
+      session.softScoreThreshold = scoring.softScoreThreshold;
 
       if (session.config && session.config.thresholds) {
-        session.config.thresholds.typingSpeedCps = typingSpeedCps;
+        session.config.thresholds.typingSpeedCps = controls.typingSpeedCps;
         session.config.thresholds.tabAwayDurationMs = controls.tabAwayCutoffMs;
       }
 
@@ -131,24 +229,14 @@ export function recomputeSignals(payloads, controls) {
       if (scoreMirror) {
         if (scoreMirror.hardScore && scoreMirror.hardScore.paste) scoreMirror.hardScore.paste = newPasteHardScore;
         scoreMirror.anyHardTriggered = anyHardTriggered;
+        scoreMirror.softScore = sessionSoftScore;
+        scoreMirror.softScoreThreshold = scoring.softScoreThreshold;
       }
     }
 
     return p;
   });
 }
-
-// Small local mirror of src/shared/constants.js PRESETS — only the three
-// numbers the playground's own inputs control. Not imported directly:
-// tools/assemble-demo-site.mjs ships demo/ + dist/ only, so demo/*.js can't
-// reach src/shared/constants.js in the deployed site. Selecting a preset
-// here is a convenience that fills in the three inputs below with that
-// preset's real numbers; it does not add a separate "preset" config knob —
-// whatever the three inputs currently show is what actually runs.
-var PRESET_DEFAULTS = {
-  standard: { pasteHardCount: 2, tabAwayCutoffMs: 3000, typingSpeedCps: 10 },
-  strict: { pasteHardCount: 1, tabAwayCutoffMs: 5000, typingSpeedCps: 8 },
-};
 
 function readControls(mount) {
   var controls = {};
@@ -162,6 +250,10 @@ export function mountPlayground(ctx) {
   var mount = ctx.container.querySelector('[data-role="playground"]');
   if (!mount) return;
   var m = ctx.manifest.signals;
+  // Both selectable presets' control prefills + scoring maps, generated
+  // into the manifest from src/shared/constants.js — the single source of
+  // weights (no hand-mirrored table here).
+  var presets = ctx.manifest.presets || {};
   var defaults = {
     preset: ctx.manifest.preset || 'standard',
     pasteHardCount: m.paste.hardCountThreshold,
@@ -190,13 +282,26 @@ export function mountPlayground(ctx) {
 
   var rebuild = makeDebounced(function () {
     var controls = readControls(mount);
+    var presetEntry = presets[controls.preset] || presets.standard;
+    if (!presetEntry) { // manifest without a presets block: can't recompute honestly
+      status.textContent = 'preset data unavailable';
+      return;
+    }
+    var scoring = presetEntry.scoring;
     status.textContent = 'rebuilding…';
     var t0 = performance.now();
+    // The two thresholds are ALSO analysis-time config keys (summary.js
+    // reads them as fallbacks behind the saved runtime thresholds), and
+    // scoring.softScoreThreshold is the analyst-side override triage.js
+    // honors — passed through so the pipeline config matches the rewritten
+    // data AND the downloadable config file (demo.js reads the same values
+    // back via ctx.onControls below).
     var configOverrides = {
       thresholds: { tabAwayDurationMs: controls.tabAwayCutoffMs },
       typingSpeedThreshold_cps: controls.typingSpeedCps,
+      scoring: { softScoreThreshold: scoring.softScoreThreshold },
     };
-    ctx.rerun(configOverrides, function (payloads) { return recomputeSignals(payloads, controls); })
+    ctx.rerun(configOverrides, function (payloads) { return recomputeSignals(payloads, controls, scoring); })
       .then(function () {
         var ms = Math.round(performance.now() - t0);
         status.textContent = 'rebuilt in ' + ms + ' ms';
@@ -204,6 +309,19 @@ export function mountPlayground(ctx) {
         // Flagged rather than enforced — the browser's own canvas/paint cost
         // varies too much across machines to hard-fail on.
         if (ms > 1000) console.warn('cyborg-hunter demo: playground rebuild took ' + ms + 'ms (budget: 1000ms)');
+        // Settled settings for the downloads step: demo.js stores these so
+        // the downloaded config carries what the report actually ran with,
+        // including the playground tweaks (only CLI-honored keys are
+        // written into the file — see buildDownloadFile('config')).
+        if (ctx.onControls) {
+          ctx.onControls({
+            preset: controls.preset,
+            pasteHardCount: controls.pasteHardCount,
+            tabAwayCutoffMs: controls.tabAwayCutoffMs,
+            typingSpeedCps: controls.typingSpeedCps,
+            softScoreThreshold: scoring.softScoreThreshold,
+          });
+        }
       })
       .catch(function (err) {
         status.textContent = 'rebuild failed';
@@ -214,11 +332,14 @@ export function mountPlayground(ctx) {
   mount.addEventListener('change', function (e) {
     var el = e.target.closest('[data-k]');
     if (!el) return;
-    if (el.dataset.k === 'preset' && PRESET_DEFAULTS[el.value]) {
-      var p = PRESET_DEFAULTS[el.value];
-      mount.querySelector('[data-k="pasteHardCount"]').value = p.pasteHardCount;
-      mount.querySelector('[data-k="tabAwayCutoffMs"]').value = p.tabAwayCutoffMs;
-      mount.querySelector('[data-k="typingSpeedCps"]').value = p.typingSpeedCps;
+    // Preset select: prefill the three inputs with that preset's real
+    // values (manifest presets[*].controls). The inputs stay the source of
+    // truth — whatever they show after the prefill is what runs.
+    if (el.dataset.k === 'preset' && presets[el.value]) {
+      var pc = presets[el.value].controls;
+      mount.querySelector('[data-k="pasteHardCount"]').value = pc.pasteHardCount;
+      mount.querySelector('[data-k="tabAwayCutoffMs"]').value = pc.tabAwayCutoffMs;
+      mount.querySelector('[data-k="typingSpeedCps"]').value = pc.typingSpeedCps;
     }
     rebuild();
   });
