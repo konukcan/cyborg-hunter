@@ -82,11 +82,13 @@ jsPsych.run([trial]);`,
   plainjs: {
     label: 'plain JS',
     code:
-`CyborgHunter.init({ participantId: subject.id, preset: 'standard' });
+`// your trial, built with your own JS however you like
+showQuestion('What is the capital of Australia?');   // your code
 
-CyborgHunter.startTrial('q1');
-// participant answers "What is the capital of Australia?"
-CyborgHunter.endTrial();
+CyborgHunter.init({ participantId: subject.id, preset: 'standard' });
+CyborgHunter.startTrial('q1');   // 'q1' is just your label for this trial
+// participant answers
+CyborgHunter.endTrial();         // seal q1's integrity record
 
 const payload = CyborgHunter.getSessionReport();
 // one JSON file per participant → the CLI builds the report`,
@@ -130,9 +132,17 @@ real report built from your own session. Two instruments on this page are
 demo-only: the signal lamps on the right and the live session record below
 them. The recording itself is the actual product, behaving exactly as it
 does in a study.</p>
-<p>Everything stays in this browser tab. No server, no upload; the session
-recording (REC, top bar) is kept in memory so the final report can include
-a replay, and it leaves only if you download it yourself.</p>`.trim(),
+<p>The tour runs in five parts: Act 1 (steps 2 through 7) lets you try every
+trick unguarded, while everything is still recorded; Act 2 (steps 8 through
+10) puts the same tricks under enforcement; step 11 turns the recorded
+signals into scores; step 12 hands you a report built from your own
+session; step 13 walks through reproducing it on your own machine.</p>
+<p>Recording starts the moment you click Start: mouse movement is sampled,
+not tracked pixel by pixel, and keystroke rhythm and tab switches are
+recorded as well. Everything still stays in this browser tab. No server, no
+upload; the session recording (REC, top bar) is kept in memory so the final
+report can include a replay, and it leaves only if you download it
+yourself.</p>`.trim(),
     positioning: true,
     task: null,
     primaryLabel: 'Start',
@@ -389,15 +399,19 @@ export const REPLICATE = {
       text: 'Node 18 or newer. Check with:',
       code: 'node --version' },
     { n: 3, heading: 'Build the report',
-      text: 'In a terminal, from the folder with the three files:',
+      text: 'npx downloads cyborg-hunter automatically the first time it runs, ' +
+        'so nothing needs installing beforehand. In a terminal, from the ' +
+        'folder with the three files:',
       code: 'cd <that folder>\nnpx cyborg-hunter@{{version}} report' },
     { n: 4, heading: 'Open it',
       text: 'The CLI writes cyborg-hunter-report/ next to your files:',
       code: 'open cyborg-hunter-report/index.html' },
+    { n: 5, heading: 'Optional: install it once, run it anywhere',
+      text: 'Rather not fetch it through npx each time? Install cyborg-hunter ' +
+        'globally once, then call it directly from any folder:',
+      code: 'npm install -g cyborg-hunter\ncyborg-hunter report' },
   ],
-  installNote:
-    'Prefer a global install? npm install -g cyborg-hunter, then run ' +
-    'cyborg-hunter report anywhere.',
+  installNote: '',
 };
 
 /** Config caveat shown next to the downloadable cyborg-hunter.config.json. */
