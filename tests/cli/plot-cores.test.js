@@ -71,6 +71,12 @@ const P_ENRICHED = structuredClone(P);
 P_ENRICHED.session.sidebarEvents = [
   { type: 'opened', t: 2000 },   // span 2s → 5s, closed (solid bar, no dash)
   { type: 'closed', t: 5000 },
+  { type: 'opened', t: 15000 },  // trailing open, never closed → dashed-border
+                                 // branch. Its end extends to sessionDurSec,
+                                 // which is 0 here (fixture has no session
+                                 // duration metadata), so it draws as the
+                                 // 3px min-width stub at 15s — the dash still
+                                 // executes.
 ];
 P_ENRICHED.session.viewportWidthShifts = [
   { t: 3000, delta: -350 },      // tick at 3s
@@ -85,10 +91,26 @@ P_ENRICHED.guardFriction = { violations: [
 snapshotTest('session-timeline core draw log (enriched)', 'drawlog-session-timeline-enriched.json',
   (cc) => drawSessionTimeline(P_ENRICHED, { outputDir: '.' }, cc),
   (log) => {
-    // Strictly more drawing than the 218-call baseline, plus one signature
-    // call per newly-covered lane (each color is unique to its subroutine).
+    // Strictly more drawing than the 218-call baseline. The per-lane checks
+    // are count/shape-based, NOT bare `some(color)`: the legend swatches
+    // (drawLegendRow) set every lane color once even when a lane drew
+    // nothing, and drawLayoutShifts sets its strokeStyle before an empty
+    // loop — so mere presence would pass on the un-enriched baseline too.
     assert.ok(log.length > 218, `enriched log has ${log.length} calls (baseline: 218)`);
-    assert.ok(log.some(c => c[0] === 'set:fillStyle' && c[1] === '#8e24aa'), 'sidebar span drawn');
-    assert.ok(log.some(c => c[0] === 'set:strokeStyle' && c[1] === '#00897b'), 'viewport shift ticks drawn');
-    assert.ok(log.some(c => c[0] === 'set:fillStyle' && c[1] === '#c62828'), 'guard-friction groups drawn');
+    const fills = (color) => log.filter(c => c[0] === 'set:fillStyle' && c[1] === color).length;
+    // 2 sidebar spans (closed pair + trailing unclosed stub) + 1 legend swatch
+    assert.ok(fills('#8e24aa') >= 3, `sidebar fillStyle ×${fills('#8e24aa')}, want ≥3 (2 spans + legend)`);
+    // 2 violation groups (clustered 400ms pair, 12s singleton) + 1 legend swatch
+    assert.ok(fills('#c62828') >= 3, `guard fillStyle ×${fills('#c62828')}, want ≥3 (2 groups + legend)`);
+    // Shifts: the strokeStyle count doesn't move with events (it's set before
+    // the loop even when empty), so count the tick draws (moveTo) between the
+    // lane's strokeStyle set and the next lane's first fillStyle set instead.
+    const lsStart = log.findIndex(c => c[0] === 'set:strokeStyle' && c[1] === '#00897b');
+    const lsEnd = log.findIndex((c, i) => i > lsStart && c[0] === 'set:fillStyle');
+    assert.equal(log.slice(lsStart, lsEnd).filter(c => c[0] === 'moveTo').length, 2,
+      'two viewport-shift ticks drawn');
+    // Unclosed trailing sidebar → dashed-border branch. Nothing else in this
+    // render calls setLineDash (phase guides skip: < 2 galleries), and the
+    // baseline log has zero setLineDash calls.
+    assert.ok(log.some(c => c[0] === 'setLineDash'), 'unclosed sidebar dashed border drawn');
   });
