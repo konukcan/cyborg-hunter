@@ -976,8 +976,8 @@ function renderDetail(t, participant, config, visualsRendered, visualsUnavailabl
     return `
     <div class="image-block">
       <h4 class="section-heading">${label}</h4>
-      <a href="${src}" class="zoomable">
-        <img src="${src}" alt="${alt}"
+      <a href="${esc(src)}" class="zoomable">
+        <img src="${esc(src)}" alt="${alt}"
              onerror="this.closest('.image-block').style.display='none'">
       </a>
     </div>`;
@@ -1013,6 +1013,13 @@ function renderDetail(t, participant, config, visualsRendered, visualsUnavailabl
 // saved_to reason from integrityReplayMeta when one exists, so the analyst
 // can tell "never recorded" from "went to the participant's Downloads").
 function renderReplaySection(participant, sanitized, demoModel = null) {
+  // Defensive: a triage row can lack a matching participant object (the
+  // participants array is caller-supplied, and the demo-mode model lookup
+  // keys off the triage row, not this array). Every branch below reads
+  // participant fields — including sanitizeId(participant.participantId) in
+  // the demo path's asset fallback — so render no replay section at all
+  // rather than crash the whole page.
+  if (!participant) return '';
   const replay = participant?.replay;
   if ((replay && replay.recording) || demoModel) {
     const tier = demoModel

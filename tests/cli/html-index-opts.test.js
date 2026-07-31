@@ -55,10 +55,45 @@ test('inlineReplayModels embeds models, renders the replay section, and short-ci
   assert.ok(html.includes('data-replay-preloaded="true"'));
   assert.ok(html.includes('class="replay-mount"'));
   assert.ok(html.includes('(dom tier)'));  // metadata.tier flows into the badge text
-  // Loader short-circuit — the word "preloaded" is required to appear
-  // (either the data attribute above or the loader's preloaded-first check
-  // satisfies this, but we want the emitted JS itself to say it too).
-  assert.ok(html.includes('preloaded'));
+  // Loader short-circuit — pin the functional line itself (the preloaded-first
+  // window.__chReplay lookup), so deleting the short-circuit fails this test
+  // even while the data attribute above still renders.
+  assert.ok(html.includes('const preloaded = (window.__chReplay || {})[pid];'));
+});
+
+test('inlineReplayModels without a matching participant renders without throwing and omits the replay section', async () => {
+  // Regression: the demo-model lookup keys off the triage row, so a model can
+  // exist for a pid with no participant object. renderReplaySection used to
+  // crash on participant.participantId; now it must skip the section.
+  const model = { schema: 1, frames: [], metadata: { tier: 'dom' } };
+  const html = await renderIndexHtml(summaries, triage, [], config, false, {
+    inlineReplayModels: { [PID]: model },
+  });
+  assert.ok(!html.includes('data-replay-preloaded'));
+  assert.ok(!html.includes('Session replay'));
+});
+
+test('adversarial inlineReplayModels payload cannot break out of the inline script tag', async () => {
+  const model = { schema: 1, frames: [], metadata: { tier: 'dom' },
+    payload: '</script><!--"boom' };
+  const html = await renderIndexHtml(summaries, triage, [p], config, false, {
+    inlineReplayModels: { [PID]: model },
+  });
+  const m = html.match(/window\.__chReplay = (.*);<\/script>/);
+  assert.ok(m, 'preloaded models script is present');
+  assert.ok(!m[1].includes('<'), 'no raw < survives inside the embedded JSON');
+  assert.ok(m[1].includes('\\u003c/script>'), 'script closer neutralized via \\u003c escape');
+  assert.ok(m[1].includes('\\u003c!--'), 'comment opener neutralized via \\u003c escape');
+  assert.deepEqual(JSON.parse(m[1]), { [PID]: model }, 'escaping round-trips losslessly');
+});
+
+test('adversarial imageSources value cannot break out of the src/href attributes', async () => {
+  const evil = 'data:image/png;base64,AAA2" onerror="alert(1)';
+  const html = await renderIndexHtml(summaries, triage, [p], config, false, {
+    imageSources: { [PID]: { sessionTimeline: evil, typingProfile: null, trajectories: null } },
+  });
+  assert.ok(!html.includes(evil), 'raw attribute-breakout string must not appear');
+  assert.ok(html.includes('AAA2&quot; onerror=&quot;alert(1)'), 'quote escaped to &quot; in the emitted attribute');
 });
 
 test('demo mode guards history.replaceState; default does not', async () => {
