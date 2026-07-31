@@ -2,11 +2,15 @@
 
 Purpose-made synthetic artifact (spec: "purpose-made synthetic artifacts...
 internal research bench traces are NOT used as-is"). This is the real
-three-file output of one real run of the live demo tour (`demo/index.html`).
-A real browser ran a short, deterministic subset of the 12 steps and saved
-the same three files the "Replicate locally" step (12) offers for download.
-Every field in these files comes from the actual library code running in a
-real page; none of it is hand-written.
+three-file output of one real run of the live demo tour (`demo/index.html`),
+captured 2026-07-29 against the tour as it stood then (12 steps, jsPsych
+finale still present). A real browser ran a short, deterministic subset of
+those steps and saved the same three files the "Replicate locally" step
+offers for download. Every field in these files comes from the actual
+library code running in a real page; none of it is hand-written. The tour
+has since become a 13-step map with no jsPsych finale and no vendored
+jsPsych — the capture-era sections below are accurate history; "How to
+regenerate" reflects the current tour.
 
 ## Files
 
@@ -28,9 +32,11 @@ artifact.
 
 ## Session profile (what's actually in here)
 
-A short, deliberately small subset of the 12-step tour, run against the
-assembled site (`demo/*` plus a built `dist/` plus vendored jsPsych, served
-locally):
+A short, deliberately small subset of the capture-era 12-step tour, run
+against the assembled site as it was then (`demo/*` plus a built `dist/`
+plus the since-removed vendored jsPsych, served locally). Step numbers
+below are capture-era; the Alt+S shortcut and the jsPsych finale named in
+items 7 and 10-12 no longer exist in the tour:
 
 1. Welcome: replay opt-in toggled on, "Start the tour".
 2. Baseline typing: real per-character keystrokes, no signals. This is the
@@ -112,21 +118,27 @@ Regenerate this fixture whenever the payload assembler changes shape
 artifact's wire shape changes (`src/jspsych/extension-cyborg-hunter-replay.js`,
 `src/replay/*`).
 
-1. Build the assembled site locally: `node build.js` (dist/), `npm run
-   demo:vendor` (vendored jsPsych into `demo/vendor/`), `npm run
-   demo:preview` (`demo/preview-core.js`, not needed by this fixture but
-   part of a faithful assembly). Copy `demo/*` and `dist/` into one
-   directory so `demo/index.html`'s `./dist/...` and `./vendor/...` relative
-   paths resolve. This mirrors what the Pages CI assembly step does
-   (`demo/*` at site root plus `dist/`). Serve that directory with
-   `python3 -m http.server`.
-2. Drive a real browser through the session profile above. The critical
-   bits: real per-character typing on step 2 (never `element.value =` or a
-   single bulk `fill()`, which the library correctly flags as a synthetic
-   insertion), two dispatched `paste` events on step 3, a real ~11s
-   `blur`->`focus` window-event pair on step 4, Alt+S on step 7, then the
-   three download-button clicks on step 12, saving whatever the browser
-   downloads.
+1. Build the assembled site locally: `node tools/assemble-demo-site.mjs`.
+   That one script builds `dist/` if stale, rebuilds `demo/preview-core.js`,
+   and copies `demo/*` (minus `demo/tests/`) plus `dist/` into `.demo-site/`
+   — the same assembly Pages CI runs. There is no vendoring step any more
+   (the jsPsych finale and `npm run demo:vendor` left the tour). Serve
+   `.demo-site/` with `python3 -m http.server`.
+2. Drive a real browser through the current 13-step tour (`demo/steps.js`
+   is the step map), reproducing the same signal profile. The critical
+   bits: real per-character typing on the baseline step (never
+   `element.value =` or a single bulk `fill()`, which the library correctly
+   flags as a synthetic insertion), two dispatched `paste` events on the
+   copy-paste step, a real ~11s `blur`->`focus` window-event pair on the
+   tab-away step, then the three download-button clicks on the final
+   "Replicate locally" step (now step 13). Two capture-era mechanics are
+   gone: replay is now always-on (no welcome-screen opt-in toggle), and
+   there is no Alt+S — Act 2 can now only be skipped through the
+   fullscreen-fallback "Skip" link, so a regenerated fixture will either
+   include Act 2 data or reach `act2Skipped: true` by that path instead.
+   A pinned, deterministic drive script for the 13-step tour is deferred
+   to the D1 E2E rewrite; until it lands, follow `demo/steps.js` rather
+   than the capture-era step numbers above.
 3. Rewrite the participant id to `DEMO-FIXT` per the section above: a small
    one-off script that parses the two participant-carrying JSON files,
    replaces the id in the three locations listed, and renames the replay
