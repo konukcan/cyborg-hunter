@@ -1010,11 +1010,20 @@ function startTour(participantId, capabilities, manifest) {
       var mount = cardEl.querySelector('[data-role="results-mount"]');
       // Dynamic import: results.js (and its plot-adapter.js dependency) are
       // only needed once, at this last step — lazy-loading them keeps every
-      // earlier step's page weight down. buildResults() takes an optional
-      // 4th `hooks` arg (C3's playground wires hooks.onReady); omitted here,
-      // results.js tolerates its absence.
-      import('./results.js').then(function (mod) {
-        mod.buildResults(mount, state, manifest);
+      // earlier step's page weight down. playground.js (C3) is loaded the
+      // same lazy way, alongside it, and wired through buildResults()'s
+      // optional 4th `hooks` arg — hooks.onReady is what results.js calls
+      // once the first report build succeeds (see results.js's buildResults
+      // docblock). The playground load is its own try: if it fails, the
+      // report itself still builds and shows, just without the controls —
+      // same "degrade, don't block" posture as replay/guard elsewhere here.
+      import('./results.js').then(function (resultsMod) {
+        import('./playground.js').then(function (playgroundMod) {
+          resultsMod.buildResults(mount, state, manifest, { onReady: playgroundMod.mountPlayground });
+        }).catch(function (err) {
+          console.warn('cyborg-hunter demo: playground failed to load, showing the report without it', err);
+          resultsMod.buildResults(mount, state, manifest);
+        });
       }).catch(function (err) {
         console.warn('cyborg-hunter demo: results build failed to load', err);
         if (mount) mount.innerHTML = '<p class="hint">Couldn’t load the report builder in this browser.</p>';

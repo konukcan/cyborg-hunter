@@ -101,13 +101,26 @@ function renderFallbackCard(version) {
 async function fetchText(url) { var r = await fetch(url); if (!r.ok) throw new Error(url + ' → ' + r.status); return r.text(); }
 async function fetchJson(url) { var r = await fetch(url); if (!r.ok) throw new Error(url + ' → ' + r.status); return r.json(); }
 
+function identity(x) { return x; }
+
 // One full pipeline run -> report HTML string + the triage it produced.
-// configOverrides comes from the playground (C3); absent means the base
-// config (manifest defaults) untouched.
-export async function buildReportHtml(core, state, examples, replayModel, replayClientSrc, configOverrides) {
+// configOverrides and transformPayloads both come from the playground (C3);
+// both absent means the base config/payloads (manifest defaults, real
+// session data) untouched.
+//
+// transformPayloads is the seam C3 needs and C2 didn't have: a config
+// override alone can't flip a HARD tier (the analyzers trust data-carried
+// fields — see demo/playground.js's recomputeSignals docblock), so the
+// playground has to transform the PAYLOADS themselves, not just the config,
+// before they reach the pipeline. Applied right after assembleReportInputs
+// (which builds the visitor+examples payload list from `state`) and before
+// extractIntegrityData, so every downstream step — summaries, triage,
+// plots, the rendered HTML — sees the rewritten data.
+export async function buildReportHtml(core, state, examples, replayModel, replayClientSrc, configOverrides, transformPayloads) {
   var config = Object.assign({ outputDir: '.', participantIdField: 'participantId' }, configOverrides || {});
   var inputs = assembleReportInputs(state, examples, replayModel);
-  var participants = inputs.payloads.map(function (p) { return core.extractIntegrityData(p, config); });
+  var payloads = (transformPayloads || identity)(inputs.payloads);
+  var participants = payloads.map(function (p) { return core.extractIntegrityData(p, config); });
   var summaries = core.computeSummary(participants, config);
   var triage = core.rankTriage(summaries, core.detectEdgeExits(participants, config), config);
   // makePlotAdapter(core) wires the SAME cores the CLI draws with (core is
@@ -219,8 +232,11 @@ export function buildResults(container, state, manifest, hooks) {
     // failure (error event or its own load watchdog). The FIRST call is what
     // buildResults awaits before declaring success below — a blob that never
     // loads falls back instead of silently "succeeding" with a broken frame.
-    function run(configOverrides) {
-      return buildReportHtml(core, state, examples, replayModel, replayClientSrc, configOverrides).then(function (built) {
+    // transformPayloads (C3): the playground's recomputeSignals pre-pass;
+    // omitted on every call this file makes itself (the real session data,
+    // untouched) and on any caller that doesn't pass one.
+    function run(configOverrides, transformPayloads) {
+      return buildReportHtml(core, state, examples, replayModel, replayClientSrc, configOverrides, transformPayloads).then(function (built) {
         if (gaveUp) return built; // pipeline watchdog already replaced the DOM; don't resurrect a report into it
         var t = built.triage.find(function (x) { return x.participantId === state.participantId; }) ||
           { hardTriggered: false, softFlagged: false, reason: 'no trials this session' };
