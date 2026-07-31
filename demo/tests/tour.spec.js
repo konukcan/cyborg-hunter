@@ -1,14 +1,29 @@
 // demo/tests/tour.spec.js
-// Playwright E2E suite for the live demo tour (spec: docs/superpowers/specs/
-// 2026-07-29-ch-demo-page-design.md, "Testing (launch layers)" item 2).
+// Playwright E2E suite for the live demo tour (13-step remodel — spec:
+// docs/superpowers/specs/2026-07-31-ch-demo-remodel-design.md; plan:
+// docs/superpowers/plans/2026-07-31-ch-demo-remodel.md, Task D1).
 // Runs against the ASSEMBLED site (.demo-site/, see playwright.config.js +
-// tools/assemble-demo-site.mjs) so demo/index.html's ./dist/... and
-// ./vendor/... relative paths resolve the same way they do on Pages.
+// tools/assemble-demo-site.mjs) so demo/index.html's ./dist/... relative
+// paths resolve the same way they do on Pages.
 //
 // Every test asserts zero accumulated pageerrors via the auto `pageErrors`
-// fixture (helpers.mjs). Two more auto-fixtures (frozenClock, fullscreenMock)
-// install their addInitScript patches before any page script runs; they're
+// fixture (helpers.mjs). frozenClock/fullscreenMock are also auto-fixtures,
 // inert until a test explicitly calls into them.
+//
+// Two behaviors below were established by DRIVING THE LIVE PAGE during D1,
+// not by reading the copy/plan alone — see the inline comments at each site:
+//   1. A synthetic 'blur' Event does NOT trigger a GuardFriction violation
+//      (its check() reads real document.hasFocus(), unaffected by a
+//      synthetic dispatch) — the guard-cheat test uses fullscreenMock.exit()
+//      instead, the same mechanism the guard entry race already relies on.
+//   2. GuardFriction's violation overlay (#guard-friction-overlay) is a
+//      real, full-viewport, max-z-index curtain — it visually covers and
+//      pointer-event-intercepts the .endguard button while a violation is
+//      active (verified: a raw .click() on .endguard while the overlay is
+//      up times out). The test asserts .endguard's visible/enabled DOM
+//      state during the violation (true — matches the "outside
+//      .jspsych-content" design intent for legibility), then resolves the
+//      violation via the overlay's own resume button before clicking it.
 
 import { execSync } from 'node:child_process';
 import { mkdtempSync, existsSync, readFileSync } from 'node:fs';
@@ -19,253 +34,186 @@ import { fileURLToPath } from 'node:url';
 import {
   test, expect,
   dispatchPaste, dispatchCopy, typeRealistically,
-  startTour, fastForwardToReplicate,
-  primaryButton, backButton, railRow, pid,
+  startTour, waitForLamp,
+  installFailingFullscreenMock, installBlobCounter,
+  primaryButton, railRow, pid, resultsFrame,
 } from './helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BIN_PATH = resolve(__dirname, '..', '..', 'bin', 'cyborg-hunter.js');
-const RULE_TEXT = 'Rule: a hand wins when both cards share a suit and neither is below five.';
-const AUTOTYPE_TEXT = "No one is typing this — it's appearing entirely on its own.";
+const ANSWER = 'Canberra';
+const AUTOTYPE_TEXT = 'No one is typing this. It is being inserted.';
+
+// Waits for the playground's status line to show a FRESH "rebuilt in …ms"
+// message — i.e. one that's different from whatever it said before this
+// call. Necessary because two rebuilds in a row can both land on "rebuilt in
+// N ms" text: a bare /rebuilt in/ match can resolve against the PRIOR
+// rebuild's leftover text before the new (debounced, ~250ms) one has even
+// started — found by driving the live page with two sequential control
+// changes in one test.
+async function waitForFreshRebuild(page, prevText) {
+  await page.waitForFunction((prev) => {
+    const el = document.querySelector('[data-role="pg-status"]');
+    const t = (el && el.textContent) || '';
+    return /rebuilt in/.test(t) && t !== prev;
+  }, prevText, { timeout: 5000 });
+}
+
+// Baseline (step 2, typed) + two dispatched pastes of ANSWER (step 3, hard-
+// lights paste) + an immediate, violation-free pass through the guarded act
+// (skip link -> enter fullscreen -> end guard right away) -> signals-to-
+// scores -> results. Empirically verified (by driving the live page) to
+// give the visitor a HARD tier, all three plot images, and a mountable
+// replay — the minimal session shape the Results/Playground tests need.
+async function reachResultsWithSignals(page) {
+  await startTour(page); // -> baseline (step 2)
+  await typeRealistically(page.locator('#card textarea'), 'a city in Australia');
+  await primaryButton(page).click(); // -> clipboard-cheat (step 3)
+  await dispatchPaste(page, '#card textarea', ANSWER);
+  await dispatchPaste(page, '#card textarea', ANSWER);
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry (step 8)
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 });
+  await page.locator('.endguard').click(); // -> guard-debrief (step 10)
+  await primaryButton(page).click(); // -> signals-to-scores (step 11)
+  await primaryButton(page).click(); // -> results (step 12)
+  await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
+}
 
 // ---------------------------------------------------------------------------
-// a. Full 12-step happy path
+// 1. Happy path: all 13 steps in order
 // ---------------------------------------------------------------------------
-test('full 12-step happy path: welcome through replicate-locally', async ({ page, frozenClock, fullscreenMock }) => {
+test('happy path: all 13 steps, welcome through replicate-locally', async ({ page, frozenClock, fullscreenMock }) => {
   test.setTimeout(90000);
 
-  // ----- Step 1: welcome -----
-  await startTour(page); // lands on step 2 (baseline-typing)
+  // ----- Step 1: intro -----
+  await startTour(page); // lands on step 2 (baseline)
   const participantId = await pid(page);
   expect(participantId).toMatch(/^DEMO-/);
 
-  // ----- Step 2: baseline typing (real per-char typing, nothing lights) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 2 of 12');
-  await typeRealistically(page.locator('#card textarea'), 'a hand with matching suits and no low cards');
+  // ----- Step 2: baseline typing (real per-char typing lights nothing) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 2 of 13');
   await expect(page.locator('#rail .check')).toHaveClass(/awaiting/); // still inert
+  await typeRealistically(page.locator('#card textarea'), 'a city in Australia');
+  await expect(page.locator('#rail .check')).toHaveClass(/awaiting/); // still inert after typing
   await primaryButton(page).click();
 
-  // ----- Step 3: copy-paste (two dispatched pastes cross the HARD threshold) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 3 of 12');
-  await dispatchPaste(page, '#card textarea', RULE_TEXT);
+  // ----- Step 3: clipboard cheat (copy the question, paste the answer x2) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 3 of 13');
+  await dispatchCopy(page);
+  await dispatchPaste(page, '#card textarea', ANSWER);
   await expect(railRow(page, 'paste')).toHaveClass(/lit/);
-  await expect(railRow(page, 'paste')).not.toHaveClass(/hardlit/);
-  await dispatchPaste(page, '#card textarea', RULE_TEXT);
-  await expect(railRow(page, 'paste')).toHaveClass(/hardlit/);
+  await expect(railRow(page, 'paste')).not.toHaveClass(/hardlit/); // 1st paste: below the hard threshold (2)
+  await dispatchPaste(page, '#card textarea', ANSWER);
+  await expect(railRow(page, 'paste')).toHaveClass(/hardlit/); // 2nd paste crosses it
   await expect(railRow(page, 'paste').locator('.n')).toHaveText('2');
+  // Only the paste that CROSSES the hard threshold is flagged hard in the
+  // live pane (verified live: the 1st paste's row has no .hard class, since
+  // its own count (1) is below the threshold at the moment it's logged) —
+  // both paste rows carry the pasted text regardless.
+  const pasteRows = page.locator('.lp-row', { has: page.locator('.lp-event', { hasText: 'paste' }) });
+  await expect(pasteRows).toHaveCount(2);
+  await expect(pasteRows.nth(0)).toContainText(ANSWER);
+  await expect(pasteRows.nth(1)).toContainText(ANSWER);
+  await expect(page.locator('.lp-row.hard')).toHaveCount(1);
+  await expect(page.locator('.lp-row.hard')).toContainText(ANSWER);
   await primaryButton(page).click();
 
-  // ----- Step 4: tab-away >=10s (frozen clock for an exact 11s duration) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 4 of 12');
-  await frozenClock.tabAway(0, 11000);
-  await expect(railRow(page, 'tabAwayLong')).toHaveClass(/lit/);
-  // tabAway() freezes performance.now() and never unfreezes it — harmless
-  // for every earlier step, but step 6 below needs REAL elapsed time between
-  // edit timestamps for computeTypingSpeed() to see a nonzero span.
+  // ----- Step 4: tab-away, three bins (frozen clock for exact durations) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 4 of 13');
+  await frozenClock.tabAway(0, 2000);      // flicker: <=3000ms
+  await frozenClock.tabAway(20000, 6000);  // mid: >3000ms, <10000ms
+  await frozenClock.tabAway(40000, 12000); // long: >=10000ms
+  // Freezing performance.now() never unfreezes itself — harmless for every
+  // earlier step, but step 6 below needs REAL elapsed time between edit
+  // timestamps for computeTypingSpeed() to see a nonzero span.
   await frozenClock.unfreeze();
+  await expect(railRow(page, 'tabAwayFlicker')).toHaveClass(/lit/);
+  await expect(railRow(page, 'tabAwayMid')).toHaveClass(/lit/);
+  await expect(railRow(page, 'tabAwayLong')).toHaveClass(/lit/);
   await primaryButton(page).click();
 
-  // ----- Step 5: resize (never ends the tour; may light sidebar/viewport) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 5 of 12');
+  // ----- Step 5: rearrange (viewport resize -> viewport lamp; poll-based, no onSignal event) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 5 of 13');
   await page.setViewportSize({ width: 700, height: 900 });
-  await expect(async () => {
-    const sidebarLit = await railRow(page, 'sidebar').evaluate((el) => el.classList.contains('lit'));
-    const viewportLit = await railRow(page, 'viewport').evaluate((el) => el.classList.contains('lit'));
-    expect(sidebarLit || viewportLit).toBe(true);
-  }).toPass({ timeout: 6000 });
+  await waitForLamp(page, 'viewport', { timeout: 7000 });
   await page.setViewportSize({ width: 1280, height: 900 });
   await primaryButton(page).click();
 
-  // ----- Step 6: autotype (real synthetic insertion + fast typing) -----
-  // Pressing the button drives the field via .value + dispatched
-  // InputEvent('insertText') with no preceding keydown — the exact gap
-  // src/core/signals/typing.js's synthetic-insertion detector watches for —
-  // so the rail lamp lights immediately. Fast typing is only computable at
-  // endTrial() (no onSignal event for it), so its lamp lights on advance,
-  // once the trial actually closes.
-  await expect(page.locator('.eyebrow')).toContainText('Step 6 of 12');
+  // ----- Step 6: autotype (real synthetic insertion, no keydown behind it) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 6 of 13');
   const autotypeButton = page.locator('[data-role="autotype-button"]');
-  const autotypeField = page.locator('[data-role="autotype-field"]');
   await autotypeButton.click();
   await expect(autotypeButton).toBeDisabled();
   await expect(railRow(page, 'syntheticInsertion')).toHaveClass(/lit/);
   await expect(railRow(page, 'syntheticInsertion')).toHaveClass(/hardlit/);
-  await expect(railRow(page, 'fastTyping')).not.toHaveClass(/lit/); // not yet — trial's still open
   await expect(autotypeButton).toHaveText('Typed ✓', { timeout: 5000 });
-  await expect(autotypeField).toHaveValue(AUTOTYPE_TEXT);
-  await expect(autotypeField).not.toHaveJSProperty('readOnly', true); // re-enabled
-  await primaryButton(page).click(); // closes the trial -> fast-typing lamp
-  await expect(railRow(page, 'fastTyping')).toHaveClass(/lit/);
+  await expect(page.locator('[data-role="autotype-field"]')).toHaveValue(AUTOTYPE_TEXT);
+  await primaryButton(page).click();
 
-  // ----- Step 7: guard fair-warning (mocked fullscreen entry) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 7 of 12');
-  await primaryButton(page).click(); // "Enter fullscreen" -> races the mocked API
-  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12');
+  // ----- Step 7: honeypot (simulate an agent filling the hidden bait) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 7 of 13');
+  await page.locator('[data-role="honeypot-sim-button"]').click();
+  await expect(page.locator('[data-role="honeypot-sim-button"]')).toHaveText('Bait taken ✓', { timeout: 2000 });
+  // Honeypot has no onSignal event, only a polled getter (pollSessionSignals,
+  // every 5s) — a generous real-time wait for the actual poll tick, same
+  // proven pattern as the viewport lamp above.
+  await waitForLamp(page, 'honeypot', { hard: true, timeout: 7000 });
+  // Scoped to the .lp-event column specifically (not hasText on the whole
+  // row): this step's own trial id is 'act1-honeypot', so a whole-row text
+  // match also catches its trial_start/trial_end rows — a test-selector
+  // trap, not a demo bug, found by actually running this assertion.
+  const honeypotRows = page.locator('.lp-row', { has: page.locator('.lp-event', { hasText: 'honeypot' }) });
+  await expect(honeypotRows).toHaveCount(1);
+  await primaryButton(page).click();
+
+  // ----- Step 8: guard entry (library's own entry screen, verbatim) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 13');
+  await expect(page.locator('.entrybox')).toContainText('Fullscreen mode required');
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'act2');
 
-  // ----- Step 8: try to cheat (exactly one guard violation) -----
-  await fullscreenMock.exit(); // simulates Esc -> not_fullscreen violation starts
+  // ----- Step 9: guard-cheat. A bare synthetic 'blur' dispatch does NOT
+  // trigger a violation (verified live: GuardFriction's check() reads real
+  // document.hasFocus(), unaffected by a synthetic event) — the fullscreen
+  // mock's exit() (the Esc-exit path) is the proven, working mechanism. -----
+  await fullscreenMock.exit();
   await expect(page.locator('[data-role="violation-chips"] .chip')).toContainText('not_fullscreen × 1');
   await expect(railRow(page, 'guardViolations')).toHaveClass(/hardlit/);
-  await page.evaluate(() => document.documentElement.requestFullscreen()); // re-enter -> violation ends
+  // The end-guard button stays visible/enabled by DOM state (it's a sibling
+  // OUTSIDE .jspsych-content specifically so its legibility never depends on
+  // scramble/blur context) even while the violation's full-viewport overlay
+  // is up — but that overlay DOES pointer-event-intercept it (verified
+  // live: clicking through it hangs), so the click below waits for the
+  // violation to resolve first, same as a real participant would.
+  const endGuard = page.locator('.endguard');
+  await expect(endGuard).toBeVisible();
+  await expect(endGuard).toBeEnabled();
+  await expect(page.locator('#guard-friction-overlay')).toHaveCSS('display', 'flex');
+  await page.locator('#guard-friction-resume').click(); // re-enter fullscreen -> violation ends
+  await expect(page.locator('#guard-friction-overlay')).toHaveCSS('display', 'none');
+  await endGuard.click();
+
+  // ----- Step 10: guard debrief -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 13');
   await primaryButton(page).click();
 
-  // ----- Step 9: guard finish -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 12');
-  await expect(page.locator('.task .hint')).toContainText('not_fullscreen — 1');
+  // ----- Step 11: signals to scores (first tier vocabulary appears here) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 11 of 13');
+  await expect(page.locator('.stepcopy')).toContainText('HARD');
   await primaryButton(page).click();
 
-  // ----- Step 10: jsPsych finale (real trials or degraded panel) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 12');
-  const finaleOutcomeHandle = await page.waitForFunction(() => {
-    const note = document.querySelector('.finale-note');
-    const status = document.querySelector('[data-role="finale-status"]');
-    if (note && !note.hidden) return 'degraded';
-    if (status && /press a key/i.test(status.textContent || '')) return 'live';
-    return false;
-  }, null, { timeout: 10000 });
-  const finaleOutcome = await finaleOutcomeHandle.jsonValue();
-  console.log('[tour.spec] happy-path finale outcome:', finaleOutcome);
-  if (finaleOutcome === 'live') {
-    await page.keyboard.press('Space');
-    await expect(page.locator('[data-role="finale-mount"]')).toContainText('Quick check', { timeout: 5000 });
-    await page.keyboard.press('y');
-    await expect(page.locator('[data-role="finale-status"]')).toHaveText(/Both trials complete/, { timeout: 5000 });
-  }
+  // ----- Step 12: results (deep assertions live in the dedicated Results test) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 12 of 13');
+  await expect(page.locator('.yourreport h3')).toBeVisible({ timeout: 8000 });
   await primaryButton(page).click();
 
-  // ----- Step 11: results (truthful in-browser report) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 11 of 12');
-  await expect(page.locator('.yourreport h3')).toHaveText("Here's what you built", { timeout: 8000 });
-  const srcdoc = await page.locator('.results-frame').getAttribute('srcdoc');
-  expect(srcdoc).toContain(participantId);
-  expect(srcdoc).toContain(RULE_TEXT);
-  await primaryButton(page).click();
+  // ----- Step 13: replicate locally -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 13 of 13');
+  await expect(page.locator('.replicate')).toContainText('npx cyborg-hunter@0.7.2');
 
-  // ----- Step 12: replicate locally -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 12 of 12');
-  await expect(page.locator('[data-action="download"][data-key="sessionData"]')).toBeVisible();
-  await expect(page.locator('[data-action="download"][data-key="config"]')).toBeVisible();
-  // Config caveat (spec :182/:288): visible next to the config download.
-  await expect(page.locator('[data-role="config-caveat"]')).toBeVisible();
-  await expect(page.locator('[data-role="config-caveat"]')).toContainText('subject_ID');
-  await expect(page.locator('[data-role="config-caveat"]')).toContainText('quickstart');
-});
-
-// ---------------------------------------------------------------------------
-// b. Back/skip lifecycle
-// ---------------------------------------------------------------------------
-test('back/skip lifecycle: Back, skip-to-guard link, Alt+S all navigate without errors', async ({ page }) => {
-  await startTour(page); // step 2 (baseline-typing)
-  await primaryButton(page).click(); // -> step 3 (copy-paste)
-  await primaryButton(page).click(); // -> step 4 (tab-away)
-  await expect(page.locator('.eyebrow')).toContainText('Step 4 of 12');
-
-  await backButton(page).click(); // -> step 3
-  await expect(page.locator('.eyebrow')).toContainText('Step 3 of 12');
-  await backButton(page).click(); // -> step 2
-  await expect(page.locator('.eyebrow')).toContainText('Step 2 of 12');
-
-  await primaryButton(page).click(); // -> step 3
-  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> step 7 (guard-fair-warning)
-  await expect(page.locator('.eyebrow')).toContainText('Step 7 of 12');
-
-  await backButton(page).click(); // -> step 6 (autotype)
-  await expect(page.locator('.eyebrow')).toContainText('Step 6 of 12');
-  await primaryButton(page).click(); // -> step 7 again
-
-  await page.keyboard.press('Alt+S'); // -> step 10 (jspsych-finale)
-  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 12');
-});
-
-// ---------------------------------------------------------------------------
-// c. Zero-lamp path
-// ---------------------------------------------------------------------------
-test('zero-lamp path: Alt+S immediately shows the empty-state copy and CLEAN tier', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('#card h2').waitFor();
-  await page.keyboard.press('Alt+S'); // even before "Start the tour" -> step 10
-  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 12');
-  await primaryButton(page).click(); // -> step 11 (results), no finale interaction needed
-
-  await expect(page.locator('.yourreport h3')).toHaveText(
-    "You triggered nothing — here's what a clean report looks like", { timeout: 8000 });
-  await expect(page.locator('.results-mount .t-clean')).toHaveText('CLEAN');
-});
-
-// ---------------------------------------------------------------------------
-// d. Act-2-skip variant
-// ---------------------------------------------------------------------------
-test('act-2-skip variant: one paste then Alt+S from act2 shows the guard-docs pointer', async ({ page }) => {
-  await startTour(page); // step 2 (baseline-typing)
-  await primaryButton(page).click(); // -> step 3 (copy-paste)
-  await dispatchPaste(page, '#card textarea', RULE_TEXT); // one paste, not two
-
-  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> step 7 (act2)
-  await expect(page.locator('body')).toHaveAttribute('data-view', 'act2');
-  await page.keyboard.press('Alt+S'); // skip from WITHIN act2 -> act2Skipped: true
-  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 12');
-  await primaryButton(page).click(); // -> results
-
-  await expect(page.locator('.yourreport h3')).toHaveText(
-    "Here's what you built (Act 1 only)", { timeout: 8000 });
-  await expect(page.locator('.yourreport')).toContainText('docs/using-cyborg-hunter.md');
-});
-
-// ---------------------------------------------------------------------------
-// e. Resize mid-tour vs. fresh small-viewport load
-// ---------------------------------------------------------------------------
-test('resize mid-tour stays interactive; a fresh load at 700px is read-only smallmode', async ({ page }) => {
-  await page.setViewportSize({ width: 830, height: 900 });
-  await startTour(page); // capabilities snapshotted interactive=true at boot
-  await expect(page.locator('.eyebrow')).toContainText('Step 2 of 12');
-
-  await page.setViewportSize({ width: 700, height: 900 });
-  await primaryButton(page).click(); // still interactive despite <820px now
-  await expect(page.locator('.eyebrow')).toContainText('Step 3 of 12');
-  await expect(page.locator('#smallmode')).toBeHidden();
-
-  await page.setViewportSize({ width: 900, height: 900 });
-  await primaryButton(page).click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 4 of 12');
-
-  // Fresh load at 700px: capabilities snapshotted false -> read-only smallmode.
-  await page.setViewportSize({ width: 700, height: 900 });
-  await page.goto('/');
-  await expect(page.locator('#smallmode')).not.toBeHidden();
-  await expect(page.locator('.cols')).toHaveCSS('display', 'none');
-  await expect(page.locator('#smallmode')).toContainText('Quickstart');
-});
-
-// ---------------------------------------------------------------------------
-// f. Tab-away boundary (3000ms vs 3001ms)
-// ---------------------------------------------------------------------------
-test('boundary: a tab-away of exactly 3000ms lights nothing; 3001ms lights the mid bin', async ({ page, frozenClock }) => {
-  await startTour(page); // step 2
-  await primaryButton(page).click(); // -> step 3
-  await primaryButton(page).click(); // -> step 4 (tab-away)
-  await expect(page.locator('.eyebrow')).toContainText('Step 4 of 12');
-
-  await frozenClock.tabAway(0, 3000);
-  await expect(railRow(page, 'tabAwayMid')).not.toHaveClass(/lit/);
-  await expect(railRow(page, 'tabAwayLong')).not.toHaveClass(/lit/);
-
-  await frozenClock.tabAway(3000, 3001);
-  await expect(railRow(page, 'tabAwayMid')).toHaveClass(/lit/);
-  await expect(railRow(page, 'tabAwayMid').locator('.n')).toHaveText('1');
-  await expect(railRow(page, 'tabAwayLong')).not.toHaveClass(/lit/);
-});
-
-// ---------------------------------------------------------------------------
-// g. Downloads -> real CLI
-// ---------------------------------------------------------------------------
-test('downloads e2e: the three downloaded files pipe through the real CLI with zero warnings', async ({ page }) => {
-  test.setTimeout(60000);
   const tmpDir = mkdtempSync(join(tmpdir(), 'ch-demo-e2e-'));
-
-  await fastForwardToReplicate(page, { replayOptIn: true });
-  const participantId = await pid(page);
-
   for (const key of ['sessionData', 'replay', 'config']) {
     const [download] = await Promise.all([
       page.waitForEvent('download'),
@@ -275,63 +223,208 @@ test('downloads e2e: the three downloaded files pipe through the real CLI with z
   }
 
   const stdout = execSync(`node ${JSON.stringify(BIN_PATH)} report`, { cwd: tmpDir, encoding: 'utf8' });
-
   const reportIndex = join(tmpDir, 'cyborg-hunter-report', 'index.html');
   expect(existsSync(reportIndex)).toBe(true);
   const reportHtml = readFileSync(reportIndex, 'utf8');
   expect(reportHtml).toContain(participantId);
-
   expect(stdout).not.toContain('files had warnings');
   expect(stdout).toContain('Found 1 participants');
 });
 
 // ---------------------------------------------------------------------------
-// h. Lamp truthfulness
+// 2. Live pane: row count grows across acts; raw-JSON tab shows the payload
 // ---------------------------------------------------------------------------
-test('lamp truthfulness: two pastes hard-light with count 2; one copy lights but not hard', async ({ page }) => {
-  await startTour(page); // step 2
-  await primaryButton(page).click(); // -> step 3 (copy-paste)
+test('live pane: row count strictly grows across acts; raw-JSON tab shows participantId', async ({ page, frozenClock }) => {
+  const rowCount = () => page.locator('.lp-row').count();
 
+  await startTour(page); // -> baseline (step 2); trial_start for baseline
+  const c0 = await rowCount();
+
+  await primaryButton(page).click(); // -> clipboard-cheat: trial_end + trial_start
   await dispatchCopy(page);
-  await expect(railRow(page, 'copy')).toHaveClass(/lit/);
-  await expect(railRow(page, 'copy')).not.toHaveClass(/hardlit/);
-  await expect(railRow(page, 'copy').locator('.n')).toHaveText('1');
+  await dispatchPaste(page, '#card textarea', ANSWER);
+  await dispatchPaste(page, '#card textarea', ANSWER);
+  const c1 = await rowCount();
+  expect(c1).toBeGreaterThan(c0);
 
-  await dispatchPaste(page, '#card textarea', RULE_TEXT);
-  await dispatchPaste(page, '#card textarea', RULE_TEXT);
-  await expect(railRow(page, 'paste')).toHaveClass(/lit/);
-  await expect(railRow(page, 'paste')).toHaveClass(/hardlit/);
-  await expect(railRow(page, 'paste').locator('.n')).toHaveText('2');
+  await primaryButton(page).click(); // -> tab-away
+  await frozenClock.tabAway(0, 2000);
+  await frozenClock.tabAway(20000, 6000);
+  await frozenClock.tabAway(40000, 12000);
+  await frozenClock.unfreeze();
+  const c2 = await rowCount();
+  expect(c2).toBeGreaterThan(c1);
+
+  await primaryButton(page).click(); // -> rearrange
+  await primaryButton(page).click(); // -> autotype
+  await page.locator('[data-role="autotype-button"]').click();
+  await expect(page.locator('[data-role="autotype-button"]')).toHaveText('Typed ✓', { timeout: 5000 });
+  const c3 = await rowCount();
+  expect(c3).toBeGreaterThan(c2);
+
+  // Raw-JSON tab: the literal payload the pid.json download carries.
+  await page.locator('.lp-tab[data-tab="json"]').click();
+  const jsonText = await page.locator('[data-role="lp-json"]').textContent();
+  expect(jsonText).toContain('"participantId"');
+  expect(() => JSON.parse(jsonText)).not.toThrow();
 });
 
 // ---------------------------------------------------------------------------
-// i. Replay opt-in
+// XSS paste: a pasted <script> string renders escaped, never executes
 // ---------------------------------------------------------------------------
-test('replay opt-in ON: #rec is visible and the downloaded replay file parses with schema_version', async ({ page }) => {
+test('XSS paste: a hostile <script> string is escaped in the live pane, never executed', async ({ page }) => {
+  let dialogFired = false;
+  page.on('dialog', async (d) => { dialogFired = true; await d.dismiss(); });
+
+  await startTour(page); // -> baseline
+  await primaryButton(page).click(); // -> clipboard-cheat
+  const hostile = '<script>alert(1)</script>';
+  await dispatchPaste(page, '#card textarea', hostile);
+
+  const streamHtml = await page.locator('.lp-stream').innerHTML();
+  expect(streamHtml).not.toContain('<script>alert');
+  expect(streamHtml).toContain('&lt;script&gt;');
+  expect(dialogFired).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// 3. Results: the full-fidelity in-browser report
+// ---------------------------------------------------------------------------
+test('results: triage table, visitor plots, replay section, tier line', async ({ page }) => {
   test.setTimeout(60000);
-  const tmpDir = mkdtempSync(join(tmpdir(), 'ch-demo-e2e-replay-'));
+  await reachResultsWithSignals(page);
+  const participantId = await pid(page);
 
-  await startTour(page, { replayOptIn: true });
-  await expect(page.locator('#rec')).toBeVisible();
-  await expect(page.locator('#rec')).toContainText('REC replay');
+  const frame = resultsFrame(page);
+  const rows = frame.locator('.cohort-row');
+  await expect(rows).toHaveCount(3);
+  const pids = await rows.evaluateAll((els) => els.map((e) => e.dataset.pid));
+  expect(pids).toContain('example-1');
+  expect(pids).toContain('example-2');
+  expect(pids).toContain(participantId);
 
-  await page.locator('a[data-key="skipToGuardedAct"]').click();
-  await page.keyboard.press('Alt+S');
-  await primaryButton(page).click(); // jspsych-finale -> results
-  await primaryButton(page).click(); // results -> replicate-locally
+  // The visitor's pane may not be the default-visible one (sort is
+  // tier-first) — select its cohort row before inspecting its detail pane,
+  // same as a real analyst clicking through the rail (verified live).
+  const visitorRow = frame.locator(`.cohort-row[data-pid="${participantId}"]`);
+  const visitorSanitized = await visitorRow.getAttribute('data-sanitized');
+  await visitorRow.click();
+  const visitorPane = frame.locator(`#p-${visitorSanitized}`);
+  await expect(visitorPane.locator('img[src^="data:image/png"]')).toHaveCount(3);
 
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    page.locator('[data-action="download"][data-key="replay"]').click(),
-  ]);
-  const savedPath = join(tmpDir, download.suggestedFilename());
-  await download.saveAs(savedPath);
-  const recording = JSON.parse(readFileSync(savedPath, 'utf8'));
-  expect(recording.schema_version).toBe(1);
+  // Replay section: preloaded (inline model, demo mode) and mounts on click.
+  const replayBlock = visitorPane.locator('.replay-block');
+  await expect(replayBlock).toHaveAttribute('data-replay-preloaded', 'true');
+  await replayBlock.locator('.replay-load-btn').click();
+  await expect(visitorPane.locator('.replay-stage')).toBeVisible({ timeout: 5000 });
+
+  // Walkthrough tier line lives OUTSIDE the iframe, in the main document.
+  await expect(page.locator('.yourreport')).toContainText('Your tier:');
 });
 
-test('replay opt-out: no replay download button is offered', async ({ page }) => {
-  await fastForwardToReplicate(page); // replayOptIn defaults to false
-  await expect(page.locator('#rec')).toBeHidden();
-  await expect(page.locator('[data-action="download"][data-key="replay"]')).toHaveCount(0);
+// ---------------------------------------------------------------------------
+// 4. Playground: moving thresholds re-runs the pipeline and flips tiers
+// ---------------------------------------------------------------------------
+test('playground: paste threshold and tab-away/typing-speed cutoffs flip tiers', async ({ page }) => {
+  test.setTimeout(60000);
+  await reachResultsWithSignals(page);
+  const frame = resultsFrame(page);
+  await frame.locator('.cohort-row[data-pid="example-1"]').waitFor({ timeout: 8000 });
+  await expect(frame.locator('.cohort-row[data-pid="example-1"]')).toHaveAttribute('data-tier', 'hard');
+
+  // Raise the paste hard-count threshold past example-1's real paste count (2).
+  // Playground controls mount slightly AFTER the report iframe first loads
+  // (results.js's hooks.onReady fires once the FIRST build's iframe swap
+  // resolves) — wait for the control to exist before touching it.
+  const statusEl = page.locator('[data-role="pg-status"]');
+  await page.locator('[data-k="pasteHardCount"]').waitFor({ timeout: 8000 });
+  const before1 = await statusEl.textContent();
+  await page.locator('[data-k="pasteHardCount"]').fill('3');
+  await page.locator('[data-k="pasteHardCount"]').dispatchEvent('change');
+  await waitForFreshRebuild(page, before1);
+  await expect(statusEl).toHaveText(/rebuilt in \d+ ms/);
+  await expect(frame.locator('.cohort-row[data-pid="example-1"]')).toHaveAttribute('data-tier', 'soft'); // loses HARD
+
+  // Tighten the tab-away cutoff and lower the fast-typing threshold — moves
+  // example-2 (all-clean fixture) into SOFT (C3-verified scenario: a 1400ms
+  // tab-away crosses a 1000ms cutoff, and 3 trials' ~4.6-5.3cps typing
+  // crosses a 4cps threshold).
+  const before2 = await statusEl.textContent();
+  await page.locator('[data-k="tabAwayCutoffMs"]').fill('1000');
+  await page.locator('[data-k="tabAwayCutoffMs"]').dispatchEvent('change');
+  await page.locator('[data-k="typingSpeedCps"]').fill('4');
+  await page.locator('[data-k="typingSpeedCps"]').dispatchEvent('change');
+  await waitForFreshRebuild(page, before2);
+  await expect(frame.locator('.cohort-row[data-pid="example-2"]')).toHaveAttribute('data-tier', 'soft');
+});
+
+// ---------------------------------------------------------------------------
+// 5. Zero-lamp path: skip everything, results shows the clean-report headline
+// ---------------------------------------------------------------------------
+test('zero-lamp path: skip everything via .skip links + guard skip -> clean report', async ({ page }) => {
+  await installFailingFullscreenMock(page); // forces the guard-entry fallback (no other skip route out of act 2)
+  await startTour(page); // -> baseline
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry
+  await expect(page.locator('a[data-key="skipToGuardedAct"]')).toHaveCount(0); // sanity: really at act 2 now
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.fallback-note')).toBeVisible({ timeout: 3000 });
+
+  const skipLink = page.locator('a[data-key="skipToScores"]');
+  await expect(skipLink).toBeVisible();
+  await skipLink.click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 11 of 13');
+  await primaryButton(page).click(); // -> results
+
+  await expect(page.locator('.yourreport h3')).toHaveText('A clean report', { timeout: 8000 });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Act2-skip path: forced fullscreen failure mid-tour, with real Act 1 data
+// ---------------------------------------------------------------------------
+test('act2-skip path: fullscreen failure falls back, skip lands on "From signals to scores"', async ({ page }) => {
+  await installFailingFullscreenMock(page);
+  await startTour(page); // -> baseline
+  await primaryButton(page).click(); // -> clipboard-cheat
+  await dispatchPaste(page, '#card textarea', ANSWER);
+  await dispatchPaste(page, '#card textarea', ANSWER); // >=1 lamp lit, so results won't read as zero-lamp
+
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.fallback-note')).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('.fallback-note')).toContainText("guarded act can’t run here");
+
+  await page.locator('a[data-key="skipToScores"]').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 11 of 13');
+  await expect(page.locator('#card h2')).toHaveText('From signals to scores');
+
+  await primaryButton(page).click(); // -> results
+  await expect(page.locator('.yourreport h3')).toHaveText('Reading your report (Act 1 only)', { timeout: 8000 });
+  await expect(page.locator('.yourreport')).toContainText('docs/using-cyborg-hunter.md');
+});
+
+// ---------------------------------------------------------------------------
+// 7. Blob hygiene: created - revoked === 1 after the report builds once and
+// the playground reruns it once (the C2/C3-documented live-URL invariant:
+// each swap revokes the PREVIOUS blob only after the NEW one loads, so one
+// url is always left outstanding while the report is showing).
+// ---------------------------------------------------------------------------
+test('blob hygiene: created - revoked === 1 after results + one playground rerun', async ({ page }) => {
+  test.setTimeout(60000);
+  await installBlobCounter(page);
+  await reachResultsWithSignals(page);
+
+  const statusEl = page.locator('[data-role="pg-status"]');
+  // Wait on the CONTROL, not the status paragraph: pg-status starts as a
+  // literally empty <p> (zero content -> zero-size box -> Playwright treats
+  // it as not-visible) until the first rebuild ever writes text into it —
+  // waitFor('visible') on it before any control interaction hangs. The
+  // paste-count input, by contrast, is real content and visible from mount.
+  await page.locator('[data-k="pasteHardCount"]').waitFor({ timeout: 8000 });
+  const before = await statusEl.textContent();
+  await page.locator('[data-k="pasteHardCount"]').fill('1');
+  await page.locator('[data-k="pasteHardCount"]').dispatchEvent('change');
+  await waitForFreshRebuild(page, before);
+
+  const counts = await page.evaluate(() => window.__chBlobCounts);
+  expect(counts.created - counts.revoked).toBe(1);
 });

@@ -1,9 +1,12 @@
 // demo/tests/helpers.mjs
-// Shared Playwright fixtures + DOM-automation helpers for tour.spec.js.
+// Shared Playwright fixtures + DOM-automation helpers for tour.spec.js
+// (13-step remodel). Rewritten for D1 — keeps the v1 helper PATTERNS proven
+// against headless Chromium (see each section below for why), drops the
+// teaser/finale/Alt+S helpers the remodel deleted, and rewrites the
+// fast-forward helper for the new step map.
 //
 // Three auto-fixtures apply to every test that imports `test` from this
-// module (spec: "page.on('pageerror') accumulated and asserted empty in
-// EVERY test" + "an addInitScript fullscreen mock as a shared helper"):
+// module:
 //
 //   - pageErrors:    accumulates page.on('pageerror') for the whole test and
 //                     asserts it's empty at teardown.
@@ -12,19 +15,30 @@
 //                     tab-away duration is `performance.now() - startedAt`
 //                     (src/core/signals/focus.js), so freezing the clock
 //                     around a blur->focus pair gives an EXACT duration
-//                     instead of one subject to real wall-clock jitter —
-//                     needed for the 3000ms/3001ms boundary test.
+//                     instead of one subject to real wall-clock jitter.
 //   - fullscreenMock: addInitScript patch of document.fullscreenElement +
-//                     document.documentElement.requestFullscreen, exposing
+//                     Element.prototype.requestFullscreen, exposing
 //                     window.__chExitFullscreen() to simulate the Esc-driven
 //                     exit GuardFriction treats as a violation. Headless
 //                     Chromium's real Fullscreen API needs a user gesture
-//                     and is unreliable in CI, hence the mock.
+//                     and is unreliable in CI, hence the mock. Defaults to
+//                     ALWAYS SUCCEEDING; installFailingFullscreenMock()
+//                     below layers a rejecting override on top for the two
+//                     tests that need the fallback path.
 //
 // Both addInitScript patches install before ANY page script runs (including
 // dist/*.js and demo.js), so demo.js's raceFullscreenEntry() and
 // GuardFriction's fullscreenElementOf()/check() read the patched APIs from
 // the very first paint, same as a real implementation would.
+//
+// One thing driving the live page during D1 disproved: dispatching a
+// synthetic 'blur' Event on window does NOT make GuardFriction log a
+// violation. Its check() reads document.hasFocus() — real browser focus
+// state, unaffected by a synthetic event — so a bare blur dispatch is a
+// no-op there (unlike src/core/signals/focus.js's tab-away detector, which
+// listens to the same 'blur' event directly and DOES fire on it). The
+// reliable, already-proven mechanism for a guard violation is the fullscreen
+// mock's exit() (the Esc-exit path), used below.
 
 import { test as base, expect } from '@playwright/test';
 
@@ -67,8 +81,7 @@ async function installFullscreenMock(page) {
     // Simulates a real participant's Esc keypress: the browser exits
     // fullscreen and fires fullscreenchange with fullscreenElement now null.
     // GuardFriction's check() reads that as reason 'not_fullscreen' exactly
-    // the way it would for a real Esc exit — this IS the mechanic step 7's
-    // copy describes ("Esc-during-guard is itself the tracked violation").
+    // the way it would for a real Esc exit.
     window.__chExitFullscreen = function () {
       fsEl = null;
       document.dispatchEvent(new Event('fullscreenchange'));
@@ -144,23 +157,73 @@ export async function typeRealistically(locator, text, delayMs = 150) {
   await locator.pressSequentially(text, { delay: delayMs });
 }
 
-export async function startTour(page, { replayOptIn = false } = {}) {
+// Layers a rejecting override on top of the (already-installed, auto-fixture)
+// succeeding fullscreen mock — a later addInitScript's property assignment
+// wins over an earlier one on the same navigation, verified by driving the
+// live page. Must be called BEFORE page.goto()/startTour() so it's in place
+// for the very first navigation.
+export async function installFailingFullscreenMock(page) {
+  await page.addInitScript(() => {
+    Element.prototype.requestFullscreen = function () {
+      return Promise.reject(new Error('mock: fullscreen entry unavailable'));
+    };
+  });
+}
+
+// Wraps URL.createObjectURL/revokeObjectURL to count calls on
+// window.__chBlobCounts — the C2/C3 live-URL invariant tour.spec.js checks
+// (swapIframe revokes the PREVIOUS blob url only after the new one loads, so
+// created - revoked should equal the number of "no-previous-url-yet" swaps
+// still outstanding: 1 after the first report build + any playground
+// reruns). Must be called BEFORE page.goto() (like the fullscreen override
+// above) so the wrapper is in place before demo.js's first report build.
+export async function installBlobCounter(page) {
+  await page.addInitScript(() => {
+    window.__chBlobCounts = { created: 0, revoked: 0 };
+    const origCreate = URL.createObjectURL.bind(URL);
+    const origRevoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = function (b) { window.__chBlobCounts.created++; return origCreate(b); };
+    URL.revokeObjectURL = function (u) { window.__chBlobCounts.revoked++; return origRevoke(u); };
+  });
+}
+
+export async function startTour(page) {
   await page.goto('/');
   await page.locator('#card h2').waitFor();
-  if (replayOptIn) {
-    await page.locator('input[type="checkbox"][data-key="replayOptIn"]').check();
-  }
   await primaryButton(page).click();
 }
 
-// Fast path from a fresh welcome screen to the replicate-locally step (12),
-// used by the downloads/replay tests that don't need the intervening steps.
-export async function fastForwardToReplicate(page, opts = {}) {
-  await startTour(page, opts);
-  await page.locator('a[data-key="skipToGuardedAct"]').click();
-  await page.keyboard.press('Alt+S');
-  await primaryButton(page).click(); // jspsych-finale -> results
-  await primaryButton(page).click(); // results -> replicate-locally
+// Polls a rail lamp (#rail li[data-key]) until it's lit (and, if opts.hard,
+// hardlit too). Two rail signals have NO onSignal event and are only ever
+// observable via demo.js's 5s pollSessionSignals() — viewport shifts
+// (ResizeObserver never fires a signal) and the honeypot bait (GuardHoneypot
+// exposes only a polled getter). A real-time wait for the actual poll tick
+// (v1's proven pattern for the sidebar/viewport lamp — see git history) is
+// simpler and no less deterministic than faking setInterval: the poll WILL
+// fire within one interval, so a generous timeout beyond 5s never flakes.
+export async function waitForLamp(page, key, { hard = false, timeout = 7000 } = {}) {
+  await page.waitForFunction(([k, h]) => {
+    const el = document.querySelector('#rail li[data-key="' + k + '"]');
+    return !!el && el.classList.contains('lit') && (!h || el.classList.contains('hardlit'));
+  }, [key, hard], { timeout });
+}
+
+// Fast path from a fresh welcome screen to the replicate-locally step (13):
+// baseline -> skip to the guarded act -> enter fullscreen (default succeeding
+// mock) -> end the guard immediately (no violation needed for this path) ->
+// debrief -> signals-to-scores -> results (waits for the report to actually
+// build) -> replicate-locally. Used by tests that need SOME session data and
+// the downloads step without walking every act-1 step.
+export async function fastForwardToReplicate(page) {
+  await startTour(page); // -> baseline (step 2)
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry (step 8)
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 }); // guard-cheat
+  await page.locator('.endguard').click(); // -> guard-debrief (step 10)
+  await primaryButton(page).click(); // -> signals-to-scores (step 11)
+  await primaryButton(page).click(); // -> results (step 12)
+  await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
+  await primaryButton(page).click(); // -> replicate-locally (step 13)
 }
 
 export function primaryButton(page) {
@@ -177,4 +240,12 @@ export function railRow(page, key) {
 
 export function pid(page) {
   return page.locator('#pid').textContent();
+}
+
+// The report's own frameLocator — Playwright pierces the iframe's opaque
+// (sandbox="allow-scripts", no allow-same-origin) origin fine; only real
+// browser same-origin policy would block script-level access, not
+// Playwright's out-of-process automation.
+export function resultsFrame(page) {
+  return page.frameLocator('.results-frame');
 }
