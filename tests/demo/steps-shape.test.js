@@ -15,8 +15,9 @@ test('step map', () => {
   assert.deepEqual(STEPS.map(s => s.id), IDS);
   for (const s of STEPS) { assert.ok(s.eyebrow && s.title && s.body, s.id); }
 });
-test('G2: no tier vocabulary before the scores step', () => {
-  const before = STEPS.slice(0, 10).map(s => [s.title, s.body, JSON.stringify(s.task || {})].join(' ')).join(' ');
+test('G2: no tier vocabulary in steps 2-10', () => {
+  // G2 (spec §2) covers steps 2-10; step 1 may NAME the product ("triage report") without narrating scores.
+  const before = STEPS.slice(1, 10).map(s => [s.title, s.body, JSON.stringify(s.task || {})].join(' ')).join(' ');
   for (const word of ['HARD', 'SOFT', 'CLEAN', 'tier', 'triage', 'preset']) {
     assert.ok(!before.includes(word), `"${word}" leaked before step 11`);
   }
