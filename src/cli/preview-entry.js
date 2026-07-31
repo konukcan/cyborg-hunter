@@ -24,3 +24,12 @@ export { extractIntegrityData } from './extract-core.js';
 // it to scrub a pre-recorded SessionRecording without re-implementing the
 // time-conversion logic. No Node APIs, so it bundles cleanly here.
 export { buildViewerModel } from '../replay/viewer-model.js';
+
+// The three pure plot cores (0.7.2-style extraction — see each file's own
+// docblock): drawSessionTimeline, drawTrajectoryGrid, drawTypingProfile.
+// Each takes an injected createCanvas factory instead of importing the
+// `canvas` package directly, so they bundle cleanly here too. Consumed by
+// demo/plot-adapter.js to render the visitor's own plots in-browser.
+export { drawSessionTimeline } from './renderers/session-timeline-core.js';
+export { drawTrajectoryGrid } from './renderers/trajectories-core.js';
+export { drawTypingProfile } from './renderers/typing-profile-core.js';
