@@ -27,5 +27,9 @@ export default defineConfig({
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Firefox/WebKit only run the hermetic blob-iframe smoke (demo/tests/blob-iframe.spec.js),
+    // not the full tour suite — that suite depends on Chromium-only test helpers/mocks.
+    { name: 'firefox',  use: { ...devices['Desktop Firefox'] }, testMatch: /blob-iframe\.spec\.js/ },
+    { name: 'webkit',   use: { ...devices['Desktop Safari'] },  testMatch: /blob-iframe\.spec\.js/ },
   ],
 });
