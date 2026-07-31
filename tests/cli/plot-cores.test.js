@@ -159,6 +159,11 @@ snapshotTest('trajectories core draw log', 'drawlog-trajectories.json',
     // for each of the 5 trials that reach geometry resolution (moves.length
     // > 0); the screen rect (teal) never does. The enriched test below fixes
     // the paradox to exercise drawOuter=true.
+    //
+    // Not checked here (A4 review, sanctioned as deliberately out of scope
+    // for this file): the zoom-tag branch (COLORS.zoomTag, '#a06000') —
+    // it's unit-tested directly via computeZoomTag in trajectory-frame.test.js
+    // and window-geometry.test.js instead.
     assert.equal(strokeSets('#7e57c2').length, 5, 'window outline drawn for all 5 data-bearing trials');
     assert.equal(strokeSets('#26a69a').length, 0, 'screen outline suppressed — window/screen paradox in fixture data');
 
@@ -213,3 +218,89 @@ snapshotTest('trajectories core draw log (enriched)', 'drawlog-trajectories-enri
     assert.equal(strokeSets('#26a69a').length, 6,
       'screen outline now drawn for all 6 trials once the window/screen paradox is fixed');
   });
+
+// ── Typing-profile core ──────────────────────────────────────────────────
+import { drawTypingProfile } from '../../src/cli/renderers/typing-profile-core.js';
+
+// New module-level helper, added for the typing-profile section only (A5
+// review, sanctioned). SESSION-TIMELINE and TRAJECTORIES above keep their
+// existing inline fillSets/strokeSets arrow functions unchanged — not
+// migrated to this helper.
+function styleSets(log, prop, color) {
+  return log.filter(c => c[0] === `set:${prop}` && c[1] === color).length;
+}
+
+// config.typingSpeedThreshold_cps is the real fallback key the renderer
+// reads (see the `threshold =` line in typing-profile-core.js) — NOT
+// config.thresholds.typingSpeedCps. DEMO-FIXT's participant already carries
+// session.config.thresholds.typingSpeedCps = 10 (higher precedence per that
+// same three-tier fallback), so this value only matters for participants
+// without a saved threshold; set to 10 so both sources agree here.
+snapshotTest('typing-profile core draw log', 'drawlog-typing-profile.json',
+  (cc) => drawTypingProfile(P, { outputDir: '.', typingSpeedThreshold_cps: 10 }, cc),
+  (log) => {
+    // Non-tautological checks: the legend swatches (fillStyle '#2196F3' for
+    // "typed", '#f44336' for "> threshold") are set once each unconditionally
+    // before the bar loop runs, so bare presence checks would pass on an
+    // all-blank chart too. These use occurrence counts derived from
+    // DEMO-FIXT's own trials: exactly one typed trial (act1-baseline,
+    // charsPerSec=9.1) below the 10 cps threshold, one paste-only trial
+    // (act1-paste, 2 pasteEvents, no charsPerSec), and none above threshold.
+    assert.equal(styleSets(log, 'fillStyle', '#2196F3'), 2,
+      'below-threshold typed bar: 1 legend swatch + 1 bar (act1-baseline, 9.1 < 10 cps)');
+    assert.equal(styleSets(log, 'fillStyle', '#f44336'), 1,
+      'no above-threshold bar in the baseline fixture — legend swatch only (enriched test below adds one)');
+
+    // Threshold line: measured, not merely present — '#ff0000' is unique to
+    // this line (no other draw call in the function uses pure red), and the
+    // checked coordinates are real computed values: maxSpeed = max(9.1, 0×4,
+    // threshold×1.5) = 15, so threshY = 50 + 200 − 10×(200/15) ≈ 116.67, and
+    // canvasW − 10 = (60 + 6×38 + 20) − 10 = 298.
+    const lineIdx = log.findIndex(c => c[0] === 'set:strokeStyle' && c[1] === '#ff0000');
+    assert.ok(lineIdx >= 0, 'threshold line strokeStyle set');
+    assert.deepEqual(log[lineIdx + 1], ['set:lineWidth', 1.5]);
+    assert.deepEqual(log[lineIdx + 2], ['setLineDash', [5, 3]]);
+    assert.deepEqual(log[lineIdx + 3], ['beginPath']);
+    assert.deepEqual(log[lineIdx + 4], ['moveTo', 60, 116.67]);
+    assert.deepEqual(log[lineIdx + 5], ['lineTo', 298, 116.67]);
+  });
+
+// Enriched variant: DEMO-FIXT has only one typed trial (act1-baseline, 9.1
+// cps) and it sits below the 10 cps threshold, so the above-threshold red
+// bar branch never fires in the baseline snapshot above. Boost a no-data
+// trial (act1-tabaway) to a real above-threshold speed on a structuredClone
+// so P above stays untouched. 15 cps also keeps maxSpeed (and so threshY)
+// identical to the baseline (max(..., 15) still ties threshold×1.5 = 15),
+// which keeps this fixture easy to reason about against the one above.
+const P_TYPING_ENRICHED = structuredClone(P);
+const typingBoostIdx = P_TYPING_ENRICHED.trials.findIndex(t => t.trialId === 'act1-tabaway');
+P_TYPING_ENRICHED.trials[typingBoostIdx].charsPerSec = 15; // > 10 cps threshold
+
+snapshotTest('typing-profile core draw log (enriched)', 'drawlog-typing-profile-enriched.json',
+  (cc) => drawTypingProfile(P_TYPING_ENRICHED, { outputDir: '.', typingSpeedThreshold_cps: 10 }, cc),
+  (log) => {
+    assert.ok(log.length > 267, `enriched log has ${log.length} calls (baseline: 267)`);
+    assert.equal(styleSets(log, 'fillStyle', '#f44336'), 2,
+      'above-threshold red bar now draws: 1 legend swatch + 1 bar (act1-tabaway boosted to 15 cps)');
+    assert.equal(styleSets(log, 'fillStyle', '#2196F3'), 2,
+      'below-threshold bar count unchanged — act1-baseline (9.1 cps) is still the only one');
+  });
+
+// Skip/bail branch: a participant with trials but no typing data at all (no
+// charsPerSec, no pasteEvents on any trial) draws nothing and returns null —
+// the fs wrapper's cue to skip the PNG write. Minimal clone: strip the two
+// typing-signal fields from every trial. No fixture file — there's no canvas
+// or draw log to snapshot on the null path.
+test('typing-profile core returns null when no trial has typing data', () => {
+  const P_NO_TYPING = structuredClone(P);
+  for (const t of P_NO_TYPING.trials) {
+    delete t.charsPerSec;
+    delete t.pasteEvents;
+  }
+  const log = [];
+  const canvas = drawTypingProfile(
+    P_NO_TYPING, { outputDir: '.', typingSpeedThreshold_cps: 10 }, makeRecordingCanvasFactory(log)
+  );
+  assert.equal(canvas, null);
+  assert.equal(log.length, 0, 'no canvas created for a no-typing-data participant');
+});
