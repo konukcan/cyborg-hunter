@@ -262,12 +262,12 @@ export function buildResults(container, state, manifest, hooks) {
       });
     }
 
-    var first = await run(null);
+    await run(null);
     if (settled) return; // gaveUp === true: the watchdog already fired, nothing left to finish
     settled = true;
     clearTimeout(timeoutId);
     if (hooks && hooks.onReady) {
-      hooks.onReady({ rerun: run, container: container, manifest: manifest, firstTriage: first.triage });
+      hooks.onReady({ rerun: run, container: container, manifest: manifest });
     }
   })().catch(fail);
 }

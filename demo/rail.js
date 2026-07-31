@@ -10,9 +10,9 @@ var awaitingNoteEl = null;
 
 function renderGroupRows(rows, rowClass) {
   return rows.map(function (r) {
-    var isMouse = r.key === 'mousePaths';
-    var cls = isMouse ? 'always' : (rowClass || '');
-    var nText = isMouse ? 'always on' : '0';
+    var isAlwaysOn = r.key === 'mousePaths' || r.key === 'replay';
+    var cls = isAlwaysOn ? 'always' : (rowClass || '');
+    var nText = isAlwaysOn ? 'always on' : '0';
     return '<li data-key="' + r.key + '"' + (cls ? ' class="' + cls + '"' : '') + '>' +
       '<span class="lamp"></span><span class="lbl">' + r.label + '</span>' +
       '<span class="n">' + nText + '</span></li>';

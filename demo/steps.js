@@ -168,9 +168,10 @@ source code, with the cyborg-hunter wiring around it.</p>`.trim(),
 <p>Suppose you don't know the answer and an AI does. Play that participant:
 copy the question text, as if taking it to another app. Then copy the
 answer provided below and paste it into the box. Paste it twice.</p>
-<p>Both moves are recorded with their content: the copy carries the text
-you took, each paste carries the text you dropped in, verbatim. A reviewer
-later sees not just that pasting happened, but what was pasted.</p>`.trim(),
+<p>Both moves are recorded, but not the same way: the copy logs only that
+text was taken and how many characters, while each paste carries the
+pasted text verbatim. A reviewer later sees not just that pasting
+happened, but what was pasted.</p>`.trim(),
     task: {
       kind: 'copy-paste',
       trialId: 'act1-paste',
