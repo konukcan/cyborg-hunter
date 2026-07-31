@@ -16,7 +16,7 @@
 
 import { writeFileSync } from 'fs';
 import { join } from 'path';
-import { ruleChronologicalCompare } from '../ingest.js';
+import { ruleChronologicalCompare } from '../extract-core.js';
 
 // Panel dimensions (pixels).
 const PANEL_W = 400;
