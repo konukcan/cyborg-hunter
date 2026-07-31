@@ -17,13 +17,15 @@
 //      synthetic dispatch) — the guard-cheat test uses fullscreenMock.exit()
 //      instead, the same mechanism the guard entry race already relies on.
 //   2. GuardFriction's violation overlay (#guard-friction-overlay) is a
-//      real, full-viewport, max-z-index curtain — it visually covers and
-//      pointer-event-intercepts the .endguard button while a violation is
-//      active (verified: a raw .click() on .endguard while the overlay is
-//      up times out). The test asserts .endguard's visible/enabled DOM
-//      state during the violation (true — matches the "outside
-//      .jspsych-content" design intent for legibility), then resolves the
-//      violation via the overlay's own resume button before clicking it.
+//      full-viewport curtain at int-max z-index that pointer-intercepts
+//      everything beneath it — which originally trapped the in-card
+//      .endguard button behind the overlay's resume flow. The demo now
+//      counters this (spec §6 step 9's no-trap guarantee) by lifting the
+//      button above the overlay while a violation is active (demo.js's
+//      floatEndGuard). The happy path clicks .endguard DURING the active
+//      violation — no resume first — and a dedicated test covers the
+//      resume-then-click route (including that the unfloat restore doesn't
+//      double-fire the advance).
 
 import { execSync } from 'node:child_process';
 import { mkdtempSync, existsSync, readFileSync } from 'node:fs';
@@ -181,19 +183,21 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
   await fullscreenMock.exit();
   await expect(page.locator('[data-role="violation-chips"] .chip')).toContainText('not_fullscreen × 1');
   await expect(railRow(page, 'guardViolations')).toHaveClass(/hardlit/);
-  // The end-guard button stays visible/enabled by DOM state (it's a sibling
-  // OUTSIDE .jspsych-content specifically so its legibility never depends on
-  // scramble/blur context) even while the violation's full-viewport overlay
-  // is up — but that overlay DOES pointer-event-intercept it (verified
-  // live: clicking through it hangs), so the click below waits for the
-  // violation to resolve first, same as a real participant would.
+  await expect(page.locator('#guard-friction-overlay')).toHaveCSS('display', 'flex');
+  // No-trap guarantee (spec §6 step 9): while the violation overlay is up,
+  // the End button is lifted above it (.floating — reparented to <body>
+  // after the overlay at equal z-index; demo.js floatEndGuard). It must be
+  // visible, enabled, AND actually clickable with NO resume first — a
+  // visitor who refuses to re-enter fullscreen can still end the act.
   const endGuard = page.locator('.endguard');
   await expect(endGuard).toBeVisible();
   await expect(endGuard).toBeEnabled();
-  await expect(page.locator('#guard-friction-overlay')).toHaveCSS('display', 'flex');
-  await page.locator('#guard-friction-resume').click(); // re-enter fullscreen -> violation ends
+  await expect(endGuard).toHaveClass(/floating/);
+  await endGuard.click(); // straight through the curtain — the no-trap click
+  // finalizeGuard's stop() ended the violation cleanly: overlay hidden, and
+  // the violation record (asserted on the downloaded file at step 13)
+  // carries both its start AND its end.
   await expect(page.locator('#guard-friction-overlay')).toHaveCSS('display', 'none');
-  await endGuard.click();
 
   // ----- Step 10: guard debrief -----
   await expect(page.locator('.eyebrow')).toContainText('Step 10 of 13');
@@ -222,6 +226,15 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
     await download.saveAs(join(tmpDir, download.suggestedFilename()));
   }
 
+  // Violations list intact in the record despite the mid-violation end:
+  // GuardFriction.stop() closed the open violation, so the downloaded
+  // session data carries both phases of the not_fullscreen violation.
+  const sessionData = JSON.parse(readFileSync(join(tmpDir, `${participantId}.json`), 'utf8'));
+  const violationPhases = (sessionData.guardFriction && sessionData.guardFriction.violations || [])
+    .map((v) => `${v.phase}:${v.reason}`);
+  expect(violationPhases).toContain('start:not_fullscreen');
+  expect(violationPhases).toContain('end:not_fullscreen');
+
   const stdout = execSync(`node ${JSON.stringify(BIN_PATH)} report`, { cwd: tmpDir, encoding: 'utf8' });
   const reportIndex = join(tmpDir, 'cyborg-hunter-report', 'index.html');
   expect(existsSync(reportIndex)).toBe(true);
@@ -229,6 +242,32 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
   expect(reportHtml).toContain(participantId);
   expect(stdout).not.toContain('files had warnings');
   expect(stdout).toContain('Found 1 participants');
+});
+
+// ---------------------------------------------------------------------------
+// Guard-cheat, resume-then-click route: the classic path (re-enter
+// fullscreen via the overlay's own resume button, THEN end the act) must
+// also keep working after the no-trap float/unfloat mechanics.
+// ---------------------------------------------------------------------------
+test('guard-cheat resume route: button unfloats after resume and advances exactly one step', async ({ page, fullscreenMock }) => {
+  await startTour(page); // -> baseline
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 });
+
+  await fullscreenMock.exit(); // violation starts -> button floats above the overlay
+  await expect(page.locator('.endguard')).toHaveClass(/floating/);
+  await page.locator('#guard-friction-resume').click(); // re-enter fullscreen -> violation ends
+  await expect(page.locator('#guard-friction-overlay')).toHaveCSS('display', 'none');
+
+  // The button unfloated back into its in-card spot...
+  await expect(page.locator('#card .endguard')).toBeVisible();
+  await expect(page.locator('.endguard')).not.toHaveClass(/floating/);
+  // ...and clicking it advances EXACTLY one step. Landing on step 11 here
+  // would mean the float-time direct listener survived the unfloat and
+  // double-fired the advance alongside the card's delegated handler.
+  await page.locator('.endguard').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 13');
 });
 
 // ---------------------------------------------------------------------------

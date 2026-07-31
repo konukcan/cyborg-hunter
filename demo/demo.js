@@ -471,7 +471,14 @@ function startTour(participantId, capabilities, manifest) {
         state.chipCounts[violation.reason] = (state.chipCounts[violation.reason] || 0) + 1;
         renderViolationChips();
         paneRow(currentTask.trialId, 'violation: ' + violation.reason, null, true);
+        // No-trap guarantee: lift the End button above the overlay while
+        // the violation is live (microtask — see floatEndGuard's docblock).
+        Promise.resolve().then(floatEndGuard);
       }
+      // Unconditional (not gated on the current step): unfloat is a no-op
+      // when nothing is floating, and the end can arrive via stop() during
+      // finalizeGuard from any step.
+      if (violation.phase === 'end') unfloatEndGuard();
       if (!lampWiringActive) return;
       if (violation.phase !== 'start') return;
       var n = (state.lampCounts.guardViolations || 0) + 1;
@@ -520,6 +527,64 @@ function startTour(participantId, capabilities, manifest) {
     container.innerHTML = Object.keys(state.chipCounts).map(function (reason) {
       return '<span class="chip hot">' + reason + ' × ' + state.chipCounts[reason] + '</span>';
     }).join('');
+  }
+
+  // ----- No-trap guarantee (spec §6 step 9) ------------------------------
+  // The End button must stay REACHABLE while the guard's violation overlay
+  // is up — a visitor who exits fullscreen and refuses to re-enter must
+  // still be able to end the act. GuardFriction's overlay is a fixed
+  // inset-0 curtain at z-index 2147483647 (int max) appended to
+  // document.body at the first violation; it paints over and
+  // pointer-intercepts everything beneath it, including the in-card
+  // .endguard button. CSS alone can't win: no z-index exceeds int max, and
+  // at EQUAL z-index the LATER sibling in tree order paints (and
+  // hit-tests) on top — verified empirically on chromium, firefox AND
+  // webkit, where a max-z-index button inside the card or appended to body
+  // BEFORE the overlay loses every time, and one appended AFTER wins.
+  // So while a violation is active, the SAME button node is moved to
+  // document.body after the overlay (the .floating class carries the
+  // fixed-position styling, demo.css) and moved back when the violation
+  // ends. The move is deferred one microtask because GuardFriction emits
+  // phase:'start' BEFORE showOverlay() creates the overlay (its update()
+  // is synchronous) — deferring guarantees the overlay exists so our
+  // append lands after it in tree order.
+  var endGuardRestore = null; // {parent, next} — where to put the button back
+
+  function onEndGuardClick() {
+    // finalizeGuard → GuardFriction.stop(): ends any active violation
+    // (emitting its phase:'end', which unfloats via the handler below) and
+    // hides the overlay — so ending the act mid-violation is clean.
+    finalizeGuard();
+    goTo(state.stepIndex + 1);
+  }
+
+  function floatEndGuard() {
+    if (endGuardRestore) return; // already floating
+    var btn = cardEl.querySelector('.endguard');
+    if (!btn) return; // navigated off guard-cheat before the microtask ran
+    endGuardRestore = { parent: btn.parentNode, next: btn.nextSibling };
+    btn.classList.add('floating');
+    // Direct listener while outside cardEl's subtree: the card's delegated
+    // click handler can't see clicks that no longer bubble through it.
+    btn.addEventListener('click', onEndGuardClick);
+    document.body.appendChild(btn); // AFTER the overlay → paints on top
+  }
+
+  function unfloatEndGuard() {
+    if (!endGuardRestore) return;
+    var restore = endGuardRestore;
+    endGuardRestore = null;
+    var btn = document.querySelector('body > .endguard.floating');
+    if (!btn) return;
+    btn.classList.remove('floating');
+    // Remove the direct listener: back inside cardEl, a click reaches the
+    // delegated handler again — keeping both would double-fire goTo().
+    btn.removeEventListener('click', onEndGuardClick);
+    if (restore.parent && restore.parent.isConnected) {
+      restore.parent.insertBefore(btn, restore.next);
+    } else {
+      btn.remove(); // the card re-rendered while floating; the node is stale
+    }
   }
 
   // Renders the fallback note (steps.js copy if the task defines one, else
@@ -1000,6 +1065,10 @@ function startTour(participantId, capabilities, manifest) {
 
   function goTo(i) {
     stopAutotype();
+    // Defensive unfloat on EVERY navigation: re-inserts a still-floating
+    // End button into the (old) card subtree so renderStep's innerHTML
+    // replacement below discards it instead of orphaning it on <body>.
+    unfloatEndGuard();
     var prevStep = STEPS[state.stepIndex];
     var prevTrialId = prevStep.task ? prevStep.task.trialId : null;
     state.stepIndex = i;
@@ -1084,7 +1153,7 @@ function startTour(participantId, capabilities, manifest) {
     var enterFsBtn = e.target.closest('[data-action="enter-fullscreen"]');
     if (enterFsBtn) { handleFullscreenEntry(enterFsBtn); return; }
     var endGuardBtn = e.target.closest('[data-action="end-guard"]');
-    if (endGuardBtn) { finalizeGuard(); goTo(state.stepIndex + 1); return; }
+    if (endGuardBtn) { onEndGuardClick(); return; }
     var primary = e.target.closest('[data-action="primary"]');
     if (primary) {
       var currentStep = STEPS[state.stepIndex];

@@ -147,6 +147,15 @@ textarea:focus, input[type="text"]:focus{outline:2px solid var(--live);outline-o
   margin-top:14px;}
 .endguard:hover{background:#2C3947;}
 .endguard:focus-visible{outline:2px solid var(--live);outline-offset:2px;}
+/* No-trap guarantee (spec §6 step 9): while a guard violation is active,
+ * demo.js reparents the button to <body> AFTER the violation overlay and
+ * adds this class — same z-index as the overlay (2147483647, int max);
+ * equal z-index + later sibling paints on top, so the button stays
+ * clickable over the curtain. Solid bg (from .endguard) + border + shadow
+ * keep it legible against the dark overlay. */
+.endguard.floating{position:fixed;right:24px;bottom:24px;z-index:2147483647;
+  margin:0;border:1px solid rgba(255,255,255,.35);
+  box-shadow:0 6px 24px rgba(0,0,0,.45);}
 
 /* ---------------------------------------------------------------------
  * Code blocks — step-2 integration tabs + REPLICATE walkthrough snippets.
