@@ -282,6 +282,22 @@ function startTour(participantId, capabilities, manifest) {
     }
   }
 
+  // Classifies a tab-away duration into the same three bins the lamp
+  // wiring in the 'tabReturn' case below scores it into (long/mid/
+  // flicker) — the live pane's per-row detail string reads this SAME
+  // classification rather than re-deriving the ≥10s/3s cutoffs on its own.
+  function tabAwayBin(duration) {
+    if (duration >= 10000) return { key: 'tabAwayLong', detail: '≥10s bin' };
+    // Strict > matches the library convention: a tab-away exactly at
+    // the cutoff is an unscored flicker (scoring.js:63, summary.js
+    // "same `>` boundary" comment, session-timeline.js flicker bin).
+    if (duration > manifest.signals.tabAway.durationMs) return { key: 'tabAwayMid', detail: '3–10s bin' };
+    // ≤ the cutoff: a flicker — under-3s tab-aways read as noise (a
+    // notification, a stray click), so they get their own, non-hard
+    // lamp instead of going unlit as in v1.
+    return { key: 'tabAwayFlicker', detail: 'flicker' };
+  }
+
   function handleSignal(sig) {
     var task = STEPS[state.stepIndex].task;
     var trialId = task ? task.trialId : null;
@@ -318,24 +334,11 @@ function startTour(participantId, capabilities, manifest) {
         break;
       case 'tabReturn':
         var duration = d.duration_ms || 0;
-        paneRow(trialId, 'tab_return', (duration / 1000).toFixed(1) + 's away', false);
+        var bin = tabAwayBin(duration);
+        paneRow(trialId, 'tab_return', (duration / 1000).toFixed(1) + ' s · ' + bin.detail, false);
         if (!lampWiringActive) break;
-        if (duration >= 10000) {
-          n = (state.lampCounts.tabAwayLong || 0) + 1;
-          syncCountLamp('tabAwayLong', n, false, RAIL_LABELS.tabAwayLong);
-        } else if (duration > manifest.signals.tabAway.durationMs) {
-          // Strict > matches the library convention: a tab-away exactly at
-          // the cutoff is an unscored flicker (scoring.js:63, summary.js
-          // "same `>` boundary" comment, session-timeline.js flicker bin).
-          n = (state.lampCounts.tabAwayMid || 0) + 1;
-          syncCountLamp('tabAwayMid', n, false, RAIL_LABELS.tabAwayMid);
-        } else {
-          // ≤ the cutoff: a flicker — under-3s tab-aways read as noise (a
-          // notification, a stray click), so they get their own, non-hard
-          // lamp instead of going unlit as in v1.
-          n = (state.lampCounts.tabAwayFlicker || 0) + 1;
-          syncCountLamp('tabAwayFlicker', n, false, RAIL_LABELS.tabAwayFlicker);
-        }
+        n = (state.lampCounts[bin.key] || 0) + 1;
+        syncCountLamp(bin.key, n, false, RAIL_LABELS[bin.key]);
         break;
       case 'sidebarOpened':
         paneRow(trialId, 'sidebar_opened', 'width shift ' + (d.deltaIW || 0) + 'px', false);

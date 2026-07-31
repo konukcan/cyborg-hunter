@@ -70,11 +70,10 @@ jobs:
           node tools/gen-signal-manifest.mjs
           git diff --exit-code demo/signal-manifest.json
 
-      - name: Build library dist/ + demo preview bundle + vendored jsPsych
+      - name: Build library dist/ + demo preview bundle
         run: |
           node build.js
           node tools/build-preview-core.mjs
-          node tools/vendor-jspsych.mjs
 
       - name: Assemble demo site (demo/* minus tests/, plus dist/)
         run: node tools/assemble-demo-site.mjs
@@ -139,11 +138,10 @@ jobs:
 
       - run: npm ci
 
-      - name: Build library dist/ + demo preview bundle + vendored jsPsych
+      - name: Build library dist/ + demo preview bundle
         run: |
           node build.js
           node tools/build-preview-core.mjs
-          node tools/vendor-jspsych.mjs
 
       - name: Assemble demo site (demo/* minus tests/, plus dist/)
         run: node tools/assemble-demo-site.mjs
