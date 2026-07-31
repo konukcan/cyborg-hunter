@@ -6,10 +6,17 @@ All notable changes to **cyborg-hunter** are documented here. This project follo
 ## [0.7.2] — 2026-07-29
 
 ### Changed
-- Internal refactor, no behavior change: the report index renderer is split into
-  a pure string-returning core (`html-index-core.js`) plus a thin fs wrapper;
-  `buildViewerModel` and `getByPath` moved to pure shared modules. Enables the
-  live demo's in-browser report preview. Report output is byte-identical.
+- Internal refactor, no behavior change: the report index renderer and its
+  three plot renderers (session-timeline, trajectories, typing-profile) are
+  each split into a pure core (string- or canvas-returning) plus a thin fs
+  wrapper; `buildViewerModel` and `getByPath` moved to pure shared modules.
+  `renderIndexHtml` also gained optional demo-mode opts (`imageSources`,
+  `inlineReplayModels`) for inline image/replay embedding, with a hash-sync
+  guard for the opaque-origin iframe the demo renders reports inside. Together
+  these let the live demo render reports and plots directly in the browser;
+  default (CLI) output is byte-identical.
+- The live demo (https://konukcan.github.io/cyborg-hunter/) was remodeled
+  into a 13-step guided tour; not part of the npm package.
 
 ### Fixed
 - Raw mouse coordinates were persisted in every trial report regardless of the
