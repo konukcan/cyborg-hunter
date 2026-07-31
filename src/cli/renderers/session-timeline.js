@@ -6,7 +6,10 @@
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { drawSessionTimeline, collectEvents, deriveSessionOffset, sanitize, shortId } from './session-timeline-core.js';
-export { drawSessionTimeline, collectEvents, deriveSessionOffset }; // load-bearing re-export: existing importers resolve here
+// Load-bearing re-exports: tests/cli/contract-fixes.test.js imports
+// collectEvents + deriveSessionOffset from this path; drawSessionTimeline
+// serves this wrapper's own loop and the future browser demo plot adapter.
+export { drawSessionTimeline, collectEvents, deriveSessionOffset };
 
 // ── Public API ───────────────────────────────────────────────────────────
 export async function renderSessionTimelines(participants, config) {

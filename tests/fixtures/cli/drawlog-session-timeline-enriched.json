@@ -1,5 +1,5 @@
 {
- "calls": 218,
+ "calls": 232,
  "log": [
   [
    "createCanvas",
@@ -231,6 +231,17 @@
   ],
   [
    "set:fillStyle",
+   "#8e24aa"
+  ],
+  [
+   "fillRect",
+   192.4,
+   139,
+   153.6,
+   20
+  ],
+  [
+   "set:fillStyle",
    "#fafafa"
   ],
   [
@@ -286,6 +297,38 @@
    1.2
   ],
   [
+   "beginPath"
+  ],
+  [
+   "moveTo",
+   244.1,
+   175
+  ],
+  [
+   "lineTo",
+   244.1,
+   199
+  ],
+  [
+   "stroke"
+  ],
+  [
+   "beginPath"
+  ],
+  [
+   "moveTo",
+   551.29,
+   175
+  ],
+  [
+   "lineTo",
+   551.29,
+   199
+  ],
+  [
+   "stroke"
+  ],
+  [
    "set:fillStyle",
    "#fafafa"
   ],
@@ -332,6 +375,28 @@
   [
    "set:textAlign",
    "left"
+  ],
+  [
+   "set:fillStyle",
+   "#c62828"
+  ],
+  [
+   "fillRect",
+   601.99,
+   215,
+   20.48,
+   20
+  ],
+  [
+   "set:fillStyle",
+   "#c62828"
+  ],
+  [
+   "fillRect",
+   704.38,
+   215,
+   2,
+   20
   ],
   [
    "set:strokeStyle",
@@ -1027,7 +1092,7 @@
   ],
   [
    "fillText",
-   "Sidebars  0 openings    Viewport shifts  0    Guard-friction violations  0",
+   "Sidebars  1 opening    Viewport shifts  2    Guard-friction violations  3",
    90,
    299
   ]
