@@ -255,7 +255,7 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
  * --------------------------------------------------------------------- */
 .results-mode main{grid-column:1 / -1;}
 .yourreport{border-left:3px solid var(--live);padding:2px 0 2px 16px;margin:0 0 18px;}
-.yourreport h3{font-family:var(--serif);font-weight:600;font-size:20px;margin:0 0 8px;}
+.yourreport h3{font-size:20px;margin:0 0 8px;}
 .yourreport li{margin:0 0 8px;max-width:60ch;}
 .yourreport .t-hard{color:var(--hard);font-weight:700;}
 .yourreport .t-soft{color:var(--soft);font-weight:700;}
