@@ -905,8 +905,11 @@ export function fullscreenElementOf(doc) {
     }
 
     // ----- Entry trial ---------------------------------------------
-    function createEntryTrial(opts = {}) {
-        const message = opts.message || `
+    // Hoisted out of createEntryTrial (verbatim string move) so the frozen
+    // public API can expose it as `defaultEntryMessage` below — demo/demo.js
+    // renders this SAME string verbatim on its guard-entry step, so it can
+    // never drift out of sync with what a real participant actually sees.
+    const DEFAULT_ENTRY_MESSAGE = `
             <h2>Fullscreen mode required</h2>
             <p>To keep the experiment fair for everyone, we ask that this study be completed in fullscreen mode,
                with no browser sidebars (Gemini, Copilot, Edge sidebar, etc.) open, and with this tab focused.</p>
@@ -914,6 +917,9 @@ export function fullscreenElementOf(doc) {
             <p>We care about collecting high-quality data, and these rules help ensure a fair experience for all participants.</p>
             <p>Please close any sidebars now, then click the button below to continue in fullscreen.</p>
         `;
+
+    function createEntryTrial(opts = {}) {
+        const message = opts.message || DEFAULT_ENTRY_MESSAGE;
         return {
             type: jsPsychHtmlButtonResponse,
             stimulus: message,
@@ -1048,6 +1054,9 @@ export function fullscreenElementOf(doc) {
         createEntryTrial: function (opts) { return createEntryTrial(opts); },
         onViolation: function (handler) { return onViolation(handler); },
         getCurrentState: function () { return getCurrentState(); },
+        // Added on the object literal BEFORE Object.freeze() below — a
+        // post-freeze assignment would silently no-op.
+        defaultEntryMessage: DEFAULT_ENTRY_MESSAGE,
     };
 
     Object.freeze(api);

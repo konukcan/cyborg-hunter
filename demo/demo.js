@@ -1,7 +1,7 @@
 // demo/demo.js
-// Tour engine: 12-step navigation, {{path}} template substitution, capability
+// Tour engine: 13-step navigation, {{path}} template substitution, capability
 // snapshot, participant-id boot stamp. Renders STEPS from steps.js through
-// the idempotent lifecycle helper (lifecycle.js) so every advance/Back/skip
+// the idempotent lifecycle helper (lifecycle.js) so every advance/Back
 // closes any open trial before optionally opening the next.
 //
 // Live-signal rail: event-driven via the monitor's onSignal callback +
@@ -9,12 +9,22 @@
 // it's only computable at endTrial()), plus a 5s poll for session-only
 // signals (viewport-width shifts have no onSignal event either; sidebar gets
 // BOTH — see pollSessionSignals()).
+//
+// Live session pane: the SAME onSignal dispatch, trial open/close, and
+// session poll also feed live-pane.js's append-only stream + raw-JSON view
+// (paneRow()) — the rail is the demo-only curated subset, the pane is the
+// full record. Frozen (+ replay/guard finalized, rail hidden) on entering
+// the results step.
 
-import { STEPS, POSITIONING, CLOSING_CTA, CONFIG_CAVEAT, RAIL_GROUPS, RAIL_INTRO } from './steps.js';
+import {
+  STEPS, POSITIONING, CLOSING_CTA, CONFIG_CAVEAT, RAIL_GROUPS, RAIL_INTRO,
+  CODE_TABS, HONEYPOT, DOWNLOAD_FILES, REPLICATE
+} from './steps.js';
 import { makeLifecycle } from './lifecycle.js';
 import { renderRail, light, acknowledge } from './rail.js';
 import { buildPayload } from './payload.js';
-import { runFinale } from './finale.js';
+import { makeLivePane } from './live-pane.js';
+import { escHtml } from './util.js';
 
 var SESSION_POLL_MS = 5000;
 
@@ -43,11 +53,19 @@ function substitute(str, signals, version) {
   });
 }
 
+// Live-pane detail strings truncate any visitor-triggered text (pasted/
+// dropped content) to a readable width — the pane escapes the FULL string
+// at render time regardless, this is only about row length.
+function truncate(s, n) {
+  s = String(s);
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
 function fullscreenIsActive() {
   return !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement);
 }
 
-// Step 7's 1.5s fullscreen-entry race. Calls OUR OWN requestFullscreen() —
+// Step 8's 1.5s fullscreen-entry race. Calls OUR OWN requestFullscreen() —
 // not GuardFriction.requestFullscreen(), which fires the request and
 // swallows any promise rejection (prior eng review) — so we get a real
 // promise to race against a timeout and the 'fullscreenchange' event.
@@ -159,7 +177,6 @@ function startTour(participantId, capabilities, manifest) {
     // are over anyway, so a live reference isn't needed.
     sessionReport: null,
     capabilities: capabilities,
-    replayOptIn: false,
     lampCounts: {},
     act2Skipped: false,
     violations: [],
@@ -169,34 +186,55 @@ function startTour(participantId, capabilities, manifest) {
     // chip row.
     guardStopToken: null,
     chipCounts: {},
-    // C8 (replay opt-in): the attached CyborgHunterReplay instance (stays
-    // null unless the welcome-screen toggle was ON at "Start the tour"),
-    // and its finalized recording, cached so the download button and the
-    // "show as text" fallback always agree.
+    // C8 (replay, always-on): the attached CyborgHunterReplay instance
+    // (startReplay() attempts it unconditionally at "Start"), its finalized
+    // recording — cached so the download button and the "show as text"
+    // fallback always agree — and whether attaching ever failed, so the
+    // downloads step and results copy can say so honestly instead of just
+    // silently omitting the file.
     recorder: null,
     replayRecording: null,
-    // C9 (jsPsych finale): guards step 10 against re-running on a Back-then-
-    // forward revisit — CyborgHunter.init() is a module-level singleton, so
-    // a second run would destroy-and-recreate yet another instance and push
-    // duplicate trial reports into state.trialReports (see finale.js).
-    // finaleFailed remembers WHICH outcome so a revisit's status text is
-    // accurate instead of the stale "Loading jsPsych…" default.
-    finaleStarted: false,
-    finaleFailed: false,
-    // True once finale.js's vendor load succeeded and it's about to call
-    // initJsPsych() — i.e. about to destroy the outer CyborgHunter monitor
-    // (see goTo()'s lifecycle.transitionTo guard below). Deliberately NOT
-    // the same as finaleStarted: in the degraded (vendor-missing) path the
-    // outer monitor is never touched, so Back-navigation through earlier
-    // steps must keep working normally there.
-    monitorDestroyed: false
+    replayUnavailable: false,
+    // Live session pane (demo/live-pane.js) + its own clock zero, set right
+    // after creation below.
+    pane: null,
+    t0: 0
   };
 
   var cardEl = document.getElementById('card');
   var progressEl = document.getElementById('progress');
   var railEl = document.getElementById('rail');
+  // The CSS card treatment (background/shadow/padding) lives on this class;
+  // set once here rather than in every renderStep() innerHTML string.
+  cardEl.classList.add('stepcard');
 
   renderRail(railEl, { groups: RAIL_GROUPS, intro: RAIL_INTRO });
+
+  // ----- Live session pane -----------------------------------------------
+  // Persistently visible record (spec §5.2), fed from the same signal
+  // dispatch as the rail. buildCurrentPayload() is the SAME buildPayload(...)
+  // call buildDownloadFile('sessionData') makes, extracted so both stay in
+  // sync (DRY) — declared here as a function so it can close over `monitor`
+  // below despite running after it (function declarations hoist).
+  state.pane = makeLivePane(document.querySelector('[data-role="live-pane"]'), participantId);
+  state.t0 = performance.now();
+
+  function buildCurrentPayload() {
+    var trials = state.trialReports.map(function (r) {
+      return { trialId: r.trialId, integrity: r };
+    });
+    return buildPayload({
+      pid: participantId,
+      trials: trials,
+      sessionReport: monitor.getSessionReport(),
+      violations: state.violations
+    });
+  }
+
+  function paneRow(trial, event, detail, hard) {
+    state.pane.addRow({ tMs: performance.now() - state.t0, trial: trial, event: event, detail: detail, hard: !!hard });
+    state.pane.setPayload(buildCurrentPayload());
+  }
 
   // Lamp wiring is lifecycle-bound (spec: "starts and stops with the tour").
   // startLampWiring/stopLampWiring are idempotent: entering the results step
@@ -207,7 +245,7 @@ function startTour(participantId, capabilities, manifest) {
   var sessionPollId = null;
   // Step 6 (autotype)'s char-by-char animation runs its own setInterval,
   // outside the library entirely — tracked here so goTo() can cancel a
-  // still-running animation on navigation (Back/Continue/skip are all valid
+  // still-running animation on navigation (Back/Continue are both valid
   // mid-animation, per "advance is always available"), instead of leaving it
   // ticking against a detached DOM node until it finishes on its own.
   var autotypeIntervalId = null;
@@ -245,24 +283,43 @@ function startTour(participantId, capabilities, manifest) {
   }
 
   function handleSignal(sig) {
-    if (!lampWiringActive) return;
-    var n;
+    var task = STEPS[state.stepIndex].task;
+    var trialId = task ? task.trialId : null;
+    var d = sig.data || {};
+    var n, hard;
     switch (sig.type) {
       case 'paste':
         n = (state.lampCounts.paste || 0) + 1;
-        syncCountLamp('paste', n, n >= manifest.signals.paste.hardCountThreshold, RAIL_LABELS.paste);
+        hard = n >= manifest.signals.paste.hardCountThreshold;
+        paneRow(trialId, 'paste', '"' + truncate(d.text || '', 28) + '" · ' + d.pastedLength + ' chars', hard);
+        if (!lampWiringActive) break;
+        syncCountLamp('paste', n, hard, RAIL_LABELS.paste);
         break;
       case 'copy':
+        paneRow(trialId, 'copy', d.selectedLength + ' chars selected', false);
+        if (!lampWiringActive) break;
+        n = (state.lampCounts.copy || 0) + 1;
+        syncCountLamp('copy', n, false, RAIL_LABELS.copy);
+        break;
       case 'cut':
+        // Logged under the same 'copy' lamp/count as clipboard.js logs it
+        // under the same session copyCount — no text is available for cuts.
+        paneRow(trialId, 'cut', null, false);
+        if (!lampWiringActive) break;
         n = (state.lampCounts.copy || 0) + 1;
         syncCountLamp('copy', n, false, RAIL_LABELS.copy);
         break;
       case 'drop':
         n = (state.lampCounts.drop || 0) + 1;
-        syncCountLamp('drop', n, n >= manifest.signals.drop.hardCountThreshold, RAIL_LABELS.drop);
+        hard = n >= manifest.signals.drop.hardCountThreshold;
+        paneRow(trialId, 'drop', '"' + truncate(d.text || '', 28) + '" · ' + d.droppedLength + ' chars', hard);
+        if (!lampWiringActive) break;
+        syncCountLamp('drop', n, hard, RAIL_LABELS.drop);
         break;
       case 'tabReturn':
-        var duration = (sig.data && sig.data.duration_ms) || 0;
+        var duration = d.duration_ms || 0;
+        paneRow(trialId, 'tab_return', (duration / 1000).toFixed(1) + 's away', false);
+        if (!lampWiringActive) break;
         if (duration >= 10000) {
           n = (state.lampCounts.tabAwayLong || 0) + 1;
           syncCountLamp('tabAwayLong', n, false, RAIL_LABELS.tabAwayLong);
@@ -272,21 +329,35 @@ function startTour(participantId, capabilities, manifest) {
           // "same `>` boundary" comment, session-timeline.js flicker bin).
           n = (state.lampCounts.tabAwayMid || 0) + 1;
           syncCountLamp('tabAwayMid', n, false, RAIL_LABELS.tabAwayMid);
+        } else {
+          // ≤ the cutoff: a flicker — under-3s tab-aways read as noise (a
+          // notification, a stray click), so they get their own, non-hard
+          // lamp instead of going unlit as in v1.
+          n = (state.lampCounts.tabAwayFlicker || 0) + 1;
+          syncCountLamp('tabAwayFlicker', n, false, RAIL_LABELS.tabAwayFlicker);
         }
         break;
       case 'sidebarOpened':
+        paneRow(trialId, 'sidebar_opened', 'width shift ' + (d.deltaIW || 0) + 'px', false);
+        if (!lampWiringActive) break;
         n = (state.lampCounts.sidebar || 0) + 1;
         syncCountLamp('sidebar', n, false, RAIL_LABELS.sidebar);
         break;
       case 'typingOutsideExperiment':
+        paneRow(trialId, 'foreign_input', 'outside field: ' + (d.targetTag || 'unknown'), false);
+        if (!lampWiringActive) break;
         n = (state.lampCounts.foreignInput || 0) + 1;
         syncCountLamp('foreignInput', n, false, RAIL_LABELS.foreignInput);
         break;
       case 'syntheticInsertion':
+        paneRow(trialId, 'synthetic_insertion', (d.dataLength || 0) + ' chars inserted', true);
+        if (!lampWiringActive) break;
         n = (state.lampCounts.syntheticInsertion || 0) + 1;
         syncCountLamp('syntheticInsertion', n, true, RAIL_LABELS.syntheticInsertion);
         break;
       case 'keyboardShortcut':
+        paneRow(trialId, 'devtools_shortcut', d.combo || null, false);
+        if (!lampWiringActive) break;
         n = (state.lampCounts.devTools || 0) + 1;
         syncCountLamp('devTools', n, false, RAIL_LABELS.devTools);
         break;
@@ -304,8 +375,11 @@ function startTour(participantId, capabilities, manifest) {
     // being over doesn't mean trials stop closing), and the download step
     // needs every trial the visitor actually ran.
     state.trialReports.push(report);
-    if (!lampWiringActive) return;
     var typingSpeed = report.trialSignals && report.trialSignals.soft && report.trialSignals.soft.typingSpeed;
+    if (typingSpeed && typingSpeed.hit) {
+      paneRow(report.trialId, 'fast_typing', typingSpeed.charsPerSec.toFixed(1) + ' cps', false);
+    }
+    if (!lampWiringActive) return;
     if (typingSpeed && typingSpeed.hit) {
       var n = (state.lampCounts.fastTyping || 0) + 1;
       syncCountLamp('fastTyping', n, false, RAIL_LABELS.fastTyping);
@@ -319,16 +393,23 @@ function startTour(participantId, capabilities, manifest) {
   //     (handled instantly above), but the layout_compression method does
   //     NOT fire a signal — the poll is a backstop that also catches those.
   //   - honeypot bait: GuardHoneypot has no event callback, only polled getters.
+  // Each pane row here is guarded on "is this actually new" (checked against
+  // the SAME state.lampCounts the lamp itself uses) so a repeat poll tick
+  // over an already-announced count doesn't re-emit a duplicate row.
   function pollSessionSignals() {
     var report = monitor.getSessionReport();
 
     var sidebarOpens = report.sidebarEvents.filter(function (e) { return e.type === 'opened'; }).length;
+    if (sidebarOpens > (state.lampCounts.sidebar || 0)) paneRow(null, 'sidebar_opened', null, false);
     syncCountLamp('sidebar', sidebarOpens, false, RAIL_LABELS.sidebar);
 
-    syncCountLamp('viewport', report.viewportWidthShifts.length, false, RAIL_LABELS.viewport);
+    var viewportShifts = report.viewportWidthShifts.length;
+    if (viewportShifts > (state.lampCounts.viewport || 0)) paneRow(null, 'viewport_shift', null, false);
+    syncCountLamp('viewport', viewportShifts, false, RAIL_LABELS.viewport);
 
     if (window.GuardHoneypot) {
       var hp = window.GuardHoneypot.getHoneypotData();
+      if (hp.ai_use && !state.lampCounts.honeypot) paneRow(null, 'honeypot', 'bait field filled', true);
       if (hp.ai_use) syncCountLamp('honeypot', 1, true, RAIL_LABELS.honeypot);
     }
   }
@@ -336,23 +417,27 @@ function startTour(participantId, capabilities, manifest) {
   var monitor = window.CyborgHunter.init({
     participantId: participantId,
     preset: 'standard',
-    onSignal: handleSignal
+    onSignal: handleSignal,
+    // A8: raw per-event mouse track, opt-in and off by default in the
+    // library — the demo turns it on so the results report's trajectory
+    // plots have real data to draw from a live session.
+    collectForPostHoc: { rawMouseTrack: true }
   });
   monitor.startSession();
-  // Bait stays passively armed for the whole tour (spec: "No honeypot step
-  // card — bait stays passively armed; a pre-recorded agent trace shows it
-  // working"). No dedicated step calls this, so it has to happen here —
-  // without it, pollSessionSignals()'s window.GuardHoneypot.getHoneypotData()
-  // call below always reads the pre-injection default (ai_use: false) and
-  // the honeypot rail lamp can never light.
+  // Bait stays passively armed for the whole tour (spec: "bait stays
+  // passively armed"). No dedicated step calls this, so it has to happen
+  // here — without it, pollSessionSignals()'s
+  // window.GuardHoneypot.getHoneypotData() call above always reads the
+  // pre-injection default (ai_use: false) and the honeypot rail lamp can
+  // never light.
   if (window.GuardHoneypot) {
     window.GuardHoneypot.init({ friction: window.GuardFriction });
   }
   // Recorder-like bridge for makeLifecycle's optional recorder param (C8).
-  // A live proxy rather than passing state.recorder directly: replay only
-  // attaches (if the visitor opted in) inside the "Start the tour" click,
-  // which runs AFTER this lifecycle is constructed — reading state.recorder
-  // at call time lets the very first trial (step 2) get bracketed too.
+  // A live proxy rather than passing state.recorder directly: the replay
+  // recorder only attaches inside the "Start" click (startReplay()), which
+  // runs AFTER this lifecycle is constructed — reading state.recorder at
+  // call time lets the very first trial (step 2) get bracketed too.
   var recorderBridge = {
     startTrial: function (opts) { if (state.recorder) state.recorder.startTrial(opts); },
     endTrial: function () { if (state.recorder) state.recorder.endTrial(); }
@@ -377,6 +462,7 @@ function startTour(participantId, capabilities, manifest) {
       if (violation.phase === 'start' && currentTask && currentTask.kind === 'guard-cheat') {
         state.chipCounts[violation.reason] = (state.chipCounts[violation.reason] || 0) + 1;
         renderViolationChips();
+        paneRow(currentTask.trialId, 'violation: ' + violation.reason, null, true);
       }
       if (!lampWiringActive) return;
       if (violation.phase !== 'start') return;
@@ -388,10 +474,10 @@ function startTour(participantId, capabilities, manifest) {
   // ----- C7: guard act -------------------------------------------------
 
   // Standalone GuardFriction.start() — not the jsPsych entryTrial() helper,
-  // since this demo has no jsPsych instance until the finale trials. Only
-  // called after raceFullscreenEntry() already confirmed fullscreen is
-  // active: start() runs an immediate is-fullscreen check and would log a
-  // false 'not_fullscreen' violation if called first.
+  // since this demo never spins up a jsPsych instance. Only called after
+  // raceFullscreenEntry() already confirmed fullscreen is active: start()
+  // runs an immediate is-fullscreen check and would log a false
+  // 'not_fullscreen' violation if called first.
   function startGuardFriction() {
     try {
       if (window.GuardFriction && typeof window.GuardFriction.start === 'function') {
@@ -404,8 +490,9 @@ function startTour(participantId, capabilities, manifest) {
   }
 
   // Idempotent: state.guardStopToken is cleared after the first successful
-  // stop() call, so reaching guard-finish normally AND skipping past it
-  // (skipToFinale()/Alt+S) never double-stops.
+  // stop() call, so the end-guard button (the only path that calls this
+  // during the tour) and the defensive call at the results step never
+  // double-stop.
   function finalizeGuard() {
     if (!state.guardStopToken) return;
     var token = state.guardStopToken;
@@ -428,10 +515,11 @@ function startTour(participantId, capabilities, manifest) {
   }
 
   // Renders the fallback note (steps.js copy if the task defines one, else
-  // a minimal inline string) and, if not already offered, a "Skip to
-  // finale" link — reusing the same data-key the card's click delegation
-  // already handles. The primary "Enter fullscreen" button stays enabled
-  // for a retry either way (advance is never fully blocked).
+  // a minimal inline string) and, if not already offered, a skip link
+  // straight to "From signals to scores" (index 10) — reusing the same
+  // data-key the card's click delegation already handles. The primary
+  // "Enter fullscreen" button stays enabled for a retry either way (advance
+  // is never fully blocked).
   function showFullscreenFallback() {
     state.act2Skipped = true;
     var step = STEPS[state.stepIndex];
@@ -441,15 +529,15 @@ function startTour(participantId, capabilities, manifest) {
         "Fullscreen didn't engage in time, so Act 2's enforcement can't run in this browser. That's fine — skip ahead; everything else in the tour still works.";
       note.hidden = false;
     }
-    if (!cardEl.querySelector('a[data-key="skipToFinale"]')) {
+    if (!cardEl.querySelector('a[data-key="skipToScores"]')) {
       var secondary = document.createElement('p');
       secondary.className = 'secondary';
-      secondary.innerHTML = '<a href="#" data-key="skipToFinale">Skip to finale</a>';
+      secondary.innerHTML = '<a href="#" class="skip" data-key="skipToScores">Skip to "From signals to scores"</a>';
       cardEl.appendChild(secondary);
     }
   }
 
-  // Drives step 7's fullscreen-entry race. A guard API absence (bundle
+  // Drives step 8's fullscreen-entry race. A guard API absence (bundle
   // failed to load) is treated the same as a failed race — fallback + skip,
   // never a throw — since advancing into guard-cheat with no guard running
   // would silently pretend enforcement is active when it isn't.
@@ -476,15 +564,19 @@ function startTour(participantId, capabilities, manifest) {
     });
   }
 
-  // ----- C8: replay opt-in ----------------------------------------------
+  // ----- C8: replay (always-on) ------------------------------------------
 
-  // Attaches the standalone replay recorder if the welcome-screen toggle
-  // was ON. Runs synchronously inside the "Start the tour" click handler,
-  // before goTo(1) opens step 2's trial — recorderBridge reads
+  // Attaches the standalone replay recorder unconditionally, called from the
+  // "Start" click before goTo(1) opens step 2's trial — recorderBridge reads
   // state.recorder live, so as long as this finishes first, the very first
-  // trial gets bracketed too.
-  function startReplayIfOptedIn() {
-    if (!state.replayOptIn) return;
+  // trial gets bracketed too. The REC pill shows immediately regardless of
+  // whether attach actually succeeds (spec: replay is on by default); a
+  // failure keeps the tour degrading gracefully and marks
+  // state.replayUnavailable so the downloads step and results copy can say
+  // so honestly instead of just silently dropping the file.
+  function startReplay() {
+    var recEl = document.getElementById('rec');
+    if (recEl) recEl.hidden = false;
     try {
       if (!window.CyborgHunterReplay || typeof window.CyborgHunterReplay.attach !== 'function') {
         throw new Error('CyborgHunterReplay unavailable');
@@ -495,12 +587,10 @@ function startTour(participantId, capabilities, manifest) {
         autoSave: { mode: 'none' }
       });
       state.recorder.startSession();
-      var recEl = document.getElementById('rec');
-      if (recEl) recEl.hidden = false;
     } catch (err) {
-      console.warn('cyborg-hunter demo: replay opt-in failed, continuing without a recording', err);
-      state.replayOptIn = false;
+      console.warn('cyborg-hunter demo: replay attach failed, continuing without a recording', err);
       state.recorder = null;
+      state.replayUnavailable = true;
     }
   }
 
@@ -531,8 +621,8 @@ function startTour(participantId, capabilities, manifest) {
     return STEPS.findIndex(function (s) { return s.act === 'act2'; });
   }
 
-  function finaleIndex() {
-    return STEPS.findIndex(function (s) { return s.act === 'finale'; });
+  function scoresIndex() {
+    return STEPS.findIndex(function (s) { return s.id === 'signals-to-scores'; });
   }
 
   // .eyebrow .act2 (demo.css) colors the "Act 2" prefix red — it's a
@@ -551,25 +641,13 @@ function startTour(participantId, capabilities, manifest) {
   // fallback, so both always agree on exactly what would have been saved.
   function buildDownloadFile(key) {
     if (key === 'sessionData') {
-      // Wrap each raw endTrial() report the way the jsPsych extension's
-      // on_finish() does — { integrity: report } — so ingest.js's Shape-1
-      // reader (t[intField], default 'integrity') finds it (demo/payload.js).
-      var trials = state.trialReports.map(function (r) {
-        return { trialId: r.trialId, integrity: r };
-      });
-      var payload = buildPayload({
-        pid: participantId,
-        trials: trials,
-        sessionReport: monitor.getSessionReport(),
-        violations: state.violations
-      });
-      return { filename: participantId + '.json', data: payload };
+      return { filename: participantId + '.json', data: buildCurrentPayload() };
     }
     if (key === 'replay') {
-      // renderDownloadsPanel() already drops this button when
-      // !state.replayOptIn, so this is only reachable with a real attempt
-      // to attach — but guard anyway in case opt-in silently failed.
-      if (!state.replayOptIn) return null;
+      // renderDownloadsPanel() disables this button when
+      // state.replayUnavailable, so this is only reachable after a real
+      // attach attempt — guard anyway in case finalizeReplay() has nothing
+      // to return.
       var recording = finalizeReplay();
       if (!recording) return null;
       // Epoch from the recording's own meta when present (mirrors
@@ -621,22 +699,42 @@ function startTour(participantId, capabilities, manifest) {
     dlg.showModal();
   }
 
-  function renderDownloadsPanel(task) {
-    // Replay opt-out drops the replay file from the download step entirely
-    // (spec: "downloads drop the replay file").
-    var files = task.files.filter(function (f) {
-      return f.key !== 'replay' || state.replayOptIn;
+  // Step 13's documentation-style walkthrough (REPLICATE.sections), numbered
+  // headings with copyable code blocks. code may carry {{version}} — tpl()
+  // substitutes before escaping, same order as everywhere else code renders.
+  function renderReplicateSection() {
+    var html = '<div class="replicate">';
+    REPLICATE.sections.forEach(function (s) {
+      html += '<h3>' + s.n + '. ' + escHtml(s.heading) + '</h3>';
+      html += '<p>' + escHtml(s.text) + '</p>';
+      if (s.code) html += '<pre><code>' + escHtml(tpl(s.code)) + '</code></pre>';
     });
+    html += '<p class="hint">' + escHtml(REPLICATE.installNote) + '</p>';
+    html += '</div>';
+    return html;
+  }
+
+  function renderClosingCta() {
+    return (
+      '<p class="secondary">' + escHtml(CLOSING_CTA.installInvitation) + ' ' +
+      '<a href="' + CLOSING_CTA.primaryHref + '">' + escHtml(CLOSING_CTA.primaryLabel) + '</a> &middot; ' +
+      '<a href="' + CLOSING_CTA.githubHref + '">GitHub</a></p>'
+    );
+  }
+
+  function renderDownloadsPanel(task) {
     // scramble coupling: same .jspsych-content convention as renderTaskPanel
     // below — GuardFriction's obfuscateContent() only touches
     // getJsPsychContent()'s match, so this class keeps the downloads panel a
     // valid scramble target too (moot in practice: guard is long stopped by
     // this step, but the class is applied uniformly regardless of step).
     var parts = ['<div class="task jspsych-content">', '<p class="label">' + task.kind + '</p>'];
-    parts.push('<div class="files">' + files.map(function (f) {
+    parts.push('<div class="files">' + DOWNLOAD_FILES.map(function (f) {
+      var disabled = f.key === 'replay' && state.replayUnavailable;
+      var description = disabled ? 'recording unavailable in this browser' : f.description;
       // Config caveat (spec :182/:288): first-party copy, so innerHTML is
       // safe here the same as every other steps.js string this panel
-      // renders (task.description, f.label, etc.) — rendered directly under
+      // renders (f.label, f.description, etc.) — rendered directly under
       // the config file's Save/show-as-text row, not restructuring the panel.
       var caveat = f.key === 'config'
         ? '<p class="file-caveat" data-role="config-caveat">' + tpl(CONFIG_CAVEAT) + '</p>'
@@ -644,11 +742,11 @@ function startTour(participantId, capabilities, manifest) {
       return (
         '<div class="file">' +
         '<div class="file-info">' + f.label + '<small>' + f.filename + '</small>' +
-        '<span class="file-desc">' + f.description + '</span></div>' +
+        '<span class="file-desc">' + description + '</span></div>' +
         '<div class="file-actions">' +
         '<button class="btn" data-action="download" data-key="' + f.key +
-        '" data-saved-label="' + f.savedLabel + '">Save</button>' +
-        '<a href="#" data-action="showtext" data-key="' + f.key + '">show as text</a>' +
+        '" data-saved-label="' + f.savedLabel + '"' + (disabled ? ' disabled' : '') + '>Save</button>' +
+        (disabled ? '' : '<a href="#" data-action="showtext" data-key="' + f.key + '">show as text</a>') +
         '</div>' + caveat + '</div>'
       );
     }).join('') + '</div>');
@@ -657,11 +755,72 @@ function startTour(participantId, capabilities, manifest) {
       '<button class="btn" data-action="close-dialog">Close</button></dialog>'
     );
     parts.push('</div>');
+    parts.push(renderReplicateSection());
+    parts.push(renderClosingCta());
     return parts.join('');
   }
 
-  function escHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  // Step 2's "what this looks like in your code" split (CODE_TABS): two
+  // pill tabs, same active/hidden pattern as live-pane.js's stream/JSON tabs.
+  function renderCodeTabs() {
+    var order = ['jspsych', 'plainjs'];
+    var html = '<p class="hint">' + escHtml(CODE_TABS.caption) + '</p>';
+    html += '<div class="code-tabs">' + order.map(function (key) {
+      var active = key === CODE_TABS.defaultTab ? ' active' : '';
+      return '<button class="code-tab' + active + '" data-tab="' + key + '">' + escHtml(CODE_TABS[key].label) + '</button>';
+    }).join('') + '</div>';
+    html += order.map(function (key) {
+      var hidden = key === CODE_TABS.defaultTab ? '' : ' hidden';
+      return '<pre data-role="code-pane" data-tab="' + key + '"' + hidden + '><code>' + escHtml(CODE_TABS[key].code) + '</code></pre>';
+    }).join('');
+    return html;
+  }
+
+  // Step 7's honeypot task: the (escaped) bait markup, the "act like an
+  // agent" simulate button, and the sidebar invitation.
+  function renderHoneypotPanel(task) {
+    return (
+      '<div class="task jspsych-content">' +
+      '<p class="label">' + task.kind + '</p>' +
+      '<pre><code>' + escHtml(HONEYPOT.snippet) + '</code></pre>' +
+      '<div class="btnrow"><button class="btn" data-action="honeypot-sim" data-role="honeypot-sim-button">' +
+      escHtml(HONEYPOT.simulateLabel) + '</button></div>' +
+      '<p class="hint">' + escHtml(HONEYPOT.sidebarInvite) + '</p>' +
+      '</div>'
+    );
+  }
+
+  // What an agent does when it finds the bait: read the DOM, fill it. Does
+  // exactly that against the REAL fields GuardHoneypot planted, dispatching
+  // real events, so the detection path exercised is the product's own —
+  // not a demo shortcut. GuardHoneypot's existing 5s poll (pollSessionSignals)
+  // is what actually lights the honeypot lamp/pane-row once ai_use flips.
+  function runHoneypotSim(button) {
+    button.disabled = true;
+    button.textContent = HONEYPOT.simulateBusy;
+    var box = document.getElementById('fg-ai-use');
+    var report = document.getElementById('fg-ai-report');
+    if (box) { box.checked = true; box.dispatchEvent(new Event('change', { bubbles: true })); }
+    if (report) {
+      report.value = 'Simulated agent: answered the on-page question.';
+      report.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    setTimeout(function () { button.textContent = HONEYPOT.simulateDone; }, 400);
+  }
+
+  // Step 8's guard entry: the library's own entry message rendered VERBATIM
+  // (truth-by-construction — never a drifting copy of it), with its own
+  // button wired to the existing fullscreen-entry flow. Not wrapped in
+  // .jspsych-content: the guard curtain never scrambles this step (it isn't
+  // armed yet — start() only runs after entry succeeds).
+  function renderGuardEntryPanel() {
+    var msg = (window.GuardFriction && window.GuardFriction.defaultEntryMessage) || '';
+    return (
+      '<div class="entrybox">' + msg +
+      '<div class="btnrow"><button class="btn" data-action="enter-fullscreen">Enter fullscreen and continue</button></div>' +
+      '</div>' +
+      '<p class="rule fallback-note" hidden></p>'
+    );
   }
 
   // ----- Step 6: autotype ------------------------------------------------
@@ -710,44 +869,27 @@ function startTour(participantId, capabilities, manifest) {
     }, 35);
   }
 
-  // Renders step 10's task panel: a mount point for the two live jsPsych
-  // trials (finale.js's display_element target) plus the labeled code-
-  // snippet split (steps.js's task.snippetSplit — actual code, not just a
-  // label/file reference). The live-trial status paragraph and the
-  // vendor/load-failure degradation note (task.degradedNote) are updated by
-  // runFinaleStep() below once finale.js's promise settles; advance stays
-  // available the whole time (spec: "advance always available").
-  function renderFinalePanel(task) {
-    var parts = ['<div class="task jspsych-content">', '<p class="label">' + task.kind + '</p>'];
-    parts.push('<p class="hint">' + task.trialCount + ' trials via jsPsych</p>');
-    parts.push(
-      '<div class="finale-run">' +
-      '<div class="finale-mount" data-role="finale-mount"></div>' +
-      '<p class="hint" data-role="finale-status">Loading jsPsych…</p>' +
-      '<p class="rule finale-note" hidden></p>' +
-      '</div>'
-    );
-    parts.push('<div class="finale-snippets">' + task.snippetSplit.map(function (s) {
-      return (
-        '<p class="hint">' + s.label + ' — <code>' + s.file + '</code></p>' +
-        '<pre><code>' + escHtml(s.code) + '</code></pre>'
-      );
-    }).join('') + '</div>');
-    parts.push('</div>');
-    return parts.join('');
-  }
-
   function renderTaskPanel(task) {
     if (!task) return '';
     if (task.kind === 'downloads') return renderDownloadsPanel(task);
-    if (task.kind === 'jspsych-finale') return renderFinalePanel(task);
+    if (task.kind === 'honeypot') return renderHoneypotPanel(task);
+    if (task.kind === 'fullscreen-entry') return renderGuardEntryPanel();
     // scramble coupling: GuardFriction's obfuscateContent() only touches
     // getJsPsychContent()'s match (.jspsych-content / .jspsych-display-element
     // / #jspsych-content) — this class makes every task panel a valid target,
     // not just Act 2's, so a violation during any step scrambles the task.
     var parts = ['<div class="task jspsych-content">', '<p class="label">' + task.kind + '</p>'];
-    var ruleText = task.prompt || task.ruleText;
-    if (ruleText) parts.push('<p class="rule">' + tpl(ruleText) + '</p>');
+    // The actual question text (baseline's `prompt`, clipboard-cheat's
+    // `question`) gets the plain bold .question treatment; .rule is
+    // reserved for callout-style copy (the guard's fallback-note).
+    var questionText = task.prompt || task.question;
+    if (questionText) parts.push('<p class="question">' + tpl(questionText) + '</p>');
+    if (task.kind === 'copy-paste') {
+      parts.push(
+        '<div class="answerchip"><code>' + escHtml(task.providedAnswer) + '</code>' +
+        '<span class="hint">copy this, then paste it below</span></div>'
+      );
+    }
     if (task.kind === 'type-answer' || task.kind === 'copy-paste') {
       parts.push('<textarea rows="3" placeholder="Type your answer here"></textarea>');
     }
@@ -758,62 +900,29 @@ function startTour(participantId, capabilities, manifest) {
         tpl(task.buttonLabel) + '</button></div>'
       );
     }
-    if (task.kind === 'fullscreen-entry') {
-      parts.push('<p class="rule fallback-note" hidden></p>');
-    }
     if (task.targetPastes) {
-      parts.push('<p class="hint">Target pastes: ' + tpl(task.targetPastes) + '</p>');
-    }
-    if (task.suggestedSeconds) {
-      parts.push('<p class="hint">Suggested time away: ' + task.suggestedSeconds + 's</p>');
-    }
-    if (task.visualCps) {
-      parts.push(
-        '<p class="hint">Visual speed: ' + task.visualCps + ' cps &middot; real threshold: ' +
-        tpl(String(task.realThresholdCps)) + ' cps</p>'
-      );
+      parts.push('<p class="hint">Target pastes: ' + task.targetPastes + '</p>');
     }
     parts.push('</div>');
+    // End-guard button (step 9): a sibling OUTSIDE .jspsych-content — its
+    // legibility can never depend on scramble/blur context — doubling as
+    // this step's primary action (steps.js sets primaryLabel for it, but
+    // renderStep() suppresses the normal .btnrow primary for guard-cheat so
+    // there's only the one button).
+    if (task.kind === 'guard-cheat') {
+      parts.push('<button class="endguard" data-action="end-guard">' + tpl(STEPS[state.stepIndex].primaryLabel) + '</button>');
+    }
     return parts.join('');
   }
 
   function renderSecondary(step) {
     if (!step.secondary) return '';
     return step.secondary.map(function (s) {
-      if (s.kind === 'toggle') {
-        var checked = state.replayOptIn ? ' checked' : '';
-        return '<label><input type="checkbox" data-key="' + s.key + '"' + checked + '> ' + s.label + '</label>';
-      }
       if (s.kind === 'link') {
-        var shortcut = s.shortcut ? ' (' + s.shortcut + ')' : '';
-        return '<a href="#" data-key="' + s.key + '">' + s.label + shortcut + '</a>';
+        return '<a href="#" class="skip" data-key="' + s.key + '">' + s.label + '</a>';
       }
       return '';
     }).join(' ');
-  }
-
-  // Counts-by-type traces summary for the guard-finish step, built from
-  // every violation GuardFriction reported this session (start events only
-  // — 'end'/'tamper' phases describe the same violation, not a new one).
-  function renderTracesSummary() {
-    var counts = {};
-    state.violations.forEach(function (v) {
-      if (v.phase !== 'start') return;
-      counts[v.reason] = (counts[v.reason] || 0) + 1;
-    });
-    var reasons = Object.keys(counts);
-    // Not .jspsych-content — this is supplementary info rendered above the
-    // actual task panel, not "the task container" the scramble targets
-    // (moot anyway: finalizeGuard() already stopped the guard before this
-    // renders, but the class doesn't belong on it regardless).
-    if (reasons.length === 0) {
-      return '<div class="task"><p class="label">traces</p>' +
-        '<p class="hint">No violations recorded this run.</p></div>';
-    }
-    var rows = reasons.map(function (reason) {
-      return '<li>' + reason + ' — ' + counts[reason] + '</li>';
-    }).join('');
-    return '<div class="task"><p class="label">traces</p><ul class="hint">' + rows + '</ul></div>';
   }
 
   function renderStep(i) {
@@ -821,7 +930,6 @@ function startTour(participantId, capabilities, manifest) {
     var html = '';
     html += '<p class="eyebrow">' + renderEyebrow(step) + '</p>';
     html += '<h2>' + tpl(step.title) + '</h2>';
-    if (step.task && step.task.kind === 'guard-finish') html += renderTracesSummary();
     html += '<div class="stepcopy">' + tpl(step.body) + '</div>';
     // Violation chips render OUTSIDE the task panel deliberately: the panel
     // carries .jspsych-content, and GuardFriction's obfuscateContent() walks
@@ -833,21 +941,25 @@ function startTour(participantId, capabilities, manifest) {
       html += '<div class="violations" data-role="violation-chips"></div>';
     }
     html += renderTaskPanel(step.task);
-    // Results screen (step 11): renderTaskPanel(null) is '' (task: null in
+    if (step.showCodeTabs) html += renderCodeTabs();
+    // Results screen (step 12): renderTaskPanel(null) is '' (task: null in
     // steps.js) — this mount point is what goTo() hands to results.js's
     // buildResults(), which owns everything inside it (loading state,
-    // walkthrough, iframe report). The surrounding eyebrow/title/body/expect/
+    // walkthrough, iframe report). The surrounding eyebrow/title/body/
     // buttons stay the normal generic layout; .results-mode (toggled by
     // goTo()) makes the WHOLE card full-width, not just this mount.
     if (step.id === 'results') {
       html += '<div class="results-mount" data-role="results-mount"></div>';
     }
-    if (step.expect) {
-      html += '<div class="expect"><span class="tag">Expect</span><span>' + tpl(step.expect) + '</span></div>';
-    }
     html += '<div class="btnrow">';
-    if (i > 0) html += '<button class="btn" data-action="back">Back</button>';
-    html += '<button class="btn primary" data-action="primary">' + tpl(step.primaryLabel) + '</button>';
+    if (i > 0) html += '<a href="#" class="skip" data-action="back">Back</a>';
+    // guard-cheat's primary lives on the end-guard button rendered above
+    // (outside the scramble wrapper) instead of here — never both. Steps
+    // with primaryLabel: null (guard-entry) render no primary at all; the
+    // entry box carries the library's own button.
+    if (step.primaryLabel && !(step.task && step.task.kind === 'guard-cheat')) {
+      html += '<button class="btn" data-action="primary">' + tpl(step.primaryLabel) + '</button>';
+    }
     html += '</div>';
     var secondary = renderSecondary(step);
     if (secondary) html += '<p class="secondary">' + secondary + '</p>';
@@ -856,135 +968,81 @@ function startTour(participantId, capabilities, manifest) {
 
   var resultsIndex = STEPS.findIndex(function (s) { return s.id === 'results'; });
 
-  // Drives step 10's live jsPsych trials (finale.js). Guarded by
-  // state.finaleStarted so a Back-then-forward revisit doesn't re-init
-  // CyborgHunter a second/third time or push duplicate trial reports.
-  // Degrades to the code-panel-only view (spec: "advance always available")
-  // on any failure — missing vendor files, a load error, or missing globals.
-  function runFinaleStep(task) {
-    var mount = cardEl.querySelector('[data-role="finale-mount"]');
-    var status = cardEl.querySelector('[data-role="finale-status"]');
-    var note = cardEl.querySelector('.finale-note');
-    if (state.finaleStarted) {
-      // Back-then-forward revisit: the mount stays empty (re-running would
-      // re-init CyborgHunter and duplicate trial reports — see finale.js),
-      // but the status text should say what actually happened instead of
-      // showing the stale "Loading jsPsych…" default forever.
-      if (state.finaleFailed) {
-        if (status) status.hidden = true;
-        if (note) { note.textContent = task.degradedNote; note.hidden = false; }
-      } else if (status) {
-        status.textContent = 'Already ran earlier this session — both reports are in your payload.';
-      }
-      return;
-    }
-    state.finaleStarted = true;
-    if (!mount) return;
-    runFinale(mount, {
-      participantId: participantId,
-      onTrialReport: handleTrialReport,
-      onReady: function () {
-        // Vendor loaded — finale.js is about to call initJsPsych(), which
-        // destroys the outer monitor (see state.monitorDestroyed's comment).
-        state.monitorDestroyed = true;
-        if (status) status.textContent = "Running below — press a key to continue.";
-      }
-    })
-      .then(function () {
-        if (status) status.textContent = 'Both trials complete — their reports are in your payload.';
-      })
-      .catch(function (err) {
-        console.warn('cyborg-hunter demo: jsPsych finale unavailable, showing the code panel only', err);
-        state.finaleFailed = true;
-        if (status) status.hidden = true;
-        if (note) { note.textContent = task.degradedNote; note.hidden = false; }
-      });
-  }
-
   function goTo(i) {
     stopAutotype();
+    var prevStep = STEPS[state.stepIndex];
+    var prevTrialId = prevStep.task ? prevStep.task.trialId : null;
     state.stepIndex = i;
     var step = STEPS[i];
-    // Reaching guard-finish means Act 2 enforcement is over — stop it
-    // (idempotent) before rendering, so the traces summary sees the final
-    // 'end' event for whatever violation was open.
-    if (step.task && step.task.kind === 'guard-finish') finalizeGuard();
-    // Skipped once the outer monitor is destroyed: CyborgHunter.init() is a
-    // module-level singleton, and finale.js's jsPsych-owned instance
-    // destroys the outer monitor the moment it initializes (see finale.js's
-    // docblock and state.monitorDestroyed above) — its state machine only
-    // accepts transitions TO 'destroyed' after that, so calling
-    // startTrial() again (e.g. Back-navigating to step 9, whose
-    // task.trialId is real) throws "cannot transition from 'destroyed' to
-    // 'trial'". Every step from here on (results, replicate-locally)
-    // already has task.trialId null, so this only ever short-circuits a
-    // Back revisit into an earlier real-trialId step — which the outer
-    // monitor can no longer safely bracket anyway.
-    if (!state.monitorDestroyed) {
-      lifecycle.transitionTo(step.task ? step.task.trialId : null);
-    }
+    var trialId = step.task ? step.task.trialId : null;
+
+    lifecycle.transitionTo(trialId);
+    if (prevTrialId != null) paneRow(prevTrialId, 'trial_end', null);
+    if (trialId != null) paneRow(trialId, 'trial_start', null);
+
     // Lamp wiring stops at the results step (interactive tasks are over) and
     // restarts if the visitor navigates Back into the tour. Both idempotent.
     if (i >= resultsIndex) stopLampWiring(); else startLampWiring();
     document.body.dataset.view = step.act;
-    // Full-width payoff (spec: "not inside the tour card") — toggled here
-    // (not by results.js) so every OTHER step deterministically clears it,
-    // the same single-chokepoint pattern as dataset.view above.
+    // Full-width payoff — toggled here (not by results.js) so every OTHER
+    // step deterministically clears it, the same single-chokepoint pattern
+    // as dataset.view above.
     document.body.classList.toggle('results-mode', step.id === 'results');
     renderStep(i);
     // Repaints from state.chipCounts (not a reset) so Back-then-forward into
     // guard-cheat shows the tally already accumulated this session.
     if (step.task && step.task.kind === 'guard-cheat') renderViolationChips();
-    if (step.task && step.task.kind === 'jspsych-finale') runFinaleStep(step.task);
     if (step.id === 'results') {
-      // Snapshot here (not earlier): getSessionReport() reflects everything
-      // up to and including the finale, and by this point the outer monitor
-      // may already be the destroyed-but-still-readable instance finale.js
-      // left behind (see finale.js's docblock) — getSessionReport() doesn't
-      // check lifecycle state, so this is safe either way.
+      // Snapshotted here (not earlier): results is the last interactive
+      // step, so this reflects the complete session. The pane/replay/guard
+      // are all one-way finalizations from here on — the tour proper is
+      // done — and the rail (a demo-only "current session" instrument)
+      // retires with them; the live pane stays visible, frozen, as the
+      // historical record.
       state.sessionReport = monitor.getSessionReport();
+      state.pane.freeze();
+      finalizeReplay();
+      finalizeGuard();
+      railEl.hidden = true;
       var mount = cardEl.querySelector('[data-role="results-mount"]');
+      // Dynamic import: results.js is mid-rewrite (C2) and currently fails
+      // to load (imports an export steps.js no longer has) — a static
+      // import here would break the whole module graph at page load. This
+      // bridge renders a temporary hint instead of crashing; C2 removes it.
       import('./results.js').then(function (mod) {
         mod.buildResults(mount, state, manifest);
-      });
-    }
-    if (step.id === 'welcome') {
-      var teaserMount = cardEl.querySelector('[data-role="teaser-mount"]');
-      var traceMount = cardEl.querySelector('[data-role="agent-trace-mount"]');
-      import('./teaser.js').then(function (mod) {
-        mod.mountTeaser(teaserMount, traceMount);
+      }).catch(function (err) {
+        console.warn('cyborg-hunter demo: results.js unavailable (C2 lands the full report)', err);
+        if (mount) mount.innerHTML = '<p class="hint">Results build lands in C2.</p>';
       });
     }
     progressEl.textContent = 'Step ' + (i + 1) + ' of ' + STEPS.length;
   }
 
-  function skipToFinale() {
-    if (STEPS[state.stepIndex].act === 'act2') state.act2Skipped = true;
-    // Skipping out of Act 2 (the "Skip to finale" link or Alt+S from
-    // anywhere) must stop an active guard the same as reaching guard-finish
-    // normally would — finalizeGuard() no-ops if it's already stopped.
-    finalizeGuard();
-    goTo(finaleIndex());
-  }
-
   cardEl.addEventListener('click', function (e) {
+    var codeTabBtn = e.target.closest('.code-tab');
+    if (codeTabBtn) {
+      var tabKey = codeTabBtn.dataset.tab;
+      cardEl.querySelectorAll('.code-tab').forEach(function (b) { b.classList.toggle('active', b === codeTabBtn); });
+      cardEl.querySelectorAll('[data-role="code-pane"]').forEach(function (p) { p.hidden = p.dataset.tab !== tabKey; });
+      return;
+    }
     var back = e.target.closest('[data-action="back"]');
-    if (back) { goTo(state.stepIndex - 1); return; }
+    if (back) { e.preventDefault(); goTo(state.stepIndex - 1); return; }
     var autotypeBtn = e.target.closest('[data-action="autotype"]');
     if (autotypeBtn) { runAutotype(autotypeBtn); return; }
+    var honeypotBtn = e.target.closest('[data-action="honeypot-sim"]');
+    if (honeypotBtn) { runHoneypotSim(honeypotBtn); return; }
+    var enterFsBtn = e.target.closest('[data-action="enter-fullscreen"]');
+    if (enterFsBtn) { handleFullscreenEntry(enterFsBtn); return; }
+    var endGuardBtn = e.target.closest('[data-action="end-guard"]');
+    if (endGuardBtn) { finalizeGuard(); goTo(state.stepIndex + 1); return; }
     var primary = e.target.closest('[data-action="primary"]');
     if (primary) {
       var currentStep = STEPS[state.stepIndex];
-      // "Start the tour" is the trigger point for C8's replay opt-in — must
-      // run before goTo(1) below so the first trial (step 2) is bracketed.
-      if (currentStep.id === 'welcome') startReplayIfOptedIn();
-      // Step 7's primary button drives the fullscreen race instead of a
-      // plain advance — it only moves to step 8 once guard-friction is
-      // actually armed (see handleFullscreenEntry).
-      if (currentStep.task && currentStep.task.kind === 'fullscreen-entry') {
-        handleFullscreenEntry(primary);
-        return;
-      }
+      // "Start" is the trigger point for C8's always-on replay — must run
+      // before goTo(1) below so the first trial (step 2) is bracketed.
+      if (currentStep.id === 'intro') startReplay();
       if (state.stepIndex < STEPS.length - 1) goTo(state.stepIndex + 1);
       return;
     }
@@ -1018,20 +1076,7 @@ function startTour(participantId, capabilities, manifest) {
     if (link) {
       e.preventDefault();
       if (link.dataset.key === 'skipToGuardedAct') goTo(guardedActIndex());
-      else if (link.dataset.key === 'skipToFinale') skipToFinale();
-    }
-  });
-
-  cardEl.addEventListener('change', function (e) {
-    if (e.target.matches && e.target.matches('input[type="checkbox"][data-key="replayOptIn"]')) {
-      state.replayOptIn = e.target.checked;
-    }
-  });
-
-  document.addEventListener('keydown', function (e) {
-    if (e.altKey && (e.key === 's' || e.key === 'S')) {
-      e.preventDefault();
-      skipToFinale();
+      else if (link.dataset.key === 'skipToScores') goTo(scoresIndex());
     }
   });
 
