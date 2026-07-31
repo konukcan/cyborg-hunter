@@ -1,8 +1,9 @@
 <!-- demo/index.html
      Static shell for the live-demo page. The tour engine (demo.js), tutorial
      copy (steps.js), and generated signal-manifest.json populate #card and
-     #rail at runtime — this file only lays out the topbar, two-column grid,
-     and script load order. -->
+     the instrument column's two cards (#rail / [data-role="rail"] and
+     [data-role="live-pane"]) at runtime — this file only lays out the
+     topbar, two-column grid, and script load order. -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -22,7 +23,10 @@
 
 <div class="cols">
   <main id="card"></main>
-  <aside id="rail" aria-label="Tracked signals"></aside>
+  <aside class="instrument" aria-label="Demo instrument column">
+    <div class="card" id="rail" data-role="rail"></div>
+    <div class="card" data-role="live-pane"></div>
+  </aside>
 </div>
 
 <div id="smallmode" hidden></div>
