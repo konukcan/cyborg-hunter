@@ -11,6 +11,13 @@ All notable changes to **cyborg-hunter** are documented here. This project follo
   `buildViewerModel` and `getByPath` moved to pure shared modules. Enables the
   live demo's in-browser report preview. Report output is byte-identical.
 
+### Fixed
+- Raw mouse coordinates were persisted in every trial report regardless of the
+  documented off-by-default `collectForPostHoc.rawMouseTrack` toggle. Reports
+  now omit the raw track unless the toggle is enabled, in which case it
+  persists as `mouseTrack` (ingest maps it back to `mouseEvents`); the derived
+  `mouseMetrics` signal is unaffected either way.
+
 ## [0.7.1] — 2026-07-29
 
 ### Fixed

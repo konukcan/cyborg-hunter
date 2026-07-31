@@ -193,16 +193,33 @@ assert(tr15.copyEvents[0].type === "copy", "copy event has correct type");
 m15.destroy();
 
 // Test 17: mouse tracking captures click events
-var m16 = IntegrityMonitor.init({ participantId: "test16", preset: "standard" });
+// The raw per-event track is privacy-gated: endTrial() persists it as
+// `mouseTrack` ONLY when collectForPostHoc.rawMouseTrack is enabled
+// (default off — see Test 17b for the default).
+var m16 = IntegrityMonitor.init({
+  participantId: "test16", preset: "standard",
+  collectForPostHoc: { rawMouseTrack: true }
+});
 m16.startSession();
 m16.startTrial({ trialId: "t1" });
 // Simulate a click
 var clickEvent = new MouseEvent("click", { bubbles: true, pageX: 100, pageY: 200 });
 document.dispatchEvent(clickEvent);
 var tr16 = m16.endTrial();
-assert(tr16.mouseEvents.length >= 1, "mouse click captured");
-assert(tr16.mouseEvents[0].type === "click", "mouse event type is 'click'");
+assert(tr16.mouseTrack.length >= 1, "mouse click captured");
+assert(tr16.mouseTrack[0].type === "click", "mouse event type is 'click'");
 m16.destroy();
+
+// Test 17b: privacy default — no raw mouse track without the opt-in
+// (derived mouseMetrics is the only mouse data a default report may carry)
+var m16b = IntegrityMonitor.init({ participantId: "test16b", preset: "standard" });
+m16b.startSession();
+m16b.startTrial({ trialId: "t1" });
+document.dispatchEvent(new MouseEvent("click", { bubbles: true, pageX: 100, pageY: 200 }));
+var tr16b = m16b.endTrial();
+assert(tr16b.mouseEvents === undefined && tr16b.mouseTrack === undefined,
+  "default config: trial report carries no raw mouse track field");
+m16b.destroy();
 
 // Test 18: trial listeners are removed after endTrial
 var m17 = IntegrityMonitor.init({ participantId: "test17", preset: "standard" });
