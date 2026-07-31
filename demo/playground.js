@@ -264,8 +264,9 @@ export function mountPlayground(ctx) {
   mount.innerHTML =
     '<div class="task playground"><h3>Play with the scoring</h3>' +
     '<p class="hint">These are the choices your report is built from. Move one and watch your ' +
-    'tier and the triage order change. Finer control — a score for each individual signal — ' +
-    'lives in the config file you download next.</p>' +
+    'tier and the triage order change. Per-signal scores are set in the library\'s scoring ' +
+    'config when a study is initialized; the config file you download next carries the ' +
+    'analysis-side settings this report ran with, your changes included.</p>' +
     '<label>preset <select data-k="preset">' +
     '<option value="standard"' + (defaults.preset === 'standard' ? ' selected' : '') + '>standard</option>' +
     '<option value="strict"' + (defaults.preset === 'strict' ? ' selected' : '') + '>strict</option>' +

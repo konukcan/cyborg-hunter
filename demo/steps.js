@@ -329,9 +329,10 @@ CLEAN (nothing fired). Participants are then ordered worst-first, so a
 reviewer spends their attention where it matters.</p>
 <p>The scores are choices, not measurements. The defaults are starting
 points; the next screen lets you move the thresholds and watch your own
-tier and ordering change. Finer control — a different score for any
-individual signal — lives in the config file you'll download at the
-end.</p>`.trim(),
+tier and ordering change. Finer control, a different score for any
+individual signal, is set in the library's scoring config when a study is
+initialized. The config file you'll download at the end carries the
+analysis-side settings your report is built with.</p>`.trim(),
     task: null,
     primaryLabel: 'Build my report →',
     secondary: null,
