@@ -304,3 +304,106 @@ test('typing-profile core returns null when no trial has typing data', () => {
   assert.equal(canvas, null);
   assert.equal(log.length, 0, 'no canvas created for a no-typing-data participant');
 });
+
+// ── Tour-shape degradation guards (A8, Step 3) ───────────────────────────
+// The in-browser demo's own walkthrough ("tour") produces a fundamentally
+// different participant shape than the study fixture (P/DEMO-FIXT) above:
+// demo act/step trial ids instead of r{N}-classification, no rulePosition
+// field, no phase field (so no 'gallery'/'classification' phase tagging
+// either), and no metadata.startTime (the tour never stamps a session-start
+// wall-clock the way the jsPsych experiment wrapper does). It also carries
+// the raw mouseTrack field (A8's rawMouseTrack passthrough, this task)
+// rather than only derived mouseMetrics.
+//
+// Investigated before writing this test: ran both cores against several
+// degraded shapes (this fixture, a 3-trial slice of DEMO-FIXT, a session-
+// less payload, an empty-windowPositions session, and a real monitor.js →
+// buildPayload() → extractIntegrityData() round trip with the window-
+// position poller never firing) — none threw. Both cores already guard the
+// relevant reads (`trial.mouseEvents || []`, `Array.isArray(p.trials) ?
+// ... : []`, `meta.startTime ? ... : null`, etc.), so no core guard was
+// added — this test locks that guarantee in as a regression pin.
+const TOUR_RAW = {
+  participantId: 'TOUR-1',
+  trials: [
+    {
+      trialId: 'act1-baseline',
+      integrity: {
+        trialId: 'act1-baseline', libraryVersion: '0.7.2', participantId: 'TOUR-1',
+        startTime: 0, duration_ms: 3000,
+        pasteEvents: [], copyEvents: [], dropEvents: [], tabAwayEvents: [],
+        trialSoftScore: 0, trialSignals: {},
+        mouseTrack: [
+          { x: 10, y: 10, t: 0, type: 'move' },
+          { x: 20, y: 30, t: 100, type: 'move' },
+          { x: 15, y: 25, t: 200, type: 'move' },
+        ],
+      },
+    },
+    {
+      trialId: 'act1-paste',
+      integrity: {
+        trialId: 'act1-paste', libraryVersion: '0.7.2', participantId: 'TOUR-1',
+        startTime: 3000, duration_ms: 4000,
+        pasteEvents: [{ t: 500, chars: 40 }], copyEvents: [], dropEvents: [], tabAwayEvents: [],
+        trialSoftScore: 1, trialSignals: { soft: { paste: { weight: 1 } } },
+        mouseTrack: [
+          { x: 40, y: 40, t: 0, type: 'move' },
+          { x: 60, y: 20, t: 1500, type: 'down' },
+          { x: 60, y: 20, t: 1600, type: 'up' },
+        ],
+      },
+    },
+    {
+      trialId: 'act1-tabaway',
+      integrity: {
+        trialId: 'act1-tabaway', libraryVersion: '0.7.2', participantId: 'TOUR-1',
+        startTime: 7000, duration_ms: 5000,
+        pasteEvents: [], copyEvents: [], dropEvents: [],
+        tabAwayEvents: [{ start: 1000, duration_ms: 3500, type: 'windowBlur' }],
+        trialSoftScore: 1, trialSignals: { soft: { tabAway: { weight: 1 } } },
+        mouseTrack: [
+          { x: 5, y: 5, t: 0, type: 'move' },
+          { x: 8, y: 12, t: 4800, type: 'move' },
+        ],
+      },
+    },
+  ],
+  metadata: {
+    // No startTime — the tour doesn't stamp a session-level wall-clock.
+    integritySession: {
+      pasteCount: 1, copyCount: 0, dropCount: 0,
+      tabAwaySums: [3500], tabAwayEvents: [],
+      charsPerSec: [], sidebarEvents: [], devToolsEvents: [],
+      aiExtensionsFound: [], keyboardShortcuts: [],
+      windowPositions: [], idleGaps: [], extensionInjections: [],
+      viewportWidthShifts: [], layoutShifts: [], zoomChanges: [],
+      hardScore: {}, softScore: 2, trialsCompleted: 3,
+      softScoreThreshold: 6, anyHardTriggered: false,
+    },
+  },
+};
+
+const P_TOUR = extractIntegrityData(TOUR_RAW, { outputDir: '.', participantIdField: 'participantId' });
+
+test('tour-shaped participant (no rulePosition/phase, no metadata.startTime, raw mouseTrack) does not throw either draw core', () => {
+  // Sanity: this really is the degraded shape under test, and the raw
+  // mouseTrack field really did survive extraction as mouseEvents (A8's
+  // FIELD_MAP generalization, verified here on Shape-1 data with a tour
+  // trial-id scheme rather than mouse-track-passthrough.test.js's rN- ids).
+  assert.ok(P_TOUR.trials.every(t => t.rulePosition === undefined && t.phase === undefined),
+    'tour trials carry neither rulePosition nor phase');
+  assert.equal(P_TOUR.metadata.startTime, undefined, 'tour metadata carries no session startTime');
+  assert.ok(P_TOUR.trials.every(t => t.mouseEvents && t.mouseEvents.length > 0),
+    'mouseTrack must have survived extraction as mouseEvents on every trial');
+
+  let c1, c2;
+  assert.doesNotThrow(() => {
+    c1 = drawSessionTimeline(P_TOUR, { outputDir: '.' }, makeRecordingCanvasFactory([]));
+  }, 'drawSessionTimeline must not throw on a tour-shaped participant');
+  assert.doesNotThrow(() => {
+    c2 = drawTrajectoryGrid(P_TOUR, { hardTriggered: false }, { outputDir: '.' }, makeRecordingCanvasFactory([]));
+  }, 'drawTrajectoryGrid must not throw on a tour-shaped participant');
+  assert.ok(c1 === null || typeof c1 === 'object', 'drawSessionTimeline returns a canvas or null');
+  assert.ok(c2 === null || typeof c2 === 'object', 'drawTrajectoryGrid returns a canvas or null');
+});

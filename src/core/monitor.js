@@ -378,6 +378,23 @@ export function init(userConfig) {
         report.mouseMetrics = mouseMetrics;
       }
 
+      // Privacy gate: the raw per-sample mouse coordinates are a much
+      // higher-resolution behavioral trace than the derived mouseMetrics
+      // above. Persist them ONLY when explicitly enabled
+      // (collectForPostHoc.rawMouseTrack) — under the `mouseTrack` name,
+      // which is what extract-core's field map already expects (mouseTrack →
+      // mouseEvents), so a saved report round-trips through
+      // extractIntegrityData() without new glue. Otherwise drop the raw
+      // report.mouseEvents entirely — the mouseMetrics signal above still
+      // works, but the {x,y,t,type} samples never leave the browser. Before
+      // this gate, deepCopy(trialData) put the full raw track in every
+      // report regardless of the documented off-by-default rawMouseTrack
+      // toggle.
+      if (config.collectForPostHoc.rawMouseTrack) {
+        report.mouseTrack = report.mouseEvents;
+      }
+      delete report.mouseEvents;
+
       // Accumulate into session
       sessionData.trialsCompleted++;
 

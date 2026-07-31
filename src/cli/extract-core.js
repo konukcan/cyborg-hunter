@@ -113,6 +113,19 @@ export function extractIntegrityData(raw, config) {
     }
   }
 
+  // Normalize the raw mouseTrack → mouseEvents field name and derive
+  // mouseDataAvailable uniformly, regardless of which shape produced
+  // `trials`. Historically this only ran inside the Shape-2 branch above,
+  // because only Shape-2's legacy `responses[].mouseTrack` field ever used
+  // that name. Since monitor.js started persisting the post-hoc raw mouse
+  // trace under collectForPostHoc.rawMouseTrack (as report.mouseTrack —
+  // src/core/monitor.js endTrial()), Shape-1/3 trials can ALSO carry a
+  // `mouseTrack` field via the integrity sub-object. Applying the mapping
+  // once here, after every shape is resolved, covers all of them with one
+  // mechanism instead of duplicating it per branch. Idempotent for Shape-2
+  // trials that already passed through mapLegacyFields above.
+  trials = trials.map(mapLegacyFields);
+
   if (trials.length === 0) {
     warnings.push(`No integrity data found (looked for "${intField}" field)`);
   }
@@ -423,8 +436,11 @@ export function ruleChronologicalCompare(a, b) {
   return (a.trialNumber ?? 0) - (b.trialNumber ?? 0);
 }
 
-// Maps Shape-2 legacy field names to CyborgHunter schema names.
-// The CLI can then use a single set of field names downstream.
+// Maps legacy/alternate field names to CyborgHunter schema names. Originally
+// Shape-2-only (responses[].mouseTrack); now applied to every shape (see the
+// call site above) since monitor.js's collectForPostHoc.rawMouseTrack can
+// also produce a `mouseTrack` field on Shape-1/3 trials. The CLI can then use
+// a single set of field names downstream regardless of source.
 const LEGACY_FIELD_MAP = {
   mouseTrack: 'mouseEvents',
 };
