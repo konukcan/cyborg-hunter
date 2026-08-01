@@ -267,7 +267,8 @@ rec.destroy();
 | `keepBait` | `false` | Keep honeypot/decoy nodes in DOM captures (red-team analysis). |
 | `root` | `document.body` | Capture root for the DOM tier. |
 | `autoSave.mode` | `'none'` | `'datapipe'` (needs `experimentId`), `'download'` (participant's machine — piloting only), `'none'` (call `getRecording()` yourself; warns at startSession). |
-| `maxEventsPerTrial` | `50000` | Hard cap; on overflow capture stops with a `ch:capture_stopped` marker (no silent truncation). |
+| `maxEventsPerTrial` | `50000` | Hard, per-trial cap on event count. Once a trial crosses it, that trial's capture stops (a `ch:capture_stopped` marker is written, no silent truncation); later trials in the same session record normally. Doesn't bound the size of the whole session. |
+| `maxCharsPerTrial` | `8000000` | Hard, per-trial cap measured in characters (JS string length), seeded by the trial's initial DOM snapshot. Same stop-and-mark behavior as `maxEventsPerTrial`, and the same per-trial scope; whichever cap is crossed first stops that trial. Set `null` to disable. |
 
 ### Privacy model
 

@@ -657,3 +657,50 @@ test('replay: keycast overlay shows a chip during typed playback; a redacted-key
   }, redactedModel);
   expect(redactedChipShown).toBe(true);
 });
+
+// ---------------------------------------------------------------------------
+// 9. Replay viewer: self-explanatory buffer-cap chip (walkthrough item 9).
+// The demo's own recording never crosses the cap, so this drives a synthetic
+// model with a ch:capture_stopped marker through the same direct-mount path
+// as the redacted-keystroke check above.
+// ---------------------------------------------------------------------------
+test('replay: buffer-cap note explains itself when captureStopped is set', async ({ page }) => {
+  test.setTimeout(60000);
+  await reachResultsWithSignals(page);
+  const frame = resultsFrame(page);
+  const participantId = await pid(page);
+  const visitorRow = frame.locator(`.cohort-row[data-pid="${participantId}"]`);
+  const visitorSanitized = await visitorRow.getAttribute('data-sanitized');
+  await visitorRow.click();
+  const visitorPane = frame.locator(`#p-${visitorSanitized}`);
+
+  const capModel = {
+    tier: 'dom', legacy: false, scoring: null, captureStopped: true, markerAttr: null,
+    scrollbar: { w: 0, h: 0 }, stylesheets: [],
+    trials: [{
+      index: 0, id: 'synthetic-cap', durMs: 500,
+      initialDom: '<p>synthetic</p>',
+      camera: { x: 0, y: 0, w: 800, h: 600, cw: 800, ch: 600, source: 'view_state' },
+      events: [{ t: 10, kind: 'ch:capture_stopped', limit: 50000 }],
+    }],
+  };
+
+  const result = await visitorPane.evaluate((paneEl, model) => {
+    const mount = document.createElement('div');
+    paneEl.appendChild(mount);
+    window.initChReplayViewer(mount, model);
+    const details = mount.querySelector('[data-ch-cap-note]');
+    return {
+      found: !!details,
+      initiallyOpen: details ? details.hasAttribute('open') : null,
+      text: details ? details.textContent : null,
+    };
+  }, capModel);
+
+  expect(result.found).toBe(true);
+  expect(result.initiallyOpen).toBe(false); // collapsed by default, expandable on click
+  expect(result.text).toContain('50,000'); // the recording's own configured cap, not a hardcoded default
+  expect(result.text).toMatch(/configurable/i);
+  expect(result.text).toMatch(/next trial starts capturing fresh|later trial/i); // per-trial, not session-wide
+  expect(result.text).toMatch(/do not bound the whole session|does not bound/i); // no "files stay small" overclaim
+});

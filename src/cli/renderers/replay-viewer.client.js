@@ -54,6 +54,11 @@
   // state playing to it would.
   var KEYCAST_FADE_MS = 500;
 
+  // Buffer-cap explanation fallback: recorder.js's REPLAY_DEFAULTS, used
+  // only when a stopped trial's own ch:capture_stopped event (the real
+  // configured value for THIS recording) can't be found.
+  var CAP_DEFAULTS = { events: 50000, chars: 8000000 };
+
   var DISCRETE_KINDS = {
     mousedown: true, mouseup: true, click: true, touchstart: true, touchend: true
   };
@@ -77,6 +82,10 @@
   // which arrives as a literal ' ' and would render as an invisible chip.
   function formatKeyLabel(key) {
     return key === ' ' ? 'Space' : key;
+  }
+
+  function fmtCount(n) {
+    return n.toLocaleString('en-US');
   }
 
   // ── DOM reconstruction (tier 'dom') ──
@@ -209,8 +218,41 @@
         'No integrity score attached (this recording was captured standalone)'));
     }
     if (model.captureStopped) {
-      header.appendChild(el('span', 'replay-note replay-warn',
-        'Capture stopped early (buffer cap)'));
+      // The real configured caps for THIS recording live on the trial's own
+      // ch:capture_stopped marker (recorder.js writes it with the limit that
+      // was actually crossed) — read those instead of assuming the library
+      // defaults, since maxEventsPerTrial/maxCharsPerTrial are configurable.
+      var capEventsLimit = null, capCharsLimit = null, capTrialsHit = 0;
+      trials.forEach(function (t) {
+        var hit = false;
+        (t.events || []).forEach(function (e) {
+          if (e.kind !== 'ch:capture_stopped') return;
+          hit = true;
+          if (e.limit != null && capEventsLimit == null) capEventsLimit = e.limit;
+          if (e.limit_chars != null && capCharsLimit == null) capCharsLimit = e.limit_chars;
+        });
+        if (hit) capTrialsHit++;
+      });
+      if (capEventsLimit == null) capEventsLimit = CAP_DEFAULTS.events;
+      if (capCharsLimit == null) capCharsLimit = CAP_DEFAULTS.chars;
+      var capTrialsCount = capTrialsHit || 1;
+      var capDetails = document.createElement('details');
+      capDetails.className = 'replay-note replay-warn replay-cap';
+      capDetails.setAttribute('data-ch-cap-note', '');
+      var capSummary = document.createElement('summary');
+      capSummary.textContent = 'Capture stopped early in ' + capTrialsCount +
+        ' trial' + (capTrialsCount === 1 ? '' : 's') + ' (buffer cap, details)';
+      var capBody = el('p', null,
+        'The recorder caps each trial at ' + fmtCount(capEventsLimit) + ' events or about ' +
+        fmtCount(capCharsLimit) + ' characters, whichever comes first (the character count ' +
+        'starts from that trial’s initial DOM snapshot). Once a trial crosses either cap, ' +
+        'that trial stops recording and a marker is written; the next trial starts capturing ' +
+        'fresh. The caps limit the damage one runaway trial can do. They do not bound the whole ' +
+        'session: a recording with many trials can still add up to a large file. Both caps are ' +
+        'configurable when the recorder is attached (maxEventsPerTrial, maxCharsPerTrial).');
+      capDetails.appendChild(capSummary);
+      capDetails.appendChild(capBody);
+      header.appendChild(capDetails);
     }
     // Alignment status chips — the "never fail silently" surface.
     var alignChip = el('span', 'replay-note', '');
