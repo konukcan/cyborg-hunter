@@ -652,7 +652,7 @@ function startTour(participantId, capabilities, manifest) {
     var note = cardEl.querySelector('.fallback-note');
     if (note) {
       note.textContent = (step.task && step.task.fallbackNote) ||
-        "Fullscreen didn't engage in time, so Act 2's enforcement can't run in this browser. That's fine — skip ahead; everything else in the tour still works.";
+        "Fullscreen didn't engage in time, so Act 2's enforcement can't run in this browser. Skip ahead; everything else in the tour still works.";
       note.hidden = false;
     }
     if (!cardEl.querySelector('a[data-key="skipToScores"]')) {
@@ -674,7 +674,7 @@ function startTour(participantId, capabilities, manifest) {
       if (state.stepIndex !== stepAtAttempt) return; // navigated away mid-race
       if (button) button.disabled = false;
       if (!window.GuardFriction || typeof window.GuardFriction.start !== 'function') {
-        console.warn('cyborg-hunter demo: GuardFriction unavailable — degrading to fallback');
+        console.warn('cyborg-hunter demo: GuardFriction unavailable, degrading to fallback');
         showFullscreenFallback();
         return;
       }

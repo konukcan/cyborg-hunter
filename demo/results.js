@@ -74,7 +74,7 @@ function pickVariant(state) {
 function renderWalkthrough(variant, tierHtml, replayUnavailable) {
   var replayHint = replayUnavailable
     ? '<p class="hint">Replay recording wasn’t available in this browser this ' +
-      'session, so there’s no replay panel below — everything else in the ' +
+      'session, so there’s no replay panel below. Everything else in the ' +
       'report still reflects your real session.</p>'
     : '';
   return (
@@ -91,7 +91,7 @@ function renderWalkthrough(variant, tierHtml, replayUnavailable) {
 function renderTierLine(t, manifest) {
   var label = t.hardTriggered ? 'hard' : (t.softFlagged ? 'soft' : 'clean');
   return (
-    '<p>Your tier: <b class="t-' + label + '">' + label.toUpperCase() + '</b> — ' +
+    '<p>Your tier: <b class="t-' + label + '">' + label.toUpperCase() + '</b> · ' +
     escHtml(t.reason || '') +
     ' <span class="hint">(' + escHtml(manifest.preset || 'standard') + ' preset)</span></p>'
   );

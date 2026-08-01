@@ -128,7 +128,7 @@ export function mountReplayHost(container, replayModel, replayClientSrc) {
     '<h3>Session replay</h3>' +
     '<p class="hint">Your own recorded session, reconstructed from the same data behind the ' +
     'report above. The report you build locally with the CLI embeds this same replay inline, ' +
-    'inside the report page itself.</p>';
+    'inside the report page.</p>';
   var iframe = document.createElement('iframe');
   iframe.className = 'replay-host-frame';
   // allow-scripts allow-same-origin: see the docblock above for why this is
