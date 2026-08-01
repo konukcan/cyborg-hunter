@@ -4,12 +4,12 @@
 // Register (spec 2026-07-31 G1): plain, dry, direct. Signals only until the
 // signals-to-scores step (G2).
 
-/** Verbatim positioning paragraph (spec: "use it VERBATIM"). */
+/** Intro positioning copy. De-slopped 2026-08-01 (verbatim lock lifted). */
 export const POSITIONING =
   "Prolific's built-in Authenticity Checks give you a verdict inside one " +
-  "platform. cyborg-hunter gives you the evidence — full behavioral traces, " +
-  "replayable sessions, honeypot catches — on any platform: Prolific, MTurk, " +
-  "classroom, or standalone, free and inspectable. Use them together: " +
+  "platform. cyborg-hunter gives you the evidence: full behavioral traces, " +
+  "replayable sessions, and honeypot catches, on any platform (Prolific, MTurk, " +
+  "classroom, or standalone), free and inspectable. Use them together: " +
   "platform-level screening plus study-level evidence you can defend in review.";
 
 /** Sidebar rail intro. Demo-instrument framing per G4. */
