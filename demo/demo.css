@@ -309,3 +309,13 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
 .yourreport .t-clean{color:var(--clean);font-weight:700;}
 .results-frame{width:100%;min-height:900px;border:0;border-radius:8px;
   box-shadow:var(--shadow);background:var(--panel);}
+
+/* Session-replay viewer-host card (item 12) — a sibling of .results-frame,
+ * not inside it. The INNER replay CSS (.replay-*) lives inside the host
+ * iframe's own Blob document (demo/replay-host.js), not here — this only
+ * styles the outer card + frame chrome from the results screen's side. */
+.replay-host-card{background:var(--panel);border-radius:8px;box-shadow:var(--shadow);
+  padding:20px 24px;margin:18px 0 0;}
+.replay-host-card h3{font-size:15px;font-weight:600;margin:0 0 6px;}
+.replay-host-card .hint{margin:0 0 14px;}
+.replay-host-frame{width:100%;min-height:520px;border:0;border-radius:6px;}

@@ -469,7 +469,7 @@ export const FINISH_VARIANTS = {
     bullets: [
       'Your tier and the reason for it — the pasted text that decided it is in the row detail.',
       'The session timeline: your tab-aways as marked spans, your guard violations in red.',
-      'Your mouse trajectories, one panel per trial — the replay below the table shows the same session in motion.',
+      'Your mouse trajectories, one panel per trial. The Session replay panel below reconstructs the same session in motion.',
       'Act 1 and Act 2 side by side: the same tricks, recorded quietly vs. blocked and logged.',
     ],
   },

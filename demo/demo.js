@@ -935,6 +935,14 @@ function startTour(participantId, capabilities, manifest) {
     return playgroundModPromise;
   }
 
+  // The RESOLVED results.js module (not just its promise), set the first
+  // time the results step loads it (below). goTo()'s viewer-host teardown
+  // (item 12) reads this synchronously, so it can revoke the host's Blob
+  // URL and drop its iframe on the way OUT of the results step without
+  // waiting on a dynamic-import microtask — and without ever importing
+  // results.js itself before the visitor has actually reached results.
+  var resultsModCache = null;
+
   // Config-as-source snippets (step 11, walkthrough item 7a): both built
   // from the manifest's real values, never hand-typed, so a preset change
   // can't silently drift from what's displayed (same principle as
@@ -1326,6 +1334,19 @@ function startTour(participantId, capabilities, manifest) {
     // in any direction (Back to 9 included) restores the pane to the
     // instrument column before the new step even renders.
     demotePane();
+    // Defensive viewer-host teardown on EVERY navigation, same reasoning
+    // (item 12): the replay viewer client runs a RAF loop + ResizeObserver
+    // with no destroy() — leaving results (Back-nav included) must revoke
+    // its host iframe's Blob URL, not just let renderStep's innerHTML
+    // replacement below silently discard the node. cardEl still holds the
+    // OLD step's markup here (renderStep(i) hasn't run yet this call), so
+    // this only finds anything when the step we're LEAVING was results;
+    // resultsModCache is null until results.js has loaded at least once, so
+    // this never forces that (lazy) load early.
+    if (resultsModCache) {
+      var oldResultsMount = cardEl.querySelector('[data-role="results-mount"]');
+      if (oldResultsMount) resultsModCache.teardownReplayHost(oldResultsMount);
+    }
     var prevStep = STEPS[state.stepIndex];
     var prevTrialId = prevStep.task ? prevStep.task.trialId : null;
     state.stepIndex = i;
@@ -1386,6 +1407,7 @@ function startTour(participantId, capabilities, manifest) {
       // playground.js's recomputeSignals too) — same "degrade, don't block"
       // posture as replay/guard elsewhere here.
       import('./results.js').then(function (resultsMod) {
+        resultsModCache = resultsMod; // goTo()'s viewer-host teardown, above
         loadPlayground().then(function (playgroundMod) {
           resultsMod.buildResults(mount, state, manifest, {
             onReady: function (ctx) {

@@ -263,3 +263,12 @@ export function pid(page) {
 export function resultsFrame(page) {
   return page.frameLocator('.results-frame');
 }
+
+// The viewer-host iframe's own frameLocator (walkthrough item 12) — a
+// SIBLING of .results-frame, not nested inside it. sandbox="allow-scripts
+// allow-same-origin", same-origin, so Playwright and (unlike the report
+// iframe's inner reconstruction frame, one level deeper still) the browser
+// itself both get real contentDocument access here.
+export function replayHostFrame(page) {
+  return page.frameLocator('.replay-host-frame');
+}

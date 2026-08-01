@@ -38,7 +38,7 @@ import {
   dispatchPaste, dispatchCopy, dispatchDevToolsShortcut, typeRealistically,
   startTour, waitForLamp,
   installFailingFullscreenMock, installBlobCounter,
-  primaryButton, backButton, railRow, pid, resultsFrame,
+  primaryButton, backButton, railRow, pid, resultsFrame, replayHostFrame,
 } from './helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -377,7 +377,7 @@ test('XSS paste: a hostile <script> string is escaped in the live pane, never ex
 // ---------------------------------------------------------------------------
 // 3. Results: the full-fidelity in-browser report
 // ---------------------------------------------------------------------------
-test('results: triage table, visitor plots, replay section, tier line', async ({ page }) => {
+test('results: triage table, visitor plots, tier line, and the sibling replay-host iframe', async ({ page }) => {
   test.setTimeout(60000);
   await reachResultsWithSignals(page);
   const participantId = await pid(page);
@@ -399,11 +399,18 @@ test('results: triage table, visitor plots, replay section, tier line', async ({
   const visitorPane = frame.locator(`#p-${visitorSanitized}`);
   await expect(visitorPane.locator('img[src^="data:image/png"]')).toHaveCount(3);
 
-  // Replay section: preloaded (inline model, demo mode) and mounts on click.
-  const replayBlock = visitorPane.locator('.replay-block');
-  await expect(replayBlock).toHaveAttribute('data-replay-preloaded', 'true');
-  await replayBlock.locator('.replay-load-btn').click();
-  await expect(visitorPane.locator('.replay-stage')).toBeVisible({ timeout: 5000 });
+  // No loadable replay inside the report iframe for the demo (item 12):
+  // inlineReplayModels is no longer passed for the demo path, so nothing in
+  // the report can mount a (previously blank-on-reconstruct) replay.
+  await expect(visitorPane.locator('.replay-load-btn')).toHaveCount(0);
+  await expect(frame.locator('[data-replay-preloaded]')).toHaveCount(0);
+
+  // The viewer-host iframe is a SIBLING of the report iframe in the demo's
+  // top document (results-mount holds both), not nested inside it.
+  const resultsMount = page.locator('[data-role="results-mount"]');
+  await expect(resultsMount.locator('iframe.results-frame')).toHaveCount(1);
+  await expect(resultsMount.locator('iframe.replay-host-frame')).toHaveCount(1);
+  await expect(resultsMount.locator('.replay-host-card h3')).toHaveText('Session replay');
 
   // Walkthrough tier line lives OUTSIDE the iframe, in the main document.
   await expect(page.locator('.yourreport')).toContainText('Your tier:');
@@ -545,12 +552,19 @@ test('act2-skip path: fullscreen failure falls back, skip lands on "From signals
 });
 
 // ---------------------------------------------------------------------------
-// 7. Blob hygiene: created - revoked === 1 after the report builds once and
-// the playground reruns it once (the C2/C3-documented live-URL invariant:
-// each swap revokes the PREVIOUS blob only after the NEW one loads, so one
-// url is always left outstanding while the report is showing).
+// 7. Blob hygiene: created - revoked === 2 after the report builds once and
+// the playground reruns it once. TWO independent, steady-state outstanding
+// blobs make up that count now (item 12 added the second):
+//   - the report iframe's own swap dance (C2/C3-documented): each swap
+//     revokes the PREVIOUS blob only after the NEW one loads, so exactly one
+//     of ITS urls is always left outstanding while the report is showing —
+//     unaffected by how many times the playground reruns it;
+//   - the viewer-host iframe's blob (item 12): built once, on the FIRST
+//     report render, and deliberately NOT rebuilt on a playground rerun (the
+//     recording doesn't change) — so it contributes a flat, constant +1 that
+//     this same paste-threshold rerun must NOT bump.
 // ---------------------------------------------------------------------------
-test('blob hygiene: created - revoked === 1 after results + one playground rerun', async ({ page }) => {
+test('blob hygiene: created - revoked === 2 (report + viewer-host) after results + one playground rerun', async ({ page }) => {
   test.setTimeout(60000);
   await installBlobCounter(page);
   await reachResultsWithSignals(page);
@@ -568,41 +582,57 @@ test('blob hygiene: created - revoked === 1 after results + one playground rerun
   await waitForFreshRebuild(page, before);
 
   const counts = await page.evaluate(() => window.__chBlobCounts);
-  expect(counts.created - counts.revoked).toBe(1);
+  expect(counts.created - counts.revoked).toBe(2);
 });
 
 // ---------------------------------------------------------------------------
-// 8. Replay viewer: keycast overlay (walkthrough item 8). Types the real
-// answer ('Canberra') at baseline so trial 0's recording carries real
-// keydown/keyup events (keys:'full' is the recorder default), then presses
-// play over that segment in the replay viewer's own mount and checks a
-// keycast chip appears.
-//
-// Item 8(b) asked us to verify dom-tier input-value playback lands visibly
-// in the demo's own replay, and fix that path if it doesn't. Driving the
-// live page found that it does NOT, for a reason outside this item's scope:
-// the demo's report iframe is sandbox="allow-scripts" (deliberately opaque-
-// origin, so the untrusted report content can't reach this page's storage
-// or network — see results.js's swapIframe), and the replay reconstruction
-// nests ANOTHER sandboxed iframe (sandbox="allow-same-origin") inside that
-// for DOM playback. Chromium blocks contentDocument access across that
-// specific double-sandbox nesting even though the inner iframe nominally
-// inherits an origin — confirmed with an isolated repro (two nested
-// sandboxed iframes, no replay code involved) and confirmed pre-existing
-// (reproduces on the pre-item-8 code too, so not a regression here). DOM-
-// tier replay works fine in the CLI's normal (non-nested) report output;
-// only the demo's doubly-sandboxed embedding is affected. Fixing it would
-// mean either weakening the report iframe's deliberate security sandbox or
-// rearchitecting DOM-tier reconstruction (which the alignment self-check
-// system also depends on) — both out of scope for a copy+keycast item. This
-// is exactly the situation item 8's own phrasing anticipated ("if it works,
-// keycast covers the perception gap"): keycast is a pure function of
-// recorded event timestamps, drawn in the OUTER document, so it's
-// unaffected by the inner iframe's access problem and still shows the
-// analyst that typing happened even though the field itself doesn't visibly
-// update in the demo's replay panel.
+// 7b. Viewer-host lifecycle (walkthrough item 12): the replay viewer client
+// runs a RAF loop + a ResizeObserver with no destroy() — Back-nav out of
+// results must revoke the host's Blob URL and drop its iframe, not just
+// leave the loop running behind a detached node.
 // ---------------------------------------------------------------------------
-test('replay: keycast overlay shows a chip during typed playback; a redacted-keystroke recording renders the redacted chip', async ({ page }) => {
+test('viewer-host teardown: Back-nav out of results revokes its Blob URL and removes the iframe', async ({ page }) => {
+  test.setTimeout(60000);
+  await installBlobCounter(page);
+  await reachResultsWithSignals(page);
+  await expect(page.locator('iframe.replay-host-frame')).toHaveCount(1);
+  const atResults = await page.evaluate(() => window.__chBlobCounts);
+
+  await backButton(page).click(); // -> signals-to-scores (step 11)
+  await expect(page.locator('iframe.replay-host-frame')).toHaveCount(0);
+  const afterBack = await page.evaluate(() => window.__chBlobCounts);
+  expect(afterBack.revoked).toBeGreaterThan(atResults.revoked);
+
+  // Forward again: a fresh host mounts (independent of the torn-down one —
+  // no stale double-mount, no leftover blob from the first visit).
+  await primaryButton(page).click(); // -> results
+  await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
+  await expect(page.locator('iframe.replay-host-frame')).toHaveCount(1);
+});
+
+// ---------------------------------------------------------------------------
+// 8. Replay viewer: keycast overlay (walkthrough item 8) + DOM-tier
+// reconstruction (walkthrough item 12's regression pin). Types the real
+// answer ('Canberra') at baseline so trial 0's recording carries real
+// keydown/keyup events (keys:'full' is the recorder default) AND a real
+// input value to reconstruct, then presses play over that segment in the
+// replay viewer's own mount and checks a keycast chip appears.
+//
+// History: item 8(b) found that DOM-tier input-value playback did NOT land
+// visibly in the demo's own replay — the report iframe is sandbox=
+// "allow-scripts" (deliberately opaque-origin), and nesting the replay's
+// OWN reconstruction iframe (sandbox="allow-same-origin") inside that forced
+// it opaque too (a double-sandbox intersection), so contentDocument access
+// failed and the reconstruction froze at the first frame. Item 8 shipped
+// keycast as the workaround (drawn in the OUTER document, unaffected).
+// Item 12 fixes the root cause: the replay now mounts in its OWN same-origin
+// viewer-host iframe (.replay-host-frame), a SIBLING of the report iframe
+// rather than nested inside it, so its inner reconstruction frame
+// (.replay-frame) is only one sandbox deep and stays same-origin. This test
+// now asserts the reconstructed field actually shows 'Canberra' — the exact
+// thing that was blank before.
+// ---------------------------------------------------------------------------
+test('replay: keycast overlay shows a chip during typed playback; DOM-tier reconstruction shows the typed value; a redacted-keystroke recording renders the redacted chip', async ({ page }) => {
   test.setTimeout(60000);
   await startTour(page); // -> baseline (step 2)
   await typeRealistically(page.locator('#card textarea'), 'Canberra');
@@ -615,26 +645,35 @@ test('replay: keycast overlay shows a chip during typed playback; a redacted-key
   await primaryButton(page).click(); // -> results
   await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
 
-  const frame = resultsFrame(page);
-  const participantId = await pid(page);
-  const visitorRow = frame.locator(`.cohort-row[data-pid="${participantId}"]`);
-  const visitorSanitized = await visitorRow.getAttribute('data-sanitized');
-  await visitorRow.click();
-  const visitorPane = frame.locator(`#p-${visitorSanitized}`);
-  await visitorPane.locator('.replay-load-btn').click();
-  const mount = visitorPane.locator('.replay-mount');
-  await mount.locator('.replay-stage').waitFor({ timeout: 5000 });
+  // The viewer-host iframe (item 12) — a sibling of the report iframe, not
+  // nested inside it. No "Load replay" button here: the host mounts the
+  // visitor's real model directly, unlike the report's lazy-loaded blocks.
+  const hostMount = replayHostFrame(page).locator('#ch-replay-mount');
+  await hostMount.locator('.replay-stage').waitFor({ timeout: 5000 });
 
   // Keycast: rewind to the start and press play through the typed segment;
   // a chip must appear at some point during playback.
-  await mount.evaluate((m) => { m._chReplayDebug.seek(0); });
-  await mount.locator('.replay-play').click();
-  await expect(mount.locator('.replay-keycast .replay-key-chip').first()).toBeVisible({ timeout: 5000 });
-  await mount.locator('.replay-play').click(); // stop
+  await hostMount.evaluate((m) => { m._chReplayDebug.seek(0); });
+  await hostMount.locator('.replay-play').click();
+  await expect(hostMount.locator('.replay-keycast .replay-key-chip').first()).toBeVisible({ timeout: 5000 });
+  await hostMount.locator('.replay-play').click(); // stop
+
+  // Regression pin (item 12): seek past the typed segment (seek() clamps to
+  // the trial's own duration, so an overshoot lands exactly at its end) and
+  // read the reconstructed field one level deeper, inside the DOM-tier
+  // reconstruction iframe itself — this is what came back blank before the
+  // host fix, because that inner iframe used to be nested two sandboxes
+  // deep (inside the opaque report iframe). The host is same-origin, so
+  // this inner frame stays same-origin and the reconstructed value is
+  // readable, live, the same way a real analyst would see it.
+  await hostMount.evaluate((m) => { m._chReplayDebug.seek(999999); });
+  const reconstructedAnswer = replayHostFrame(page).frameLocator('.replay-frame').locator('textarea');
+  await expect(reconstructedAnswer).toHaveValue('Canberra', { timeout: 5000 });
 
   // Redacted keystroke: synthetic model (the demo's own recording never
-  // touches a redacted field), mounted directly the way the report's own
-  // lazy-loader mounts a real one.
+  // touches a redacted field), mounted directly in the host frame's
+  // document — the same document the real model above already loaded
+  // window.initChReplayViewer into.
   const redactedModel = {
     tier: 'dom', legacy: false, scoring: null, captureStopped: false, markerAttr: null,
     scrollbar: { w: 0, h: 0 }, stylesheets: [],
@@ -648,9 +687,9 @@ test('replay: keycast overlay shows a chip during typed playback; a redacted-key
       ],
     }],
   };
-  const redactedChipShown = await visitorPane.evaluate((paneEl, model) => {
+  const redactedChipShown = await replayHostFrame(page).locator('body').evaluate((bodyEl, model) => {
     const testMount = document.createElement('div');
-    paneEl.appendChild(testMount);
+    bodyEl.appendChild(testMount);
     window.initChReplayViewer(testMount, model);
     testMount._chReplayDebug.seek(150); // between the redacted keydown and keyup
     return !!testMount.querySelector('.replay-key-chip--redacted');

@@ -1,19 +1,25 @@
 // demo/results.js
 // Step 12's payoff: the full-fidelity in-browser report, built from the same
 // pipeline the CLI runs (bundled as demo/preview-core.js — see
-// src/cli/preview-entry.js) plus the demo-mode renderer opts from spec §7:
-//   imageSources        — visitor + two example participants' plots, drawn
-//                          in-browser by demo/plot-adapter.js (data URIs)
-//   inlineReplayModels  — the visitor's own session recording, nested in
-//                          the report (when replay attached successfully)
+// src/cli/preview-entry.js) plus the demo-mode renderer opt from spec §7:
+//   imageSources — visitor + two example participants' plots, drawn
+//                  in-browser by demo/plot-adapter.js (data URIs)
 // buildPayload assembles the SAME Shape-1 shape buildDownloadFile
 // ('sessionData') in demo.js builds, from the same state fields.
 //
 // The report loads in a Blob-URL iframe, sandbox="allow-scripts" (opaque
-// origin: scripts run, so the report's own row-click/legend/replay JS works
-// across the now-multiple participants, but it can't reach this page,
-// storage, or the network). Old blob URLs are revoked only AFTER the
-// replacement loads (spec §7.3).
+// origin: scripts run, so the report's own row-click/legend JS works across
+// the now-multiple participants, but it can't reach this page, storage, or
+// the network). Old blob URLs are revoked only AFTER the replacement loads
+// (spec §7.3).
+//
+// The visitor's own session recording does NOT nest inside this report
+// iframe (walkthrough item 12: nesting it there froze DOM-tier
+// reconstruction at the first frame, since the report's opaque-origin
+// sandbox blocks the replay viewer's inner same-origin frame). It instead
+// renders in a separate same-origin viewer-host iframe, a sibling of this
+// report iframe — see mountReplayHost/teardownReplayHost (replay-host.js),
+// wired into buildResults below.
 //
 // Fallback to a CLI-instructions card on ANY failure — the pipeline erroring
 // or exceeding PIPELINE_TIMEOUT_MS, OR the iframe itself firing `error` or
@@ -26,6 +32,12 @@ import { buildPayload } from './payload.js';
 import { makePlotAdapter } from './plot-adapter.js';
 import { FINISH_VARIANTS, REPLICATE } from './steps.js';
 import { escHtml } from './util.js';
+import { mountReplayHost, teardownReplayHost } from './replay-host.js';
+
+// Re-exported so demo.js's goTo() can tear down the viewer-host iframe
+// (item 12) through the SAME cached results.js import it already uses for
+// buildResults — no separate lazy-load path needed.
+export { teardownReplayHost };
 
 var PIPELINE_TIMEOUT_MS = 8000;    // preview-core load + fetches + full pipeline run
 var IFRAME_LOAD_TIMEOUT_MS = 5000; // per swap: the blob iframe actually rendering
@@ -56,7 +68,7 @@ function pickVariant(state) {
 
 // tierHtml is omitted (undefined) in the build-failed path, where there's no
 // computed tier to report truthfully. replayUnavailable appends an honest
-// correction to the "the replay below the table" bullet's claim when replay
+// correction to the "Session replay panel below" bullet's claim when replay
 // attach failed this session (state.replayUnavailable) — steps.js's copy
 // stays untouched; this is the minimal adaptation the plan calls for.
 function renderWalkthrough(variant, tierHtml, replayUnavailable) {
@@ -134,9 +146,20 @@ export async function buildReportHtml(core, state, examples, replayModel, replay
     var entry = triage.find(function (t) { return t.participantId === p.participantId; }) || {};
     imageSources[p.participantId] = await plotAdapter.renderPlotDataUris(p, entry, config);
   }
+  // inlineReplayModels deliberately NOT forwarded (walkthrough item 12): the
+  // report iframe is sandbox="allow-scripts" (opaque origin — see
+  // swapIframe's docblock below), and the replay viewer's inner
+  // reconstruction iframe needs same-origin contentDocument access that a
+  // nested-sandbox intersection blocks, so DOM-tier reconstruction froze at
+  // the first frame there. The demo instead builds the replay in its own
+  // same-origin viewer-host iframe (see buildResults, below, and
+  // replay-host.js) — a sibling of this report iframe, not nested inside
+  // it. inputs.inlineReplayModels (still computed by assembleReportInputs,
+  // above) stays unused here on purpose; the CLI's own report path
+  // (html-index-core.js, untouched by this item) keeps nesting its replay
+  // the original way.
   var html = await core.renderIndexHtml(summaries, triage, participants, config, false, {
     imageSources: imageSources,
-    inlineReplayModels: inputs.inlineReplayModels,
     replayClientSrc: replayClientSrc,
   });
   return { html: html, triage: triage };
@@ -288,6 +311,16 @@ export function buildResults(container, state, manifest, hooks, initial) {
     if (settled) return; // gaveUp === true: the watchdog already fired, nothing left to finish
     settled = true;
     clearTimeout(timeoutId);
+    // Viewer-host iframe (item 12): built ONCE, here, after the first
+    // successful report render — never inside run() itself, so a LATER
+    // playground rerun (which only re-calls run()) never touches it. The
+    // recording it shows doesn't change on a rerun, only the report does,
+    // so the host stays mounted and untouched across every rerun. Skipped
+    // entirely when there's no replayModel (state.replayRecording never
+    // existed, or core.buildViewerModel threw, above) — the walkthrough's
+    // existing replayUnavailable hint covers that case; no host is the
+    // honest state, not a broken one.
+    if (replayModel) mountReplayHost(container, replayModel, replayClientSrc);
     if (hooks && hooks.onReady) {
       hooks.onReady({ rerun: run, container: container, manifest: manifest });
     }
