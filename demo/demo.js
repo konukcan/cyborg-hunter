@@ -958,9 +958,9 @@ function startTour(participantId, capabilities, manifest) {
   function renderHoneypotPanel(task) {
     var snippet = captureHoneypotSnippet();
     var fallbackNote = snippet.isFallback
-      ? '<p class="rule fallback-note">Reference copy — the live bait fields ' +
-        "weren't found in the page, so this is the library's markup as " +
-        'documented rather than what actually rendered.</p>'
+      ? '<p class="rule fallback-note">Reference copy. The live bait fields ' +
+        "weren't found in the page, so this is the library's documented " +
+        'markup rather than what actually rendered.</p>'
       : '';
     return (
       '<div class="task jspsych-content">' +
