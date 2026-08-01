@@ -704,3 +704,54 @@ test('replay: buffer-cap note explains itself when captureStopped is set', async
   expect(result.text).toMatch(/next trial starts capturing fresh|later trial/i); // per-trial, not session-wide
   expect(result.text).toMatch(/do not bound the whole session|does not bound/i); // no "files stay small" overclaim
 });
+
+// ---------------------------------------------------------------------------
+// 10. Replay viewer: continuous whole-session playback, default ON
+// (walkthrough item 10). A synthetic 2-trial trace-tier model keeps this
+// fast and deterministic (trace tier skips the async iframe-reconstruction
+// path entirely, so trial loads are synchronous).
+// ---------------------------------------------------------------------------
+test('replay: continuous playback crosses trial boundaries by default; the pause toggle restores per-trial stopping', async ({ page }) => {
+  test.setTimeout(60000);
+  await reachResultsWithSignals(page);
+  const frame = resultsFrame(page);
+  const participantId = await pid(page);
+  const visitorRow = frame.locator(`.cohort-row[data-pid="${participantId}"]`);
+  const visitorSanitized = await visitorRow.getAttribute('data-sanitized');
+  await visitorRow.click();
+  const visitorPane = frame.locator(`#p-${visitorSanitized}`);
+
+  const twoTrialModel = {
+    tier: 'trace', legacy: false, scoring: null, captureStopped: false, markerAttr: null,
+    scrollbar: { w: 0, h: 0 }, stylesheets: [],
+    trials: [
+      { index: 0, id: 'trial-a', durMs: 250, initialDom: '',
+        camera: { x: 0, y: 0, w: 800, h: 600, cw: 800, ch: 600, source: 'view_state' }, events: [] },
+      { index: 1, id: 'trial-b', durMs: 250, initialDom: '',
+        camera: { x: 0, y: 0, w: 800, h: 600, cw: 800, ch: 600, source: 'view_state' }, events: [] },
+    ],
+  };
+  await visitorPane.evaluate((paneEl, model) => {
+    const mount = document.createElement('div');
+    mount.setAttribute('data-testid', 'ch-multitrial-mount');
+    paneEl.appendChild(mount);
+    window.initChReplayViewer(mount, model);
+  }, twoTrialModel);
+  const mount = visitorPane.locator('[data-testid="ch-multitrial-mount"]');
+
+  await expect(mount.locator('.replay-session-pos')).toHaveText('Trial 1 of 2');
+
+  // Default: continuous ON (pause-at-boundaries toggle unchecked).
+  await expect(mount.locator('.replay-pause-checkbox')).not.toBeChecked();
+  await mount.locator('.replay-play').click();
+  await expect(mount.locator('.replay-session-pos')).toHaveText('Trial 2 of 2', { timeout: 3000 });
+  await expect(mount.locator('.replay-play')).toHaveAttribute('aria-label', 'Pause'); // still playing
+  await mount.locator('.replay-play').click(); // stop
+
+  // Pause-at-boundaries ON: restores per-trial stopping (original behavior).
+  await mount.evaluate((m) => { m._chReplayDebug.selectTrial(0); });
+  await mount.locator('.replay-pause-checkbox').check();
+  await mount.locator('.replay-play').click();
+  await expect(mount.locator('.replay-play')).toHaveAttribute('aria-label', 'Play', { timeout: 3000 }); // stopped itself
+  await expect(mount.locator('.replay-session-pos')).toHaveText('Trial 1 of 2'); // did not advance
+});

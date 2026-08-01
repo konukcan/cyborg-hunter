@@ -5,6 +5,23 @@ All notable changes to **cyborg-hunter** are documented here. This project follo
 
 ## [0.7.2] — 2026-07-29
 
+### Added
+- Replay viewer: a keycast overlay at the bottom of the stage shows keys as
+  they're pressed (chips appear on keydown, fade after keyup), including a
+  redacted chip for keystrokes captured with `keys:'full'` inside a
+  redacted field. Recordings made with `keys:'off'` show no keycast, since
+  there's no key data to show.
+- Replay viewer: the buffer-cap notice is now an expandable explanation
+  (was a one-line chip) covering what `maxEventsPerTrial`/`maxCharsPerTrial`
+  actually cap (per trial, not the whole session), what happens when a
+  trial crosses one, and that both are configurable. Mirrored in
+  `docs/using-cyborg-hunter.md`'s configuration table.
+- Replay viewer: continuous whole-session playback, default on. Pressing
+  play now rolls through every trial in the recording as one continuous
+  video instead of stopping at each trial boundary; a "pause at trial
+  boundaries" toggle restores the previous per-trial-stop behavior. A
+  "Trial k of N" indicator tracks position across the session.
+
 ### Changed
 - Internal refactor, no behavior change: the report index renderer and its
   three plot renderers (session-timeline, trajectories, typing-profile) are

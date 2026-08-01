@@ -166,6 +166,12 @@
     var playhead = 0;          // trial-relative ms
     var playing = false;
     var speed = 1;
+    // Continuous whole-session playback, default ON: at a trial's end while
+    // playing, load the next trial and keep going, so an analyst watches a
+    // full session as one video instead of stopping at every boundary. The
+    // 'pause at trial boundaries' toggle flips this off, restoring the
+    // original per-trial-stop behavior.
+    var autoAdvance = true;
     var appliedIdx = 0;        // events applied so far (in trial event order)
     var iframeGen = 0;         // increments per rebuild; stale onloads bail
     var domReady = false;
@@ -208,11 +214,24 @@
       var o = el('option', null, s + '×'); o.value = String(s); speedSel.appendChild(o);
     });
     var clock = el('span', 'replay-clock', '0:00.0 / 0:00.0');
+    var sessionPos = el('span', 'replay-note replay-session-pos', '');
+    var pauseLabel = el('label', 'replay-pause-toggle');
+    var pauseCheckbox = document.createElement('input');
+    pauseCheckbox.type = 'checkbox';
+    pauseCheckbox.className = 'replay-pause-checkbox';
+    pauseCheckbox.checked = false;   // default: continuous playback ON
+    pauseCheckbox.addEventListener('change', function () {
+      autoAdvance = !pauseCheckbox.checked;
+    });
+    pauseLabel.appendChild(pauseCheckbox);
+    pauseLabel.appendChild(document.createTextNode(' Pause at trial boundaries'));
     header.appendChild(badge);
     header.appendChild(trialSel);
     header.appendChild(playBtn);
     header.appendChild(speedSel);
     header.appendChild(clock);
+    header.appendChild(sessionPos);
+    if (trials.length > 1) header.appendChild(pauseLabel);
     if (!model.scoring) {
       header.appendChild(el('span', 'replay-note',
         'No integrity score attached (this recording was captured standalone)'));
@@ -1044,6 +1063,11 @@
       }
       lastFrame = ts;
       if (playhead >= trial().durMs) {
+        if (autoAdvance && trialIdx < trials.length - 1) {
+          loadTrial(trialIdx + 1);   // continue playing into the next trial
+          requestAnimationFrame(tick);
+          return;
+        }
         playing = false;
         playBtn.textContent = '▶';
         playBtn.setAttribute('aria-label', 'Play');
@@ -1075,11 +1099,18 @@
       else if (ev.key === 'Home') { seek(0); ev.preventDefault(); }
       else if (ev.key === 'End') { seek(trial().durMs); ev.preventDefault(); }
     });
-    function selectTrial(i) {
+    function updateSessionPos() {
+      sessionPos.textContent = 'Trial ' + (trialIdx + 1) + ' of ' + trials.length;
+    }
+
+    // Loads trial i's DOM/camera/scrub state WITHOUT touching playing/playBtn
+    // — the continuous-playback boundary in tick() below calls this directly
+    // so play keeps running across the cut; selectTrial() (manual trial-pick
+    // and boot) wraps it with the playing=false reset a user-driven jump
+    // should have.
+    function loadTrial(i) {
       trialIdx = i;
-      playing = false;
-      playBtn.textContent = '▶';
-      playBtn.setAttribute('aria-label', 'Play');
+      trialSel.value = String(i);
       scrub.max = String(trial().durMs);
       trialHadIframe = false;
       trialHadShadow = false;
@@ -1104,6 +1135,13 @@
         flushCamSize();   // trace tier: transform initializes from the seed
       }
       seek(0);
+      updateSessionPos();
+    }
+    function selectTrial(i) {
+      playing = false;
+      playBtn.textContent = '▶';
+      playBtn.setAttribute('aria-label', 'Play');
+      loadTrial(i);
     }
     trialSel.addEventListener('change', function () {
       selectTrial(Number(trialSel.value) || 0);
