@@ -96,6 +96,31 @@ test('adversarial imageSources value cannot break out of the src/href attributes
   assert.ok(html.includes('AAA2&quot; onerror=&quot;alert(1)'), 'quote escaped to &quot; in the emitted attribute');
 });
 
+test('replayShownExternally:true suppresses the replay section entirely; absent/false renders it as before', async () => {
+  // Suppressed: no replay-block ELEMENT, no section heading, and no
+  // absent-state fallback message (the demo shows the replay in its own
+  // sibling viewer-host iframe — a "not enabled" message here would be
+  // false). The bare 'replay-block' substring can't be asserted on: the
+  // report's static lazy-loader script always contains
+  // btn.closest('.replay-block') regardless of whether any section renders.
+  const suppressed = await renderIndexHtml(summaries, triage, [p], config, false, {
+    replayShownExternally: true,
+  });
+  assert.ok(!suppressed.includes('class="image-block replay-block"'));
+  assert.ok(!suppressed.includes('Session replay'));
+  assert.ok(!suppressed.includes('recording was not enabled'));
+
+  // Guard the other direction — absent AND explicit false both render the
+  // section exactly as the default path always has (the fixture has no
+  // replay artifact, so that's the absent-state block + fallback message).
+  for (const opts of [{}, { replayShownExternally: false }]) {
+    const rendered = await renderIndexHtml(summaries, triage, [p], config, false, opts);
+    assert.ok(rendered.includes('class="image-block replay-block"'));
+    assert.ok(rendered.includes('Session replay'));
+    assert.ok(rendered.includes('recording was not enabled'));
+  }
+});
+
 test('demo mode guards history.replaceState; default does not', async () => {
   const demo = await renderIndexHtml(summaries, triage, [p], config, false,
     { imageSources: { [PID]: {} } });

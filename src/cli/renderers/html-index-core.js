@@ -38,6 +38,13 @@ export async function renderIndexHtml(summaries, triage, participants, config, v
     ?? 'Visual renderers not available (install the canvas package).';
   const imageSources = opts.imageSources ?? null;       // pid → {typingProfile, sessionTimeline, trajectories} data URIs (null entry = omit that img)
   const inlineReplayModels = opts.inlineReplayModels ?? null; // pid → viewer model (pre-built via buildViewerModel)
+  // Caller renders the replay in its own UI outside this report (the demo's
+  // sibling viewer-host iframe — see demo/replay-host.js), so the report's
+  // per-participant "Session replay" section would only ever show a stale
+  // "not enabled"-style message: emit no replay section at all. Default
+  // false ⇒ output byte-identical (A1 snapshot contract, same as every
+  // other opt here).
+  const replayShownExternally = opts.replayShownExternally ?? false;
   // Demo mode = any in-browser opt present. The report then runs inside an
   // opaque-origin iframe where history.replaceState throws SecurityError, so
   // the hash-sync emission gets a guard. Default emission is byte-identical.
@@ -78,7 +85,7 @@ export async function renderIndexHtml(summaries, triage, participants, config, v
   // html-index-core.test.js (injected override).
   const detailHtml = triage.map((t, i) => {
     const participant = participants.find(p => p.participantId === t.participantId);
-    return renderDetail(t, participant, config, visualsRendered, visualsUnavailableNote, /* defaultVisible */ i === 0, imageSources, inlineReplayModels);
+    return renderDetail(t, participant, config, visualsRendered, visualsUnavailableNote, /* defaultVisible */ i === 0, imageSources, inlineReplayModels, replayShownExternally);
   }).join('\n');
 
   const html = `<!DOCTYPE html>
@@ -958,7 +965,7 @@ function sanitize(name) {
 // signals, paste evidence, and images. The `hidden` attribute is omitted on the
 // first pane so the report has a default selection on load; client JS toggles
 // `hidden` on the others when the user clicks a different cohort row.
-function renderDetail(t, participant, config, visualsRendered, visualsUnavailableNote, defaultVisible, imageSources, inlineReplayModels) {
+function renderDetail(t, participant, config, visualsRendered, visualsUnavailableNote, defaultVisible, imageSources, inlineReplayModels, replayShownExternally) {
   const sanitized = sanitize(t.participantId);
   const tier = tierOf(t);
   const s = t.summary || {};
@@ -1011,7 +1018,7 @@ function renderDetail(t, participant, config, visualsRendered, visualsUnavailabl
     ${renderSessionBlock(s, participant)}
     ${renderPasteEvidence(participant)}
     ${imagesHtml}
-    ${renderReplaySection(participant, sanitized, demoModel)}
+    ${renderReplaySection(participant, sanitized, demoModel, replayShownExternally)}
   </section>`;
 }
 
@@ -1019,7 +1026,12 @@ function renderDetail(t, participant, config, visualsRendered, visualsUnavailabl
 // states: loadable (artifact attached), corrupted, or absent (with the
 // saved_to reason from integrityReplayMeta when one exists, so the analyst
 // can tell "never recorded" from "went to the participant's Downloads").
-function renderReplaySection(participant, sanitized, demoModel = null) {
+// replayShownExternally (opts.replayShownExternally) suppresses the section
+// entirely: the caller shows the replay in its own UI outside this report,
+// so every branch below — including the absent-state messages — would be
+// stale or false for that caller.
+function renderReplaySection(participant, sanitized, demoModel = null, replayShownExternally = false) {
+  if (replayShownExternally) return '';
   // Defensive: a triage row can lack a matching participant object (the
   // participants array is caller-supplied, and the demo-mode model lookup
   // keys off the triage row, not this array). Every branch below reads

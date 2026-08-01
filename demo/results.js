@@ -155,12 +155,19 @@ export async function buildReportHtml(core, state, examples, replayModel, replay
   // same-origin viewer-host iframe (see buildResults, below, and
   // replay-host.js) — a sibling of this report iframe, not nested inside
   // it. inputs.inlineReplayModels (still computed by assembleReportInputs,
-  // above) stays unused here on purpose; the CLI's own report path
-  // (html-index-core.js, untouched by this item) keeps nesting its replay
-  // the original way.
+  // above) stays unused here on purpose; the CLI's own report path keeps
+  // nesting its replay the original way.
+  //
+  // replayShownExternally suppresses the report's per-participant "Session
+  // replay" sections outright (all participants — the section has no job in
+  // the demo once the real replay lives in the host iframe). Without it,
+  // the visitor's pane would show the renderer's absent-state fallback
+  // ("recording was not enabled"), which is false here: recording WAS
+  // enabled, the replay just renders below the report instead of inside it.
   var html = await core.renderIndexHtml(summaries, triage, participants, config, false, {
     imageSources: imageSources,
     replayClientSrc: replayClientSrc,
+    replayShownExternally: true,
   });
   return { html: html, triage: triage };
 }

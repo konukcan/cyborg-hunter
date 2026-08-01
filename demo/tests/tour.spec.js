@@ -399,11 +399,17 @@ test('results: triage table, visitor plots, tier line, and the sibling replay-ho
   const visitorPane = frame.locator(`#p-${visitorSanitized}`);
   await expect(visitorPane.locator('img[src^="data:image/png"]')).toHaveCount(3);
 
-  // No loadable replay inside the report iframe for the demo (item 12):
+  // No replay inside the report iframe for the demo (item 12 + follow-up):
   // inlineReplayModels is no longer passed for the demo path, so nothing in
-  // the report can mount a (previously blank-on-reconstruct) replay.
+  // the report can mount a (previously blank-on-reconstruct) replay — and
+  // replayShownExternally:true suppresses the report's "Session replay"
+  // sections outright, so the renderer's absent-state fallback ("recording
+  // was not enabled") never shows either. That message would be false here:
+  // recording WAS enabled; the replay renders in the host iframe below.
   await expect(visitorPane.locator('.replay-load-btn')).toHaveCount(0);
   await expect(frame.locator('[data-replay-preloaded]')).toHaveCount(0);
+  await expect(frame.locator('.replay-block')).toHaveCount(0); // all participants, not just the visitor
+  await expect(frame.locator('body')).not.toContainText('recording was not enabled');
 
   // The viewer-host iframe is a SIBLING of the report iframe in the demo's
   // top document (results-mount holds both), not nested inside it.
