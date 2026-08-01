@@ -570,3 +570,90 @@ test('blob hygiene: created - revoked === 1 after results + one playground rerun
   const counts = await page.evaluate(() => window.__chBlobCounts);
   expect(counts.created - counts.revoked).toBe(1);
 });
+
+// ---------------------------------------------------------------------------
+// 8. Replay viewer: keycast overlay (walkthrough item 8). Types the real
+// answer ('Canberra') at baseline so trial 0's recording carries real
+// keydown/keyup events (keys:'full' is the recorder default), then presses
+// play over that segment in the replay viewer's own mount and checks a
+// keycast chip appears.
+//
+// Item 8(b) asked us to verify dom-tier input-value playback lands visibly
+// in the demo's own replay, and fix that path if it doesn't. Driving the
+// live page found that it does NOT, for a reason outside this item's scope:
+// the demo's report iframe is sandbox="allow-scripts" (deliberately opaque-
+// origin, so the untrusted report content can't reach this page's storage
+// or network — see results.js's swapIframe), and the replay reconstruction
+// nests ANOTHER sandboxed iframe (sandbox="allow-same-origin") inside that
+// for DOM playback. Chromium blocks contentDocument access across that
+// specific double-sandbox nesting even though the inner iframe nominally
+// inherits an origin — confirmed with an isolated repro (two nested
+// sandboxed iframes, no replay code involved) and confirmed pre-existing
+// (reproduces on the pre-item-8 code too, so not a regression here). DOM-
+// tier replay works fine in the CLI's normal (non-nested) report output;
+// only the demo's doubly-sandboxed embedding is affected. Fixing it would
+// mean either weakening the report iframe's deliberate security sandbox or
+// rearchitecting DOM-tier reconstruction (which the alignment self-check
+// system also depends on) — both out of scope for a copy+keycast item. This
+// is exactly the situation item 8's own phrasing anticipated ("if it works,
+// keycast covers the perception gap"): keycast is a pure function of
+// recorded event timestamps, drawn in the OUTER document, so it's
+// unaffected by the inner iframe's access problem and still shows the
+// analyst that typing happened even though the field itself doesn't visibly
+// update in the demo's replay panel.
+// ---------------------------------------------------------------------------
+test('replay: keycast overlay shows a chip during typed playback; a redacted-keystroke recording renders the redacted chip', async ({ page }) => {
+  test.setTimeout(60000);
+  await startTour(page); // -> baseline (step 2)
+  await typeRealistically(page.locator('#card textarea'), 'Canberra');
+  await primaryButton(page).click(); // -> clipboard-cheat
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 });
+  await page.locator('.endguard').click(); // -> guard-debrief
+  await primaryButton(page).click(); // -> signals-to-scores
+  await primaryButton(page).click(); // -> results
+  await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
+
+  const frame = resultsFrame(page);
+  const participantId = await pid(page);
+  const visitorRow = frame.locator(`.cohort-row[data-pid="${participantId}"]`);
+  const visitorSanitized = await visitorRow.getAttribute('data-sanitized');
+  await visitorRow.click();
+  const visitorPane = frame.locator(`#p-${visitorSanitized}`);
+  await visitorPane.locator('.replay-load-btn').click();
+  const mount = visitorPane.locator('.replay-mount');
+  await mount.locator('.replay-stage').waitFor({ timeout: 5000 });
+
+  // Keycast: rewind to the start and press play through the typed segment;
+  // a chip must appear at some point during playback.
+  await mount.evaluate((m) => { m._chReplayDebug.seek(0); });
+  await mount.locator('.replay-play').click();
+  await expect(mount.locator('.replay-keycast .replay-key-chip').first()).toBeVisible({ timeout: 5000 });
+  await mount.locator('.replay-play').click(); // stop
+
+  // Redacted keystroke: synthetic model (the demo's own recording never
+  // touches a redacted field), mounted directly the way the report's own
+  // lazy-loader mounts a real one.
+  const redactedModel = {
+    tier: 'dom', legacy: false, scoring: null, captureStopped: false, markerAttr: null,
+    scrollbar: { w: 0, h: 0 }, stylesheets: [],
+    trials: [{
+      index: 0, id: 'synthetic-redacted', durMs: 1000,
+      initialDom: '<p>synthetic</p>',
+      camera: { x: 0, y: 0, w: 800, h: 600, cw: 800, ch: 600, source: 'view_state' },
+      events: [
+        { t: 100, kind: 'keydown', redacted: true },
+        { t: 250, kind: 'keyup', redacted: true },
+      ],
+    }],
+  };
+  const redactedChipShown = await visitorPane.evaluate((paneEl, model) => {
+    const testMount = document.createElement('div');
+    paneEl.appendChild(testMount);
+    window.initChReplayViewer(testMount, model);
+    testMount._chReplayDebug.seek(150); // between the redacted keydown and keyup
+    return !!testMount.querySelector('.replay-key-chip--redacted');
+  }, redactedModel);
+  expect(redactedChipShown).toBe(true);
+});

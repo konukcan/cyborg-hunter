@@ -615,6 +615,7 @@
           <tr><td>zoom change</td>       <td>Browser zoom level changed.</td></tr>
           <tr><td>synthetic insertion</td><td>Text appeared without matching keystrokes.</td></tr>
           <tr><td>foreign input</td>     <td>Keystroke outside the response field.</td></tr>
+          <tr><td>typing/keystroke</td>  <td>In the replay viewer only: keys pressed during the recording, shown as chips while the trial plays back. Not scored; a viewer aid, not a signal.</td></tr>
           <tr><td>edge exit</td>         <td>Mouse exited the viewport edge &mdash; pattern often seen with sidebar use.</td></tr>
         </tbody>
       </table>
@@ -881,6 +882,12 @@
     .replay-css-btn { font-size: 12px; padding: 2px 8px; }
     .replay-clock { font: 12px/1.3 ui-monospace, SFMono-Regular, 'IBM Plex Mono', monospace;
                     font-variant-numeric: tabular-nums; }
+    .replay-keycast { position: absolute; left: 0; right: 0; bottom: 0; display: flex;
+                    gap: 4px; padding: 5px 6px; pointer-events: none; flex-wrap: wrap-reverse; }
+    .replay-key-chip { font: 11px/1.2 ui-monospace, SFMono-Regular, 'IBM Plex Mono', monospace;
+                    background: rgba(0,0,0,0.72); color: #fff; padding: 2px 7px;
+                    border-radius: 3px; white-space: nowrap; }
+    .replay-key-chip--redacted { background: rgba(0,0,0,0.5); font-style: italic; }
   </style>
   <script>
 

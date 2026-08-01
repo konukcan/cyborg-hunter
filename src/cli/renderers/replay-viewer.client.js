@@ -48,6 +48,12 @@
   var TOL_CONTAIN = 2;
   var TOL_STAGE = 2;
 
+  // Keycast: how long a chip keeps fading after its keyup, in trial-relative
+  // ms. Purely a function of playhead (like the click-ripple fade in
+  // drawOverlay below), not real time, so seeking lands on the same visual
+  // state playing to it would.
+  var KEYCAST_FADE_MS = 500;
+
   var DISCRETE_KINDS = {
     mousedown: true, mouseup: true, click: true, touchstart: true, touchend: true
   };
@@ -64,6 +70,13 @@
     var m = Math.floor(s / 60);
     var rem = (s - m * 60).toFixed(1);
     return m + ':' + (rem < 10 ? '0' : '') + rem;
+  }
+
+  // Human label for a keycast chip. e.key already names special keys well
+  // (Enter, Shift, Backspace, ArrowLeft…); the one gap is the space bar,
+  // which arrives as a literal ' ' and would render as an invisible chip.
+  function formatKeyLabel(key) {
+    return key === ' ' ? 'Space' : key;
   }
 
   // ── DOM reconstruction (tier 'dom') ──
@@ -193,7 +206,7 @@
     header.appendChild(clock);
     if (!model.scoring) {
       header.appendChild(el('span', 'replay-note',
-        'Integrity scoring not available (standalone recording)'));
+        'No integrity score attached (this recording was captured standalone)'));
     }
     if (model.captureStopped) {
       header.appendChild(el('span', 'replay-note replay-warn',
@@ -206,17 +219,17 @@
     header.appendChild(alignChip);
     if (model.legacy) {
       var legacyChip = el('span', 'replay-note replay-warn',
-        'Legacy recording — reduced alignment guarantees (re-projected coordinates, unverified)');
+        'Legacy recording: alignment guarantees are reduced (coordinates re-projected, unverified)');
       legacyChip.setAttribute('data-ch-legacy', '');
       header.appendChild(legacyChip);
     }
     var iframeChip = el('span', 'replay-note replay-warn',
-      'Contains iframe content that was NOT captured — interactions inside it are invisible');
+      'This recording contains iframe content that was not captured. Interactions inside it are not visible here.');
     iframeChip.setAttribute('data-ch-iframe-warn', '');
     iframeChip.style.display = 'none';
     header.appendChild(iframeChip);
     var shadowChip = el('span', 'replay-note replay-warn',
-      'Contains shadow-DOM content that was NOT captured — those areas replay hollow');
+      'This recording contains shadow DOM content that was not captured. Those areas replay empty.');
     shadowChip.setAttribute('data-ch-shadow-warn', '');
     shadowChip.style.display = 'none';
     header.appendChild(shadowChip);
@@ -238,7 +251,7 @@
       return sh.css && /@keyframes/i.test(sh.css);
     });
     if (hasKeyframes) {
-      animChip.textContent = 'Page uses CSS animations — they replay on viewer time; animated positions are approximate';
+      animChip.textContent = 'This page uses CSS animations. They replay on the viewer’s own clock, so animated positions are approximate.';
       animChip.style.display = '';
     }
     header.appendChild(animChip);
@@ -247,7 +260,7 @@
     var omittedSheets = (model.stylesheets || []).filter(function (sh) { return !sh.css; }).length;
     if (omittedSheets > 0) {
       var cssNote = el('span', 'replay-note',
-        omittedSheets + ' external stylesheet(s) not loaded — layout may differ. ');
+        omittedSheets + ' external stylesheet(s) were not loaded. Layout may differ. ');
       var cssBtn = el('button', 'replay-css-btn', 'Load external CSS');
       cssBtn.title = 'Fetches the recorded stylesheet URLs from their origins (network requests leave this machine).';
       cssBtn.addEventListener('click', function () {
@@ -282,13 +295,21 @@
     } else {
       stage.classList.add('replay-neutral');
       stage.appendChild(el('div', 'replay-neutral-label',
-        'Trace-only recording — DOM not captured at this tier'));
+        'Trace-only recording: DOM was not captured at this tier'));
     }
 
     var overlay = document.createElement('canvas');
     overlay.className = 'replay-overlay';
     overlay.setAttribute('aria-hidden', 'true');
     stage.appendChild(overlay);
+    // Keycast: chips for keys currently down or recently released, mirroring
+    // the click-ripple/cursor-trail convention above (a pure function of
+    // playhead, drawn alongside them — see drawKeycast). keys:'off'
+    // recordings carry no keydown/keyup events, so this stays empty; that
+    // absence IS the honest signal, no separate note needed.
+    var keycast = el('div', 'replay-keycast');
+    keycast.setAttribute('aria-hidden', 'true');
+    stage.appendChild(keycast);
     mount.appendChild(stage);
     var ctx = overlay.getContext('2d');
 
@@ -443,6 +464,7 @@
         applyCamScroll();
         applyDomUpTo(thenSeekTo);
         drawOverlay();
+        drawKeycast();
         updateStatusChips();
         // Late-layout revalidation: web fonts settling after the first
         // layout can shift geometry and stale an initially-passing check.
@@ -707,6 +729,7 @@
         applyDomUpTo(playhead);
       }
       drawOverlay();
+      drawKeycast();
       drawLane();
       drawTicker();
       updateStatusChips();
@@ -813,6 +836,66 @@
       }
     }
 
+    // ── Keycast (bottom-of-stage chips) ──
+    // Pairs keydown with its keyup to get each key's [down, up] window, then
+    // returns the ones "live" at T: down and not yet released, or released
+    // within KEYCAST_FADE_MS. Non-redacted pairs match by e.code (handles
+    // overlapping holds, e.g. Shift+A); redacted pairs carry no code (the
+    // identity itself is withheld), so they match FIFO against each other —
+    // an approximation that assumes redacted keystrokes don't overlap, true
+    // for the single-field-typing case this exists to cover.
+    function computeKeycastChips(T) {
+      var events = trial().events;
+      var openByCode = new Map();
+      var redactedQueue = [];
+      var tokens = [];
+      for (var i = 0; i < events.length; i++) {
+        var e = events[i];
+        if (e.t > T) break;
+        if (e.kind !== 'keydown' && e.kind !== 'keyup') continue;
+        if (e.redacted) {
+          if (e.kind === 'keydown') {
+            var rtok = { redacted: true, downT: e.t, upT: null };
+            redactedQueue.push(rtok);
+            tokens.push(rtok);
+          } else {
+            var rt = redactedQueue.shift();
+            if (rt) rt.upT = e.t;
+          }
+          continue;
+        }
+        if (e.kind === 'keydown') {
+          // Auto-repeat sends keydown without an intervening keyup; keep the
+          // original token open rather than starting a new one.
+          if (!openByCode.has(e.code)) {
+            var tok = { key: e.key, downT: e.t, upT: null };
+            openByCode.set(e.code, tok);
+            tokens.push(tok);
+          }
+        } else {
+          var open = openByCode.get(e.code);
+          if (open) { open.upT = e.t; openByCode.delete(e.code); }
+        }
+      }
+      return tokens.filter(function (tok) {
+        return tok.upT == null || T <= tok.upT + KEYCAST_FADE_MS;
+      });
+    }
+
+    function drawKeycast() {
+      var chips = computeKeycastChips(playhead);
+      keycast.textContent = '';
+      chips.forEach(function (tok) {
+        var chip = el('span', 'replay-key-chip' + (tok.redacted ? ' replay-key-chip--redacted' : ''),
+          tok.redacted ? '•' : formatKeyLabel(tok.key));
+        if (tok.upT != null && playhead > tok.upT) {
+          var frac = Math.min(1, (playhead - tok.upT) / KEYCAST_FADE_MS);
+          chip.style.opacity = String(1 - frac);
+        }
+        keycast.appendChild(chip);
+      });
+    }
+
     // ── Marker lane (per trial; redrawn per seek so check marks appear) ──
     function drawLane() {
       var lctx = lane.getContext('2d');
@@ -886,7 +969,7 @@
       }
       var fails = counters.patchFailures + counters.scrollFailures;
       if (fails > 0) {
-        failChip.textContent = '⚠ ' + fails + ' recorded change(s) could not be re-applied — replay may diverge';
+        failChip.textContent = '⚠ ' + fails + ' recorded change(s) could not be reapplied. Replay may diverge from the original session.';
         failChip.style.display = '';
       } else {
         failChip.style.display = 'none';
@@ -965,8 +1048,8 @@
       var recDpr = (trial().camera && trial().camera.dpr) ||
         (model.viewport && model.viewport.dpr) || null;
       if (recDpr && window.devicePixelRatio && recDpr !== window.devicePixelRatio) {
-        dprChip.textContent = 'Recorded at DPR ' + recDpr + ', viewing at DPR ' +
-          window.devicePixelRatio + ' — resolution-dependent styling may differ';
+        dprChip.textContent = 'Recorded at DPR ' + recDpr + ', now viewing at DPR ' +
+          window.devicePixelRatio + '. Resolution-dependent styling may differ.';
         dprChip.style.display = '';
       } else {
         dprChip.style.display = 'none';
