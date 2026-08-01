@@ -193,7 +193,28 @@ export function swapIframe(container, html, prevUrl, onload, onFail) {
   return url;
 }
 
-export function buildResults(container, state, manifest, hooks) {
+// Resolves the args for buildResults's very FIRST run() call: the
+// caller-supplied `initial` (buildResults's optional 5th param — demo.js's
+// persistence seam for state.scoringOverrides, walkthrough item 7) when
+// present, else the untouched baseline every call before this seam existed
+// used (null config, identity payloads). Without this, a step-11 weight
+// edit would only ever reach a LATER playground rerun, never the report's
+// first render. Exported so the decision is unit-testable without
+// buildResults's DOM-dependent orchestration (iframe load, blob swap — see
+// this file's top docblock).
+export function resolveInitialRun(initial) {
+  return {
+    configOverrides: (initial && initial.configOverrides) || null,
+    transformPayloads: initial ? initial.transformPayloads : undefined,
+  };
+}
+
+// `initial` (5th, optional): { configOverrides, transformPayloads } to
+// apply on the FIRST report build — same shape every later playground
+// rerun already accepted via run(), just threaded to the first call too
+// (see resolveInitialRun above). Omitted (or state.scoringOverrides never
+// touched — see demo.js) preserves the exact prior behavior.
+export function buildResults(container, state, manifest, hooks, initial) {
   if (!container) return;
   var version = (window.CyborgHunter && window.CyborgHunter.VERSION) || 'unknown';
   container.innerHTML = '<p class="hint" data-role="results-status">Building your report…</p>';
@@ -262,7 +283,8 @@ export function buildResults(container, state, manifest, hooks) {
       });
     }
 
-    await run(null);
+    var firstRun = resolveInitialRun(initial);
+    await run(firstRun.configOverrides, firstRun.transformPayloads);
     if (settled) return; // gaveUp === true: the watchdog already fired, nothing left to finish
     settled = true;
     clearTimeout(timeoutId);

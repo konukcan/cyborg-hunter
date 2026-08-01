@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { makeDebounced, recomputeSignals } from '../../demo/playground.js';
+import { makeDebounced, recomputeSignals, mergePlaygroundConfig } from '../../demo/playground.js';
 import { extractIntegrityData } from '../../src/cli/extract-core.js';
 import { computeSummary } from '../../src/cli/analyzers/summary.js';
 import { detectEdgeExits } from '../../src/cli/analyzers/edge-exit.js';
@@ -265,4 +265,66 @@ test('recomputeSignals: fixture on disk stays untouched across a recompute', () 
 test('recomputeSignals: empty/missing payloads list is handled', () => {
   assert.deepEqual(recomputeSignals([], STD_CONTROLS, STD), []);
   assert.deepEqual(recomputeSignals(undefined, STD_CONTROLS, STD), []);
+});
+
+// ── mergePlaygroundConfig (walkthrough item 7, CODEX override contract) ──
+// { weights, controls, preset } -> one canonical { preset, controls,
+// scoring } view. Step 11's live-score readout, results.js's initial-render
+// persistence seam, and step 12's own playground all resolve through this
+// single merge — pinned here so a signature drift can't silently desync them.
+
+test('mergePlaygroundConfig: empty/untouched overrides reproduce the manifest\'s own default preset verbatim', () => {
+  const merged = mergePlaygroundConfig(MANIFEST, { weights: {}, controls: null, preset: null });
+  assert.equal(merged.preset, 'standard');
+  assert.deepEqual(merged.controls, MANIFEST.presets.standard.controls);
+  assert.deepEqual(merged.scoring, MANIFEST.presets.standard.scoring);
+});
+
+test('mergePlaygroundConfig: a weight override changes only that signal\'s weight, leaving maxPerTrial and every other signal untouched', () => {
+  const merged = mergePlaygroundConfig(MANIFEST, { weights: { copy: 9 }, controls: null, preset: null });
+  assert.equal(merged.scoring.soft.copy.weight, 9);
+  assert.equal(merged.scoring.soft.copy.maxPerTrial, MANIFEST.presets.standard.scoring.soft.copy.maxPerTrial);
+  assert.deepEqual(merged.scoring.soft.tabAway, MANIFEST.presets.standard.scoring.soft.tabAway);
+});
+
+test('mergePlaygroundConfig: a weight key the selected preset doesn\'t score is silently ignored', () => {
+  // strict scores no copy soft (playground.js's disclosed non-emulated
+  // knob) — a leftover step-11 copy weight from a standard-preset visit
+  // must not resurrect a copy term when the preset switches to strict.
+  const merged = mergePlaygroundConfig(MANIFEST, { weights: { copy: 9 }, controls: null, preset: 'strict' });
+  assert.equal(merged.preset, 'strict');
+  assert.equal(merged.scoring.soft.copy, undefined);
+});
+
+test('mergePlaygroundConfig: controls/preset overrides layer on top of the selected preset\'s own controls', () => {
+  const merged = mergePlaygroundConfig(MANIFEST, { weights: {}, controls: { pasteHardCount: 5 }, preset: 'strict' });
+  assert.equal(merged.preset, 'strict');
+  assert.equal(merged.controls.pasteHardCount, 5); // overridden
+  assert.equal(merged.controls.tabAwayCutoffMs, MANIFEST.presets.strict.controls.tabAwayCutoffMs); // from strict, untouched
+});
+
+test('mergePlaygroundConfig: returns null when the manifest has no presets block', () => {
+  assert.equal(mergePlaygroundConfig({ signals: {} }, { weights: {}, controls: null, preset: null }), null);
+});
+
+// ── recomputeSignals + a weights override (both directions) ────────────
+// example-1's baseline softScore is 7 under STD (see the faithfulness-pin
+// test above): q1 0, q2 tabAway(2x1=2)+copy(1x2=2)=4, q3 tabAway(1x1=1)+
+// typingSpeed(1x2=2)=3. Only q2 has a copy event (1 hit, capped at
+// maxPerTrial 2), so overriding copy's weight changes the total by exactly
+// (newWeight - 2) x 1 hit — raise it and lower it from the same baseline to
+// prove the override moves the score in both directions, not just one.
+
+test('recomputeSignals: raising a signal\'s weight (via mergePlaygroundConfig) raises the soft score', () => {
+  const example1 = loadExample('example-1');
+  const merged = mergePlaygroundConfig(MANIFEST, { weights: { copy: 10 }, controls: null, preset: null });
+  const [out] = recomputeSignals([example1], merged.controls, merged.scoring);
+  assert.equal(out.metadata.integritySession.softScore, 15); // 7 baseline - 2 default copy contribution + 1 hit x 10
+});
+
+test('recomputeSignals: lowering a signal\'s weight (via mergePlaygroundConfig) lowers the soft score', () => {
+  const example1 = loadExample('example-1');
+  const merged = mergePlaygroundConfig(MANIFEST, { weights: { copy: 0 }, controls: null, preset: null });
+  const [out] = recomputeSignals([example1], merged.controls, merged.scoring);
+  assert.equal(out.metadata.integritySession.softScore, 5); // 7 baseline - 2 default copy contribution + 1 hit x 0
 });

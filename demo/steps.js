@@ -117,6 +117,28 @@ export const HONEYPOT = {
 };
 
 /**
+ * Step-11 scoring panel (demo.js's renderScoringPanel/wireScoringPanel):
+ * per-signal weight editors + two config-as-source snippets. Field order/
+ * labels here; the live numbers come from signal-manifest.json (never
+ * hand-typed) so a preset change can't silently drift from what's shown.
+ */
+export const SCORING_PANEL = {
+  weightsIntro:
+    'Move a weight and the score below recomputes against your own ' +
+    'session, using the same arithmetic the CLI runs.',
+  weightFields: [
+    { key: 'copy', label: 'copy' },
+    { key: 'tabAway', label: 'tab-away past the cutoff' },
+    { key: 'typingSpeed', label: 'fast typing' },
+    { key: 'sidebarEvent', label: 'sidebar open' },
+    { key: 'devTools', label: 'DevTools shortcut' },
+    { key: 'foreignInput', label: 'foreign input' },
+  ],
+  configIntro: "As it actually reads in the library's scoring config:",
+  cliConfigIntro: "As it actually reads in the CLI's config file:",
+};
+
+/**
  * The 13-step script. Advance is never blocked; every task is an invitation.
  * act: intro | act1 | act2 | bridge | finale
  */
@@ -339,18 +361,29 @@ and recorded the pushing.</p>`.trim(),
     eyebrow: 'Step 11 of 13',
     title: 'From signals to scores',
     body: `
-<p>Everything you triggered is now rows in a session file. The CLI turns
-those rows into a report using a config: each signal type carries a score,
-thresholds decide when a count becomes a flag, and the flags roll up into
-three tiers — HARD (strong evidence, read first), SOFT (worth a look),
-CLEAN (nothing fired). Participants are then ordered worst-first, so a
-reviewer spends their attention where it matters.</p>
-<p>The scores are choices, not measurements. The defaults are starting
-points; the next screen lets you move the thresholds and watch your own
-tier and ordering change. Finer control, a different score for any
-individual signal, is set in the library's scoring config when a study is
-initialized. The config file you'll download at the end carries the
-analysis-side settings your report is built with.</p>`.trim(),
+<p>Everything you triggered is now rows in a session file. The library
+that recorded them already scores each session: paste and drop each have
+their own count threshold; every other signal carries a weight, and the
+weights that fired sum into a soft score checked against its own
+threshold. Crossing either kind of threshold puts a session in one of
+three tiers: HARD (a hard signal crossed its threshold), SOFT (the soft
+score crossed its threshold), CLEAN (neither).</p>
+<p>These numbers live in two different places. Per-signal weights, and the
+two presets they belong to (standard, strict), are set once, in the
+library's scoring config, when a study is initialized. The soft-score
+threshold, and two threshold fallbacks (tab-away cutoff, typing speed), are
+set separately, in the CLI's config file, on the analysis side. Below is
+both, as they actually read in code: move a weight and your own soft score
+recomputes against it, live.</p>
+<p>Ordering the participant list is a separate step, done afterward by the
+CLI, once every session already has a tier. Tier comes first, always: hard
+rows before soft before clean. Inside a tier, a fixed ranking score orders
+the rest, one the weights above never touch: 5 points per paste event, 5
+per copy event, 3 per sidebar-open, 1 per tab-away past the participant's
+cutoff (a flicker under that cutoff scores nothing). A hard trigger, a
+honeypot catch, a detected AI extension, and an edge exit do not add to
+this score; they show up in the row's reason text instead, next to
+whatever did.</p>`.trim(),
     task: null,
     primaryLabel: 'Build my report →',
     secondary: null,
@@ -365,7 +398,9 @@ analysis-side settings your report is built with.</p>`.trim(),
 report the CLI produces — same analyzers, same renderer, same plots drawn
 by the same code (your browser's canvas draws them, so fonts and edges may
 differ slightly from the CLI's files). Two example participants sit beside
-you so the triage list reads as it would in a real study.</p>`.trim(),
+you so the triage list reads as it would in a real study. Each
+participant's detail pane also breaks their score into the same four
+weighted terms from the last step, shown as bars that sum to the total.</p>`.trim(),
     task: null,
     primaryLabel: 'Replicate it locally →',
     secondary: null,

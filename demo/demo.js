@@ -18,7 +18,7 @@
 
 import {
   STEPS, POSITIONING, CLOSING_CTA, CONFIG_CAVEAT, RAIL_GROUPS, RAIL_INTRO,
-  CODE_TABS, HONEYPOT, DOWNLOAD_FILES, REPLICATE
+  CODE_TABS, HONEYPOT, DOWNLOAD_FILES, REPLICATE, SCORING_PANEL
 } from './steps.js';
 import { makeLifecycle } from './lifecycle.js';
 import { renderRail, light, acknowledge } from './rail.js';
@@ -203,7 +203,15 @@ function startTour(participantId, capabilities, manifest) {
     // after each successful rebuild; null until the visitor touches a
     // control). buildDownloadFile('config') reads these so the downloaded
     // config reflects the report as last built, tweaks included.
-    playgroundControls: null
+    playgroundControls: null,
+    // Walkthrough item 7: shared scoring overrides — CODEX override
+    // contract — written by step 11's per-signal weight edits (weights)
+    // and step 12's playground threshold controls (controls/preset). Read
+    // by playground.js's mergePlaygroundConfig() to build one canonical
+    // {controls, scoring} view every caller shares (step 11's live-score
+    // readout, results.js's initial-render persistence seam below, step
+    // 12's own rebuild) — so the two UIs can never quietly disagree.
+    scoringOverrides: { weights: {}, controls: null, preset: null }
   };
 
   var cardEl = document.getElementById('card');
@@ -916,6 +924,158 @@ function startTour(participantId, capabilities, manifest) {
     return html;
   }
 
+  // Cached module import: step 11's live-score readout and the results
+  // step's playground both need playground.js — a repeated dynamic import
+  // of the same specifier resolves from the module cache (no second
+  // network fetch), so this local promise just avoids a redundant await
+  // chain when the visitor reaches step 11 before the results step.
+  var playgroundModPromise = null;
+  function loadPlayground() {
+    if (!playgroundModPromise) playgroundModPromise = import('./playground.js');
+    return playgroundModPromise;
+  }
+
+  // Config-as-source snippets (step 11, walkthrough item 7a): both built
+  // from the manifest's real values, never hand-typed, so a preset change
+  // can't silently drift from what's displayed (same principle as
+  // tools/gen-signal-manifest.mjs's own docblock). Shows the 'standard'
+  // preset specifically — what this session actually collected under —
+  // regardless of any preset the visitor later selects in step 12's
+  // playground.
+  function buildInitSnippet(manifest) {
+    var soft = (manifest.presets && manifest.presets.standard &&
+      manifest.presets.standard.scoring.soft) || {};
+    var lines = Object.keys(soft).map(function (key) {
+      var w = soft[key];
+      var props = ['weight: ' + w.weight];
+      if (w.maxPerTrial != null) props.push('maxPerTrial: ' + w.maxPerTrial);
+      return '      ' + key + ': { ' + props.join(', ') + ' },';
+    }).join('\n');
+    return (
+      "CyborgHunter.init({\n" +
+      "  participantId: subject.id,\n" +
+      "  preset: 'standard',\n" +
+      "  scoring: {\n" +
+      "    soft: {\n" +
+      lines + "\n" +
+      "    }\n" +
+      "  }\n" +
+      "});"
+    );
+  }
+
+  function buildCliConfigSnippet(manifest) {
+    var m = manifest.signals;
+    return JSON.stringify({
+      dataDir: '.',
+      filePattern: '*.json',
+      thresholds: { tabAwayDurationMs: m.tabAway.durationMs },
+      typingSpeedThreshold_cps: m.typingSpeed.cps,
+      scoring: { softScoreThreshold: m.softScoreThreshold },
+    }, null, 2);
+  }
+
+  // Step 11's scoring panel (walkthrough item 7): per-signal weight editors
+  // seeded from state.scoringOverrides.weights (falling back to the active
+  // preset's own defaults) plus the two config-as-source snippets above.
+  // Interactivity (weight-input listener, live soft-score readout) is
+  // wired separately by wireScoringPanel() once playground.js has loaded —
+  // this function only builds the static HTML shell, same split every
+  // other step-specific panel here uses.
+  function renderScoringPanel(manifest) {
+    var presetName = state.scoringOverrides.preset || manifest.preset || 'standard';
+    var presetEntry = (manifest.presets && manifest.presets[presetName]) || {};
+    var baseSoft = (presetEntry.scoring && presetEntry.scoring.soft) || {};
+    var weights = state.scoringOverrides.weights;
+
+    var editorsHtml = SCORING_PANEL.weightFields.map(function (f) {
+      var base = baseSoft[f.key];
+      if (!base) return ''; // e.g. strict scores no copy soft — no editor for a term that isn't scored
+      var current = weights[f.key] != null ? weights[f.key] : base.weight;
+      return (
+        '<label>' + escHtml(f.label) +
+        ' <input type="number" min="0" max="20" data-role="weight-input" data-weight-key="' +
+        f.key + '" value="' + escHtml(current) + '"></label>'
+      );
+    }).join(' ');
+
+    return (
+      '<div class="task" data-role="scoring-panel">' +
+      '<p class="hint">' + escHtml(SCORING_PANEL.weightsIntro) + '</p>' +
+      '<div class="weight-editors">' + editorsHtml + '</div>' +
+      '<p class="hint" data-role="live-score"></p>' +
+      '<p class="hint">' + escHtml(SCORING_PANEL.configIntro) + '</p>' +
+      '<pre><code>' + escHtml(buildInitSnippet(manifest)) + '</code></pre>' +
+      '<p class="hint">' + escHtml(SCORING_PANEL.cliConfigIntro) + '</p>' +
+      '<pre><code>' + escHtml(buildCliConfigSnippet(manifest)) + '</code></pre>' +
+      '</div>'
+    );
+  }
+
+  // Step 11: wires the weight-input listener + the live current-soft-score
+  // readout (buildCurrentPayload() -> recomputeSignals(), against the
+  // visitor's own session so far). Debounced (reuses playground.js's
+  // makeDebounced) so dragging an input's spinner doesn't recompute on
+  // every intermediate value. Called fresh from goTo() every time step 11
+  // renders — the previous render's panel/listeners are gone with the old
+  // innerHTML, same discipline as every other step-specific wiring here.
+  function wireScoringPanel(manifest) {
+    var panel = cardEl.querySelector('[data-role="scoring-panel"]');
+    var scoreEl = cardEl.querySelector('[data-role="live-score"]');
+    if (!panel || !scoreEl) return;
+
+    loadPlayground().then(function (playgroundMod) {
+      function showScore() {
+        var merged = playgroundMod.mergePlaygroundConfig(manifest, state.scoringOverrides);
+        if (!merged) { scoreEl.textContent = ''; return; }
+        var payload = playgroundMod.recomputeSignals(
+          [buildCurrentPayload()], merged.controls, merged.scoring)[0];
+        var session = payload.metadata.integritySession || {};
+        scoreEl.textContent = 'Your soft score with these weights, from the session so far: ' +
+          (session.softScore || 0) + ' (flags at ' + merged.scoring.softScoreThreshold + ' or above).';
+      }
+      var debouncedShowScore = playgroundMod.makeDebounced(showScore, 200);
+
+      panel.addEventListener('input', function (e) {
+        var input = e.target.closest('[data-weight-key]');
+        if (!input) return;
+        var value = Number(input.value);
+        if (!isFinite(value)) return;
+        state.scoringOverrides.weights[input.dataset.weightKey] = value;
+        debouncedShowScore();
+      });
+
+      showScore();
+    }).catch(function (err) {
+      console.warn('cyborg-hunter demo: scoring panel failed to load playground', err);
+    });
+  }
+
+  // Persistence seam (walkthrough item 7, ENG-REVIEW amendment): when step
+  // 11's weight edits (or a prior visit to step 12's controls) left
+  // state.scoringOverrides non-empty, the FIRST results build must reflect
+  // them too — not just later playground reruns (results.js's buildResults
+  // 5th `initial` param exists for exactly this). Returns null (the exact
+  // baseline every build before this item produced) when nothing was ever
+  // touched.
+  function buildInitialScoringTransform(playgroundMod, manifest) {
+    var overrides = state.scoringOverrides;
+    var touched = Object.keys(overrides.weights).length > 0 || !!overrides.controls || !!overrides.preset;
+    if (!touched) return null;
+    var merged = playgroundMod.mergePlaygroundConfig(manifest, overrides);
+    if (!merged) return null;
+    return {
+      configOverrides: {
+        thresholds: { tabAwayDurationMs: merged.controls.tabAwayCutoffMs },
+        typingSpeedThreshold_cps: merged.controls.typingSpeedCps,
+        scoring: { softScoreThreshold: merged.scoring.softScoreThreshold },
+      },
+      transformPayloads: function (payloads) {
+        return playgroundMod.recomputeSignals(payloads, merged.controls, merged.scoring);
+      },
+    };
+  }
+
   // The four ids GuardHoneypot plants at boot (src/jspsych/extension-guard-
   // honeypot.js's injectHoneypotDOM): the hidden checkbox + text field
   // pair, then the two low-opacity visible micro-surfaces (button, input)
@@ -1126,6 +1286,10 @@ function startTour(participantId, capabilities, manifest) {
     }
     html += renderTaskPanel(step.task);
     if (step.showCodeTabs) html += renderCodeTabs();
+    // Step 11 (walkthrough item 7): config-as-source snippets + per-signal
+    // weight editors. task: null for this step, so this is a sibling of
+    // the (empty) task panel, same placement pattern as results-mount below.
+    if (step.id === 'signals-to-scores') html += renderScoringPanel(manifest);
     // Results screen (step 12): renderTaskPanel(null) is '' (task: null in
     // steps.js) — this mount point is what goTo() hands to results.js's
     // buildResults(), which owns everything inside it (loading state,
@@ -1188,6 +1352,10 @@ function startTour(participantId, capabilities, manifest) {
     // Repaints from state.chipCounts (not a reset) so Back-then-forward into
     // guard-cheat shows the tally already accumulated this session.
     if (step.task && step.task.kind === 'guard-cheat') renderViolationChips();
+    // Step 11 (walkthrough item 7): wire the weight-input listener + live
+    // soft-score readout fresh against the new panel markup renderStep()
+    // just wrote.
+    if (step.id === 'signals-to-scores') wireScoringPanel(manifest);
     if (step.id === 'results') {
       // Snapshotted here (not earlier): results is the last interactive
       // step, so this reflects the complete session. The pane/replay/guard
@@ -1204,23 +1372,34 @@ function startTour(participantId, capabilities, manifest) {
       // Dynamic import: results.js (and its plot-adapter.js dependency) are
       // only needed once, at this last step — lazy-loading them keeps every
       // earlier step's page weight down. playground.js (C3) is loaded the
-      // same lazy way, alongside it, and wired through buildResults()'s
-      // optional 4th `hooks` arg — hooks.onReady is what results.js calls
-      // once the first report build succeeds (see results.js's buildResults
-      // docblock). The playground load is its own try: if it fails, the
-      // report itself still builds and shows, just without the controls —
-      // same "degrade, don't block" posture as replay/guard elsewhere here.
+      // same lazy way, alongside it (loadPlayground() reuses step 11's
+      // cached import when the visitor already saw it there), and wired
+      // through buildResults()'s optional 4th `hooks` arg — hooks.onReady is
+      // what results.js calls once the first report build succeeds (see
+      // results.js's buildResults docblock). The 5th `initial` arg is the
+      // walkthrough-item-7 persistence seam: when state.scoringOverrides was
+      // ever touched (step 11 weights, or a previous visit to step 12's
+      // controls), the FIRST build reflects it too — see
+      // buildInitialScoringTransform above. The playground load is its own
+      // try: if it fails, the report itself still builds and shows, just
+      // without the controls (and without the seam, since it needs
+      // playground.js's recomputeSignals too) — same "degrade, don't block"
+      // posture as replay/guard elsewhere here.
       import('./results.js').then(function (resultsMod) {
-        import('./playground.js').then(function (playgroundMod) {
+        loadPlayground().then(function (playgroundMod) {
           resultsMod.buildResults(mount, state, manifest, {
             onReady: function (ctx) {
               // Settled playground settings, reported after each successful
               // rebuild — buildDownloadFile('config') reads these so the
               // downloaded config matches what the report actually ran with.
               ctx.onControls = function (controls) { state.playgroundControls = controls; };
+              // Shared state (CODEX override contract) so step 12's
+              // playground initializes from, and writes back to, the same
+              // object step 11's weight editors and live-score readout use.
+              ctx.scoringOverrides = state.scoringOverrides;
               playgroundMod.mountPlayground(ctx);
             }
-          });
+          }, buildInitialScoringTransform(playgroundMod, manifest));
         }).catch(function (err) {
           console.warn('cyborg-hunter demo: playground failed to load, showing the report without it', err);
           resultsMod.buildResults(mount, state, manifest);

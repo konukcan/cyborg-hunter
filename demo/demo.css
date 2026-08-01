@@ -282,6 +282,15 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
 .filetext-dialog h3{margin:0 0 10px;font:600 13px/1 var(--mono);}
 .filetext-dialog pre{max-height:60vh;overflow:auto;user-select:text;margin:0 0 14px;}
 
+/* ---------------------------------------------------------------------
+ * Step 11 scoring panel (walkthrough item 7) — per-signal weight editors.
+ * Wrapped in .task for the recessed background; config-as-source snippets
+ * below it inherit the global `pre`/.code-tabs treatment unchanged.
+ * --------------------------------------------------------------------- */
+.weight-editors{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 10px;}
+.weight-editors label{font-size:13px;display:flex;align-items:center;gap:6px;}
+.weight-editors input[type="number"]{width:56px;}
+
 /* Replicate-locally walkthrough (step 13) — numbered sections. .replicate
  * pre inherits the global `pre` rule above (background/padding/radius/
  * overflow/margin) unchanged — nothing extra needed there. */

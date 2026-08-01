@@ -446,6 +446,61 @@ test('playground: paste threshold and tab-away/typing-speed cutoffs flip tiers',
 });
 
 // ---------------------------------------------------------------------------
+// 4b. Step 11 -> step 12 scoring-overrides persistence seam (walkthrough
+// item 7): a per-signal weight edit on step 11 must reach the results
+// screen's FIRST render (not just a later playground rerun), and step 12's
+// own playground must initialize from the same shared state and show the
+// edit as a read-only summary line rather than a second editor.
+// ---------------------------------------------------------------------------
+test('step 11 weight edit reaches the results FIRST render, and step 12 agrees without a duplicate editor', async ({ page }) => {
+  test.setTimeout(60000);
+  await startTour(page); // -> baseline
+  await typeRealistically(page.locator('#card textarea'), 'a city in Australia');
+  await primaryButton(page).click(); // -> clipboard-cheat
+  await dispatchCopy(page); // 1 copy event
+  await dispatchPaste(page, '#card textarea', ANSWER); // 1 paste — below the hard threshold (2), stays out of HARD
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 });
+  await page.locator('.endguard').click(); // -> guard-debrief
+  await primaryButton(page).click(); // -> signals-to-scores (step 11)
+
+  // Baseline: the standard preset's copy weight (2) x 1 hit = a soft score
+  // of 2, well under the flag threshold (6) — CLEAN going in.
+  const copyWeightInput = page.locator('[data-weight-key="copy"]');
+  await copyWeightInput.waitFor({ timeout: 5000 });
+  await expect(copyWeightInput).toHaveValue('2');
+  const liveScore = page.locator('[data-role="live-score"]');
+  await expect(liveScore).toContainText(/so far: 2 \(/, { timeout: 5000 });
+
+  // Raise the copy weight past the flag threshold: 1 hit x 20 = 20 >= 6.
+  await copyWeightInput.fill('20');
+  await copyWeightInput.dispatchEvent('input');
+  await expect(liveScore).toContainText(/so far: 20 \(/, { timeout: 5000 });
+
+  await primaryButton(page).click(); // -> results (step 12) — FIRST render must already reflect the edit
+  await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
+
+  // (i) First-render reflects the edit: the visitor's tier is SOFT, not
+  // CLEAN, from the very first build (no playground interaction yet).
+  await expect(page.locator('.yourreport')).toContainText('SOFT');
+  const frame = resultsFrame(page);
+  const participantId = await pid(page);
+  await frame.locator(`.cohort-row[data-pid="${participantId}"]`).waitFor({ timeout: 8000 });
+  await expect(frame.locator(`.cohort-row[data-pid="${participantId}"]`)).toHaveAttribute('data-tier', 'soft');
+
+  // (ii) Step 12's playground initializes its threshold inputs from the
+  // shared state (untouched here, so the manifest's own defaults) and shows
+  // the active step-11 weight as a read-only summary — no second weight
+  // editor duplicating step 11's.
+  const pasteInput = page.locator('[data-k="pasteHardCount"]');
+  await pasteInput.waitFor({ timeout: 8000 });
+  await expect(pasteInput).toHaveValue('2');
+  await expect(page.locator('[data-role="pg-weights-summary"]')).toContainText('copy 20');
+  await expect(page.locator('[data-role="playground"] [data-weight-key]')).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
 // 5. Zero-lamp path: skip everything, results shows the clean-report headline
 // ---------------------------------------------------------------------------
 test('zero-lamp path: skip everything via .skip links + guard skip -> clean report', async ({ page }) => {
