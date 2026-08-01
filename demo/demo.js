@@ -871,13 +871,57 @@ function startTour(participantId, capabilities, manifest) {
     return html;
   }
 
-  // Step 7's honeypot task: the (escaped) bait markup, the "act like an
-  // agent" simulate button, and the sidebar invitation.
+  // The four ids GuardHoneypot plants at boot (src/jspsych/extension-guard-
+  // honeypot.js's injectHoneypotDOM): the hidden checkbox + text field
+  // pair, then the two low-opacity visible micro-surfaces (button, input)
+  // that exist to catch interactive-only DOM scrapes.
+  var HONEYPOT_BAIT_IDS = ['fg-ai-use', 'fg-ai-report', 'fg-ai-bait-button', 'fg-ai-bait-input'];
+
+  // Puts one attribute per line, indented — the ONLY change from the
+  // node's real outerHTML. Splits on the attr="value" token boundary;
+  // outerHTML always &quot;-escapes a literal quote inside a value, so a
+  // bare [^"]* match never crosses a real attribute boundary. No
+  // attribute is reordered, added, dropped, or edited.
+  function prettyPrintOuterHtml(outerHtml, indent) {
+    var attrs = outerHtml.match(/\s[\w-]+="[^"]*"/g);
+    if (!attrs || !attrs.length) return outerHtml;
+    var tagOpen = outerHtml.slice(0, outerHtml.indexOf(attrs[0]));
+    var lastAttr = attrs[attrs.length - 1];
+    var afterAttrs = outerHtml.slice(outerHtml.lastIndexOf(lastAttr) + lastAttr.length);
+    return tagOpen + attrs.map(function (a) { return '\n' + indent + a.trim(); }).join('') + afterAttrs;
+  }
+
+  // Step 7's snippet: the REAL bait DOM GuardHoneypot planted, captured
+  // live — truth-by-construction, same pattern as step 8's guard entry
+  // (renderGuardEntryPanel renders window.GuardFriction.defaultEntryMessage
+  // verbatim). GuardHoneypot.init() runs once at boot (see startTour,
+  // before the first goTo), so by the time step 7 can render, the bait has
+  // been sitting in the DOM for the whole tour — the "nodes missing"
+  // branch below is defensive, not an expected path.
+  function captureHoneypotSnippet() {
+    var nodes = HONEYPOT_BAIT_IDS.map(function (id) { return document.getElementById(id); });
+    if (nodes.some(function (n) { return !n; })) {
+      return { html: escHtml(HONEYPOT.snippet), isFallback: true };
+    }
+    var raw = nodes.map(function (n) { return prettyPrintOuterHtml(n.outerHTML, '  '); }).join('\n\n');
+    return { html: escHtml(raw), isFallback: false };
+  }
+
+  // Step 7's honeypot task: the captured bait markup (or, if the live
+  // nodes aren't found, HONEYPOT.snippet labeled as a reference copy), the
+  // "act like an agent" simulate button, and the sidebar invitation.
   function renderHoneypotPanel(task) {
+    var snippet = captureHoneypotSnippet();
+    var fallbackNote = snippet.isFallback
+      ? '<p class="rule fallback-note">Reference copy — the live bait fields ' +
+        "weren't found in the page, so this is the library's markup as " +
+        'documented rather than what actually rendered.</p>'
+      : '';
     return (
       '<div class="task jspsych-content">' +
       '<p class="label">' + task.kind + '</p>' +
-      '<pre><code>' + escHtml(HONEYPOT.snippet) + '</code></pre>' +
+      fallbackNote +
+      '<pre><code>' + snippet.html + '</code></pre>' +
       '<div class="btnrow"><button class="btn" data-action="honeypot-sim" data-role="honeypot-sim-button">' +
       escHtml(HONEYPOT.simulateLabel) + '</button></div>' +
       '<p class="hint">' + escHtml(HONEYPOT.sidebarInvite) + '</p>' +

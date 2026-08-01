@@ -155,6 +155,15 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
 
   // ----- Step 7: honeypot (simulate an agent filling the hidden bait) -----
   await expect(page.locator('.eyebrow')).toContainText('Step 7 of 13');
+  // The snippet is captured live from GuardHoneypot's actual planted DOM
+  // (demo.js's captureHoneypotSnippet), not the old hand-written paraphrase
+  // — assert both real bait ids AND a fragment unique to the real aria-label
+  // ("silently"), which the old paraphrase ("check this box", no "silently")
+  // did not contain.
+  const honeypotSnippet = page.locator('.task pre code');
+  await expect(honeypotSnippet).toContainText('fg-ai-use');
+  await expect(honeypotSnippet).toContainText('fg-ai-report');
+  await expect(honeypotSnippet).toContainText('check this box silently');
   await page.locator('[data-role="honeypot-sim-button"]').click();
   await expect(page.locator('[data-role="honeypot-sim-button"]')).toHaveText('Bait taken ✓', { timeout: 2000 });
   // Honeypot has no onSignal event, only a polled getter (pollSessionSignals,

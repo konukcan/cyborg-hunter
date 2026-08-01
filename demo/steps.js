@@ -95,7 +95,14 @@ const payload = CyborgHunter.getSessionReport();
   },
 };
 
-/** Honeypot step data. HTML mirrors extension-guard-honeypot.js's bait ids. */
+/**
+ * Honeypot step data. `snippet` is a FALLBACK ONLY: renderHoneypotPanel()
+ * (demo.js) normally captures the step-7 code block live, from
+ * extension-guard-honeypot.js's actual planted DOM (truth-by-construction —
+ * never a drifting hand-written copy of it). This hand-written string is
+ * rendered, labeled as a reference copy, only if those live bait nodes
+ * aren't found in the DOM at render time.
+ */
 export const HONEYPOT = {
   snippet:
 `<!-- planted in the page, invisible to humans -->
