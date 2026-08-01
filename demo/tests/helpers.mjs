@@ -148,6 +148,20 @@ export async function dispatchCopy(page) {
   });
 }
 
+// Dispatches a real Ctrl+Shift+I keydown — browser.js's keyboard-shortcut
+// listener is SESSION-scoped (attached at monitor.startSession(), once, for
+// the whole demo), unlike copy/paste/drop which are TRIAL-scoped (attached
+// per startTrial(), torn down at endTrial() — dead on any task: null step,
+// e.g. guard-debrief). Use this, not dispatchCopy, to prove a live signal
+// still reaches the pane on a step with no active trial.
+export async function dispatchDevToolsShortcut(page) {
+  await page.evaluate(() => {
+    document.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'I', ctrlKey: true, shiftKey: true, bubbles: true,
+    }));
+  });
+}
+
 // Real per-character typing (NOT locator.fill() — that sets .value directly
 // and fires a single synthetic 'input', which the library correctly flags
 // as synthetic insertion). delayMs defaults to 150ms/char (~6.7 cps),

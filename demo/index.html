@@ -3,7 +3,16 @@
      copy (steps.js), and generated signal-manifest.json populate #card and
      the instrument column's two cards (#rail / [data-role="rail"] and
      [data-role="live-pane"]) at runtime — this file only lays out the
-     topbar, two-column grid, and script load order. -->
+     topbar, two-column grid, and script load order.
+
+     [data-role="pane-slot"] (walkthrough item 5): a PERMANENT empty
+     promotion target, sibling of #card inside .main-col — never an ad-hoc
+     node created during step render, so promotion/demotion can never race
+     #card's innerHTML rebuild. It lives inside .main-col (not as a third
+     .cols child) so it stays in the main column's grid cell in both the
+     2-col and ≤820px single-column layouts; demo.js reparents the live pane
+     ([data-role="live-pane"]) in here on step 10 (guard-debrief) and back
+     out on leaving. -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -22,7 +31,10 @@
 </div>
 
 <div class="cols">
-  <main id="card"></main>
+  <div class="main-col">
+    <main id="card"></main>
+    <div class="pane-slot" data-role="pane-slot"></div>
+  </div>
   <aside class="instrument" aria-label="Demo instrument column">
     <div class="card" id="rail" data-role="rail"></div>
     <div class="card" data-role="live-pane"></div>

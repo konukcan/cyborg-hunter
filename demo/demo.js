@@ -221,7 +221,17 @@ function startTour(participantId, capabilities, manifest) {
   // call buildDownloadFile('sessionData') makes, extracted so both stay in
   // sync (DRY) — declared here as a function so it can close over `monitor`
   // below despite running after it (function declarations hoist).
-  state.pane = makeLivePane(document.querySelector('[data-role="live-pane"]'), participantId);
+  // paneEl IS the node makeLivePane owns (its `mount` arg, already
+  // class="card") — walkthrough item 5 reparents this whole node between
+  // the instrument column (paneHome) and the step-10 promotion target
+  // ([data-role="pane-slot"], permanent markup in index.html) rather than
+  // moving its content, so state.pane's internal element references and
+  // listeners survive the move untouched.
+  var paneEl = document.querySelector('[data-role="live-pane"]');
+  var paneSlotEl = document.querySelector('[data-role="pane-slot"]');
+  var paneHome = { parent: paneEl.parentNode, next: paneEl.nextSibling };
+  var panePromoted = false;
+  state.pane = makeLivePane(paneEl, participantId);
   state.t0 = performance.now();
 
   function buildCurrentPayload() {
@@ -239,6 +249,41 @@ function startTour(participantId, capabilities, manifest) {
   function paneRow(trial, event, detail, hard) {
     state.pane.addRow({ tMs: performance.now() - state.t0, trial: trial, event: event, detail: detail, hard: !!hard });
     state.pane.setPayload(buildCurrentPayload());
+  }
+
+  // Pins the stream's scroll to its tail — addRow() already does this on
+  // every new row (live-pane.js), but a reparent (appendChild across
+  // parents) can reset an element's scrollTop in some engines, so both
+  // promote/demote below re-pin defensively after the move.
+  function pinPaneScroll() {
+    var streamEl = paneEl.querySelector('[data-role="lp-stream"]');
+    if (streamEl) streamEl.scrollTop = streamEl.scrollHeight;
+  }
+
+  // Step-10 (guard-debrief) pane promotion, idempotent like
+  // floatEndGuard/unfloatEndGuard below: promotePane()/demotePane() are
+  // no-ops when already in the target state, and goTo() calls demotePane()
+  // unconditionally at the top of every navigation (defensive), then
+  // promotePane() only when landing on guard-debrief — so leaving step 10
+  // in ANY direction (Back included) restores the instrument column.
+  function promotePane() {
+    if (panePromoted) return;
+    panePromoted = true;
+    paneSlotEl.appendChild(paneEl);
+    paneEl.classList.add('promoted');
+    pinPaneScroll();
+  }
+
+  function demotePane() {
+    if (!panePromoted) return;
+    panePromoted = false;
+    paneEl.classList.remove('promoted');
+    if (paneHome.parent && paneHome.parent.isConnected) {
+      paneHome.parent.insertBefore(paneEl, paneHome.next);
+    } else {
+      document.querySelector('.instrument').appendChild(paneEl);
+    }
+    pinPaneScroll();
   }
 
   // Lamp wiring is lifecycle-bound (spec: "starts and stops with the tour").
@@ -1113,6 +1158,10 @@ function startTour(participantId, capabilities, manifest) {
     // End button into the (old) card subtree so renderStep's innerHTML
     // replacement below discards it instead of orphaning it on <body>.
     unfloatEndGuard();
+    // Defensive demote on EVERY navigation, same reasoning: leaving step 10
+    // in any direction (Back to 9 included) restores the pane to the
+    // instrument column before the new step even renders.
+    demotePane();
     var prevStep = STEPS[state.stepIndex];
     var prevTrialId = prevStep.task ? prevStep.task.trialId : null;
     state.stepIndex = i;
@@ -1131,6 +1180,10 @@ function startTour(participantId, capabilities, manifest) {
     // step deterministically clears it, the same single-chokepoint pattern
     // as dataset.view above.
     document.body.classList.toggle('results-mode', step.id === 'results');
+    // Step-10 pane promotion (item 5): the main column is near-empty for
+    // guard-debrief (task: null) while its copy points at the session
+    // record — promote the pane into the space above the fold.
+    if (step.id === 'guard-debrief') promotePane();
     renderStep(i);
     // Repaints from state.chipCounts (not a reset) so Back-then-forward into
     // guard-cheat shows the tally already accumulated this session.

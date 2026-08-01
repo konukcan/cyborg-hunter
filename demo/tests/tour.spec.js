@@ -35,10 +35,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   test, expect,
-  dispatchPaste, dispatchCopy, typeRealistically,
+  dispatchPaste, dispatchCopy, dispatchDevToolsShortcut, typeRealistically,
   startTour, waitForLamp,
   installFailingFullscreenMock, installBlobCounter,
-  primaryButton, railRow, pid, resultsFrame,
+  primaryButton, backButton, railRow, pid, resultsFrame,
 } from './helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -208,12 +208,29 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
   // carries both its start AND its end.
   await expect(page.locator('#guard-friction-overlay')).toHaveCSS('display', 'none');
 
-  // ----- Step 10: guard debrief -----
+  // ----- Step 10: guard debrief — pane promoted into the main column
+  // (item 5: the main column is otherwise near-empty here, task: null) -----
   await expect(page.locator('.eyebrow')).toContainText('Step 10 of 13');
+  const paneInSlot = page.locator('[data-role="pane-slot"] [data-role="live-pane"]');
+  await expect(paneInSlot).toHaveCount(1);
+  await expect(paneInSlot).toHaveClass(/promoted/);
+  await expect(page.locator('.instrument [data-role="live-pane"]')).toHaveCount(0);
+  // Reparenting moved the pane's own node, not its content — state.pane's
+  // element references and listeners survive the move: a signal dispatched
+  // while promoted still appends a live row. A session-scoped signal
+  // (keyboard shortcut), not copy/paste — those are trial-scoped and this
+  // step has task: null, no trial open to catch them.
+  const rowCountBeforeSignal = await page.locator('.lp-row').count();
+  await dispatchDevToolsShortcut(page);
+  await expect(page.locator('.lp-row')).toHaveCount(rowCountBeforeSignal + 1);
   await primaryButton(page).click();
 
   // ----- Step 11: signals to scores (first tier vocabulary appears here) -----
   await expect(page.locator('.eyebrow')).toContainText('Step 11 of 13');
+  // Pane demoted back to the instrument column on leaving step 10.
+  await expect(page.locator('.instrument [data-role="live-pane"]')).toHaveCount(1);
+  await expect(page.locator('.instrument [data-role="live-pane"]')).not.toHaveClass(/promoted/);
+  await expect(page.locator('[data-role="pane-slot"] [data-role="live-pane"]')).toHaveCount(0);
   await expect(page.locator('.stepcopy')).toContainText('HARD');
   await primaryButton(page).click();
 
@@ -277,6 +294,28 @@ test('guard-cheat resume route: button unfloats after resume and advances exactl
   // double-fired the advance alongside the card's delegated handler.
   await page.locator('.endguard').click();
   await expect(page.locator('.eyebrow')).toContainText('Step 10 of 13');
+});
+
+// ---------------------------------------------------------------------------
+// Step-10 pane promotion (item 5), the OTHER leave direction: the happy-path
+// test above covers forward (10 -> 11); goTo()'s demotePane() is called
+// unconditionally at the top of EVERY navigation, so Back (10 -> 9) must
+// restore the pane to the instrument column too.
+// ---------------------------------------------------------------------------
+test('step 10: pane promotion also restores on Back to step 9', async ({ page }) => {
+  await startTour(page); // -> baseline
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 });
+  await page.locator('.endguard').click(); // -> guard-debrief (step 10)
+  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 13');
+  await expect(page.locator('[data-role="pane-slot"] [data-role="live-pane"]')).toHaveCount(1);
+
+  await backButton(page).click(); // -> guard-cheat (step 9)
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13');
+  await expect(page.locator('.instrument [data-role="live-pane"]')).toHaveCount(1);
+  await expect(page.locator('.instrument [data-role="live-pane"]')).not.toHaveClass(/promoted/);
+  await expect(page.locator('[data-role="pane-slot"] [data-role="live-pane"]')).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
