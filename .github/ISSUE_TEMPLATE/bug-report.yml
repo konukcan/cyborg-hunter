@@ -1,0 +1,59 @@
+# Bug-report form. The required participant-data checkbox is deliberate:
+# issues are public, and this tool's whole premise is that behavioral data
+# stays on the researcher's machine.
+name: Bug report
+description: Something in cyborg-hunter is broken or behaving unexpectedly.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: cyborg-hunter version
+      description: Run `npx cyborg-hunter --version`, or check the version in your package.json or script tag.
+      placeholder: e.g. 0.7.2
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does the problem show up?
+      options:
+        - CLI report (npx cyborg-hunter report)
+        - Browser library (signal collection)
+        - jsPsych integration / guard extensions
+        - Session replay (recording or viewer)
+        - Live demo site
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Paste console output or error messages as text.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The shortest path that triggers the problem. For CLI issues, the exact command plus the shape of the input files (not their contents).
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node version (for CLI issues), browser (for library issues), jsPsych version if relevant.
+      placeholder: e.g. macOS 15, Node 22, Chrome 138, jsPsych 8.0
+    validations:
+      required: false
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Participant-data check
+      description: cyborg-hunter handles behavioral data. Issues are public and must never contain it.
+      options:
+        - label: This report contains no participant data (no session payloads, no replay files, no identifiers). Any pasted output comes from synthetic or personal test runs.
+          required: true

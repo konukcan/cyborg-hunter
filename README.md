@@ -174,6 +174,10 @@ The optional **guard** extensions add: fullscreen / sidebar / focus enforcement 
 - [docs/configuration.md](docs/configuration.md) — config file fields and CLI flags
 - [docs/cli-reference.md](docs/cli-reference.md) — commands and output structure
 
+## Reporting issues
+
+Bug reports and feature requests go to the [issue tracker](https://github.com/konukcan/cyborg-hunter/issues); the bug form asks for your version and environment. One hard rule: issues are public, so never paste participant data (session payloads, replay files, identifiers). Reproduce with synthetic or personal test runs instead.
+
 ## Development
 
 Run the test suite with `npm test`. Before publishing, run `scripts/check-public-hygiene.sh` — it fails if any tracked file contains personal or internal-process leakage.

@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a new signal, output, or workflow improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do in your study or analysis that cyborg-hunter currently makes hard or impossible?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you would like to happen. Rough ideas are fine.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Experiment platform (jsPsych, plain JS, other), cohort size, anything else that shapes the constraint.
+    validations:
+      required: false
