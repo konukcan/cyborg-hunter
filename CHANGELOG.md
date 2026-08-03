@@ -3,6 +3,20 @@
 All notable changes to **cyborg-hunter** are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- `report` now nudges about newer releases: a zero-dependency check against
+  the npm registry's `latest` dist-tag prints a short update notice after the
+  report summary. At most one registry request per day (cache file in
+  `~/.cache/cyborg-hunter/`), silent on any network failure, skipped under
+  `CI` or `NO_UPDATE_NOTIFIER`, and CLI-only — the browser library still
+  makes no network requests of its own.
+- `report` prints an offline staleness note when ingested sessions were
+  collected with a different library version than the CLI (payloads stamp
+  `libraryVersion`). This catches the case the registry check can't: an
+  experiment still serving an old bundle to participants.
+
 ## [0.7.2] — 2026-07-29
 
 ### Added

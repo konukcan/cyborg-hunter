@@ -185,6 +185,10 @@ export function extractIntegrityData(raw, config) {
     // that aren't part of the session-level integrity object. Keeping the
     // list explicit (rather than exposing `raw` wholesale) avoids future
     // renderers silently coupling to payload internals.
+    // Which library version collected this session (monitor.js stamps it on
+    // the payload). report.js compares it against the CLI's own VERSION and
+    // prints a staleness note on mismatch. CSV-derived data has none → null.
+    libraryVersion: typeof raw.libraryVersion === 'string' ? raw.libraryVersion : null,
     galleryStudyMs: Array.isArray(raw.galleryStudyMs) ? raw.galleryStudyMs : null,
     postGalleryGuesses: Array.isArray(raw.postGalleryGuesses) ? raw.postGalleryGuesses : null,
     // App-written top-level guardFriction wins; otherwise synthesize the guard

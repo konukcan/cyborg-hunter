@@ -14,9 +14,14 @@ import { detectEdgeExits } from './analyzers/edge-exit.js';
 import { rankTriage } from './analyzers/triage.js';
 import { applyPhaseScope, describePhaseScope, findUnmatchedPhaseScopePhases } from './analyzers/phase-scope.js';
 import { VERSION } from '../shared/constants.js';
+import { checkForUpdate, formatUpdateNotice, formatCollectedVersionNotice } from './update-check.js';
 
 export async function run(args) {
   console.log(`cyborg-hunter report v${VERSION}\n`);
+
+  // Kick the update check off first so the registry request overlaps the
+  // whole pipeline; awaited (bounded by its own short timeout) at the end.
+  const updateCheck = checkForUpdate({ currentVersion: VERSION }).catch(() => null);
 
   // 1. Load and merge config (defaults ← file ← CLI flags)
   const config = loadConfig(args);
@@ -44,6 +49,13 @@ export async function run(args) {
     }
     process.exit(1);
   }
+
+  // Offline staleness note: payloads stamp the library version that collected
+  // them, so an experiment still serving an old bundle is visible without any
+  // network. (The registry check above covers the CLI side.)
+  const collectedNotice = formatCollectedVersionNotice(
+    participants.map(p => p.libraryVersion), VERSION);
+  if (collectedNotice) console.log(collectedNotice);
 
   // 3. Analyze — compute summaries, detect edge exits, rank by triage priority.
   // config.phaseScope (0.6.1) filters which trials feed the analyzers so
@@ -145,4 +157,9 @@ export async function run(args) {
 
   console.log(`\nReport written to ${config.outputDir}/`);
   console.log(`  Open ${config.outputDir}/index.html to review`);
+
+  const update = await updateCheck;
+  if (update && update.updateAvailable) {
+    console.log(`\n${formatUpdateNotice(VERSION, update.latest)}`);
+  }
 }
