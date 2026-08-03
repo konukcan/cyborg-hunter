@@ -18,7 +18,7 @@
 
 import {
   STEPS, POSITIONING, CLOSING_CTA, CONFIG_CAVEAT, RAIL_GROUPS, RAIL_INTRO,
-  CODE_TABS, HONEYPOT, DOWNLOAD_FILES, REPLICATE, SCORING_PANEL
+  CODE_TABS, DOWNLOAD_FILES, REPLICATE, SCORING_PANEL
 } from './steps.js';
 import { makeLifecycle } from './lifecycle.js';
 import { renderRail, light, acknowledge } from './rail.js';
@@ -418,9 +418,6 @@ function startTour(participantId, capabilities, manifest) {
         break;
       case 'keyboardShortcut':
         paneRow(trialId, 'devtools_shortcut', d.combo || null, false);
-        if (!lampWiringActive) break;
-        n = (state.lampCounts.devTools || 0) + 1;
-        syncCountLamp('devTools', n, false, RAIL_LABELS.devTools);
         break;
       default:
         break;
@@ -453,7 +450,6 @@ function startTour(participantId, capabilities, manifest) {
   //   - sidebarEvents: the innerWidth_delta method fires 'sidebarOpened'
   //     (handled instantly above), but the layout_compression method does
   //     NOT fire a signal — the poll is a backstop that also catches those.
-  //   - honeypot bait: GuardHoneypot has no event callback, only polled getters.
   // Each pane row here is guarded on "is this actually new" (checked against
   // the SAME state.lampCounts the lamp itself uses) so a repeat poll tick
   // over an already-announced count doesn't re-emit a duplicate row.
@@ -467,12 +463,6 @@ function startTour(participantId, capabilities, manifest) {
     var viewportShifts = report.viewportWidthShifts.length;
     if (viewportShifts > (state.lampCounts.viewport || 0)) paneRow(null, 'viewport_shift', null, false);
     syncCountLamp('viewport', viewportShifts, false, RAIL_LABELS.viewport);
-
-    if (window.GuardHoneypot) {
-      var hp = window.GuardHoneypot.getHoneypotData();
-      if (hp.ai_use && !state.lampCounts.honeypot) paneRow(null, 'honeypot', 'bait field filled', true);
-      if (hp.ai_use) syncCountLamp('honeypot', 1, true, RAIL_LABELS.honeypot);
-    }
   }
 
   var monitor = window.CyborgHunter.init({
@@ -485,15 +475,6 @@ function startTour(participantId, capabilities, manifest) {
     collectForPostHoc: { rawMouseTrack: true }
   });
   monitor.startSession();
-  // Bait stays passively armed for the whole tour (spec: "bait stays
-  // passively armed"). No dedicated step calls this, so it has to happen
-  // here — without it, pollSessionSignals()'s
-  // window.GuardHoneypot.getHoneypotData() call above always reads the
-  // pre-injection default (ai_use: false) and the honeypot rail lamp can
-  // never light.
-  if (window.GuardHoneypot) {
-    window.GuardHoneypot.init({ friction: window.GuardFriction });
-  }
   // Recorder-like bridge for makeLifecycle's optional recorder param (C8).
   // A live proxy rather than passing state.recorder directly: the replay
   // recorder only attaches inside the "Start" click (startReplay()), which
@@ -510,8 +491,7 @@ function startTour(participantId, capabilities, manifest) {
 
   // Act-2 violations (GuardFriction is a separate global, not part of the
   // CyborgHunter monitor). Counts each violation the moment it starts, for
-  // an immediately responsive lamp — not the same count as the honeypot's
-  // own start/end-paired violations log.
+  // an immediately responsive lamp.
   if (window.GuardFriction && typeof window.GuardFriction.onViolation === 'function') {
     window.GuardFriction.onViolation(function (violation) {
       // Recorded for the payload's guardFriction.violations[] regardless of
@@ -1084,82 +1064,6 @@ function startTour(participantId, capabilities, manifest) {
     };
   }
 
-  // The four ids GuardHoneypot plants at boot (src/jspsych/extension-guard-
-  // honeypot.js's injectHoneypotDOM): the hidden checkbox + text field
-  // pair, then the two low-opacity visible micro-surfaces (button, input)
-  // that exist to catch interactive-only DOM scrapes.
-  var HONEYPOT_BAIT_IDS = ['fg-ai-use', 'fg-ai-report', 'fg-ai-bait-button', 'fg-ai-bait-input'];
-
-  // Puts one attribute per line, indented — the ONLY change from the
-  // node's real outerHTML. Splits on the attr="value" token boundary;
-  // outerHTML always &quot;-escapes a literal quote inside a value, so a
-  // bare [^"]* match never crosses a real attribute boundary. No
-  // attribute is reordered, added, dropped, or edited.
-  function prettyPrintOuterHtml(outerHtml, indent) {
-    var attrs = outerHtml.match(/\s[\w-]+="[^"]*"/g);
-    if (!attrs || !attrs.length) return outerHtml;
-    var tagOpen = outerHtml.slice(0, outerHtml.indexOf(attrs[0]));
-    var lastAttr = attrs[attrs.length - 1];
-    var afterAttrs = outerHtml.slice(outerHtml.lastIndexOf(lastAttr) + lastAttr.length);
-    return tagOpen + attrs.map(function (a) { return '\n' + indent + a.trim(); }).join('') + afterAttrs;
-  }
-
-  // Step 7's snippet: the REAL bait DOM GuardHoneypot planted, captured
-  // live — truth-by-construction, same pattern as step 8's guard entry
-  // (renderGuardEntryPanel renders window.GuardFriction.defaultEntryMessage
-  // verbatim). GuardHoneypot.init() runs once at boot (see startTour,
-  // before the first goTo), so by the time step 7 can render, the bait has
-  // been sitting in the DOM for the whole tour — the "nodes missing"
-  // branch below is defensive, not an expected path.
-  function captureHoneypotSnippet() {
-    var nodes = HONEYPOT_BAIT_IDS.map(function (id) { return document.getElementById(id); });
-    if (nodes.some(function (n) { return !n; })) {
-      return { html: escHtml(HONEYPOT.snippet), isFallback: true };
-    }
-    var raw = nodes.map(function (n) { return prettyPrintOuterHtml(n.outerHTML, '  '); }).join('\n\n');
-    return { html: escHtml(raw), isFallback: false };
-  }
-
-  // Step 7's honeypot task: the captured bait markup (or, if the live
-  // nodes aren't found, HONEYPOT.snippet labeled as a reference copy), the
-  // "act like an agent" simulate button, and the sidebar invitation.
-  function renderHoneypotPanel(task) {
-    var snippet = captureHoneypotSnippet();
-    var fallbackNote = snippet.isFallback
-      ? '<p class="rule fallback-note">Reference copy. The live bait fields ' +
-        "weren't found in the page, so this is the library's documented " +
-        'markup rather than what actually rendered.</p>'
-      : '';
-    return (
-      '<div class="task jspsych-content">' +
-      '<p class="label">' + task.kind + '</p>' +
-      fallbackNote +
-      '<pre><code>' + snippet.html + '</code></pre>' +
-      '<div class="btnrow"><button class="btn" data-action="honeypot-sim" data-role="honeypot-sim-button">' +
-      escHtml(HONEYPOT.simulateLabel) + '</button></div>' +
-      '<p class="hint">' + escHtml(HONEYPOT.sidebarInvite) + '</p>' +
-      '</div>'
-    );
-  }
-
-  // What an agent does when it finds the bait: read the DOM, fill it. Does
-  // exactly that against the REAL fields GuardHoneypot planted, dispatching
-  // real events, so the detection path exercised is the product's own —
-  // not a demo shortcut. GuardHoneypot's existing 5s poll (pollSessionSignals)
-  // is what actually lights the honeypot lamp/pane-row once ai_use flips.
-  function runHoneypotSim(button) {
-    button.disabled = true;
-    button.textContent = HONEYPOT.simulateBusy;
-    var box = document.getElementById('fg-ai-use');
-    var report = document.getElementById('fg-ai-report');
-    if (box) { box.checked = true; box.dispatchEvent(new Event('change', { bubbles: true })); }
-    if (report) {
-      report.value = 'Simulated agent: answered the on-page question.';
-      report.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    setTimeout(function () { button.textContent = HONEYPOT.simulateDone; }, 400);
-  }
-
   // Step 8's guard entry: the library's own entry message rendered VERBATIM
   // (truth-by-construction — never a drifting copy of it), with its own
   // button wired to the existing fullscreen-entry flow. Not wrapped in
@@ -1224,7 +1128,6 @@ function startTour(participantId, capabilities, manifest) {
   function renderTaskPanel(task) {
     if (!task) return '';
     if (task.kind === 'downloads') return renderDownloadsPanel(task);
-    if (task.kind === 'honeypot') return renderHoneypotPanel(task);
     if (task.kind === 'fullscreen-entry') return renderGuardEntryPanel();
     // scramble coupling: GuardFriction's obfuscateContent() only touches
     // getJsPsychContent()'s match (.jspsych-content / .jspsych-display-element
@@ -1446,8 +1349,6 @@ function startTour(participantId, capabilities, manifest) {
     if (back) { e.preventDefault(); goTo(state.stepIndex - 1); return; }
     var autotypeBtn = e.target.closest('[data-action="autotype"]');
     if (autotypeBtn) { runAutotype(autotypeBtn); return; }
-    var honeypotBtn = e.target.closest('[data-action="honeypot-sim"]');
-    if (honeypotBtn) { runHoneypotSim(honeypotBtn); return; }
     var enterFsBtn = e.target.closest('[data-action="enter-fullscreen"]');
     if (enterFsBtn) { handleFullscreenEntry(enterFsBtn); return; }
     var endGuardBtn = e.target.closest('[data-action="end-guard"]');

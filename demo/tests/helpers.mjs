@@ -208,11 +208,10 @@ export async function startTour(page) {
 }
 
 // Polls a rail lamp (#rail li[data-key]) until it's lit (and, if opts.hard,
-// hardlit too). Two rail signals have NO onSignal event and are only ever
-// observable via demo.js's 5s pollSessionSignals() — viewport shifts
-// (ResizeObserver never fires a signal) and the honeypot bait (GuardHoneypot
-// exposes only a polled getter). A real-time wait for the actual poll tick
-// (v1's proven pattern for the sidebar/viewport lamp — see git history) is
+// hardlit too). Viewport shifts have NO onSignal event (ResizeObserver never
+// fires a signal) and are only ever observable via demo.js's 5s
+// pollSessionSignals(). A real-time wait for the actual poll tick (v1's
+// proven pattern for the sidebar/viewport lamp — see git history) is
 // simpler and no less deterministic than faking setInterval: the poll WILL
 // fire within one interval, so a generous timeout beyond 5s never flakes.
 export async function waitForLamp(page, key, { hard = false, timeout = 7000 } = {}) {
@@ -222,7 +221,7 @@ export async function waitForLamp(page, key, { hard = false, timeout = 7000 } = 
   }, [key, hard], { timeout });
 }
 
-// Fast path from a fresh welcome screen to the replicate-locally step (13):
+// Fast path from a fresh welcome screen to the replicate-locally step (12):
 // baseline -> skip to the guarded act -> enter fullscreen (default succeeding
 // mock) -> end the guard immediately (no violation needed for this path) ->
 // debrief -> signals-to-scores -> results (waits for the report to actually
@@ -230,14 +229,14 @@ export async function waitForLamp(page, key, { hard = false, timeout = 7000 } = 
 // the downloads step without walking every act-1 step.
 export async function fastForwardToReplicate(page) {
   await startTour(page); // -> baseline (step 2)
-  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry (step 8)
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry (step 7)
   await page.locator('[data-action="enter-fullscreen"]').click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 }); // guard-cheat
-  await page.locator('.endguard').click(); // -> guard-debrief (step 10)
-  await primaryButton(page).click(); // -> signals-to-scores (step 11)
-  await primaryButton(page).click(); // -> results (step 12)
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12', { timeout: 5000 }); // guard-cheat
+  await page.locator('.endguard').click(); // -> guard-debrief (step 9)
+  await primaryButton(page).click(); // -> signals-to-scores (step 10)
+  await primaryButton(page).click(); // -> results (step 11)
   await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
-  await primaryButton(page).click(); // -> replicate-locally (step 13)
+  await primaryButton(page).click(); // -> replicate-locally (step 12)
 }
 
 export function primaryButton(page) {

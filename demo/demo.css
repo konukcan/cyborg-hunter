@@ -84,9 +84,9 @@ code, pre{font-family:var(--mono);}
 .stepcopy p:last-child{margin-bottom:0;}
 
 /* Generic prose spacing for containers that render library/steps-data HTML
- * verbatim (the guard's own entry message, honeypot snippet copy, replicate
- * walkthrough) — restores the paragraph/list rhythm the global margin:0
- * reset above removes, without hardcoding structure those callers own. */
+ * verbatim (the guard's own entry message, replicate walkthrough) —
+ * restores the paragraph/list rhythm the global margin:0 reset above
+ * removes, without hardcoding structure those callers own. */
 .stepcard p, .entrybox p, .task p{margin:0 0 12px;}
 .stepcard p:last-child, .entrybox p:last-child, .task p:last-child{margin-bottom:0;}
 .stepcard ul, .stepcard ol, .entrybox ul, .entrybox ol{margin:0 0 12px;padding-left:20px;}

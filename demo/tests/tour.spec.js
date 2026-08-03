@@ -1,5 +1,5 @@
 // demo/tests/tour.spec.js
-// Playwright E2E suite for the live demo tour (13-step remodel — spec:
+// Playwright E2E suite for the live demo tour (12-step remodel — spec:
 // docs/superpowers/specs/2026-07-31-ch-demo-remodel-design.md; plan:
 // docs/superpowers/plans/2026-07-31-ch-demo-remodel.md, Task D1).
 // Runs against the ASSEMBLED site (.demo-site/, see playwright.config.js +
@@ -73,19 +73,19 @@ async function reachResultsWithSignals(page) {
   await primaryButton(page).click(); // -> clipboard-cheat (step 3)
   await dispatchPaste(page, '#card textarea', ANSWER);
   await dispatchPaste(page, '#card textarea', ANSWER);
-  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry (step 8)
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry (step 7)
   await page.locator('[data-action="enter-fullscreen"]').click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 });
-  await page.locator('.endguard').click(); // -> guard-debrief (step 10)
-  await primaryButton(page).click(); // -> signals-to-scores (step 11)
-  await primaryButton(page).click(); // -> results (step 12)
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12', { timeout: 5000 });
+  await page.locator('.endguard').click(); // -> guard-debrief (step 9)
+  await primaryButton(page).click(); // -> signals-to-scores (step 10)
+  await primaryButton(page).click(); // -> results (step 11)
   await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
 }
 
 // ---------------------------------------------------------------------------
-// 1. Happy path: all 13 steps in order
+// 1. Happy path: all 12 steps in order
 // ---------------------------------------------------------------------------
-test('happy path: all 13 steps, welcome through replicate-locally', async ({ page, frozenClock, fullscreenMock }) => {
+test('happy path: all 12 steps, welcome through replicate-locally', async ({ page, frozenClock, fullscreenMock }) => {
   test.setTimeout(90000);
 
   // ----- Step 1: intro -----
@@ -94,14 +94,14 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
   expect(participantId).toMatch(/^DEMO-/);
 
   // ----- Step 2: baseline typing (real per-char typing lights nothing) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 2 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 2 of 12');
   await expect(page.locator('#rail .check')).toHaveClass(/awaiting/); // still inert
   await typeRealistically(page.locator('#card textarea'), 'a city in Australia');
   await expect(page.locator('#rail .check')).toHaveClass(/awaiting/); // still inert after typing
   await primaryButton(page).click();
 
   // ----- Step 3: clipboard cheat (copy the question, paste the answer x2) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 3 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 3 of 12');
   await dispatchCopy(page);
   await dispatchPaste(page, '#card textarea', ANSWER);
   await expect(railRow(page, 'paste')).toHaveClass(/lit/);
@@ -122,7 +122,7 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
   await primaryButton(page).click();
 
   // ----- Step 4: tab-away, three bins (frozen clock for exact durations) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 4 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 4 of 12');
   await frozenClock.tabAway(0, 2000);      // flicker: <=3000ms
   await frozenClock.tabAway(20000, 6000);  // mid: >3000ms, <10000ms
   await frozenClock.tabAway(40000, 12000); // long: >=10000ms
@@ -136,14 +136,14 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
   await primaryButton(page).click();
 
   // ----- Step 5: rearrange (viewport resize -> viewport lamp; poll-based, no onSignal event) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 5 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 5 of 12');
   await page.setViewportSize({ width: 700, height: 900 });
   await waitForLamp(page, 'viewport', { timeout: 7000 });
   await page.setViewportSize({ width: 1280, height: 900 });
   await primaryButton(page).click();
 
   // ----- Step 6: autotype (real synthetic insertion, no keydown behind it) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 6 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 6 of 12');
   const autotypeButton = page.locator('[data-role="autotype-button"]');
   await autotypeButton.click();
   await expect(autotypeButton).toBeDisabled();
@@ -153,39 +153,14 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
   await expect(page.locator('[data-role="autotype-field"]')).toHaveValue(AUTOTYPE_TEXT);
   await primaryButton(page).click();
 
-  // ----- Step 7: honeypot (simulate an agent filling the hidden bait) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 7 of 13');
-  // The snippet is captured live from GuardHoneypot's actual planted DOM
-  // (demo.js's captureHoneypotSnippet), not the old hand-written paraphrase
-  // — assert both real bait ids AND a fragment unique to the real aria-label
-  // ("silently"), which the old paraphrase ("check this box", no "silently")
-  // did not contain.
-  const honeypotSnippet = page.locator('.task pre code');
-  await expect(honeypotSnippet).toContainText('fg-ai-use');
-  await expect(honeypotSnippet).toContainText('fg-ai-report');
-  await expect(honeypotSnippet).toContainText('check this box silently');
-  await page.locator('[data-role="honeypot-sim-button"]').click();
-  await expect(page.locator('[data-role="honeypot-sim-button"]')).toHaveText('Bait taken ✓', { timeout: 2000 });
-  // Honeypot has no onSignal event, only a polled getter (pollSessionSignals,
-  // every 5s) — a generous real-time wait for the actual poll tick, same
-  // proven pattern as the viewport lamp above.
-  await waitForLamp(page, 'honeypot', { hard: true, timeout: 7000 });
-  // Scoped to the .lp-event column specifically (not hasText on the whole
-  // row): this step's own trial id is 'act1-honeypot', so a whole-row text
-  // match also catches its trial_start/trial_end rows — a test-selector
-  // trap, not a demo bug, found by actually running this assertion.
-  const honeypotRows = page.locator('.lp-row', { has: page.locator('.lp-event', { hasText: 'honeypot' }) });
-  await expect(honeypotRows).toHaveCount(1);
-  await primaryButton(page).click();
-
-  // ----- Step 8: guard entry (library's own entry screen, verbatim) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 13');
+  // ----- Step 7: guard entry (library's own entry screen, verbatim) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 7 of 12');
   await expect(page.locator('.entrybox')).toContainText('Fullscreen mode required');
   await page.locator('[data-action="enter-fullscreen"]').click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12');
   await expect(page.locator('body')).toHaveAttribute('data-view', 'act2');
 
-  // ----- Step 9: guard-cheat. A bare synthetic 'blur' dispatch does NOT
+  // ----- Step 8: guard-cheat. A bare synthetic 'blur' dispatch does NOT
   // trigger a violation (verified live: GuardFriction's check() reads real
   // document.hasFocus(), unaffected by a synthetic event) — the fullscreen
   // mock's exit() (the Esc-exit path) is the proven, working mechanism. -----
@@ -204,13 +179,13 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
   await expect(endGuard).toHaveClass(/floating/);
   await endGuard.click(); // straight through the curtain — the no-trap click
   // finalizeGuard's stop() ended the violation cleanly: overlay hidden, and
-  // the violation record (asserted on the downloaded file at step 13)
+  // the violation record (asserted on the downloaded file at step 12)
   // carries both its start AND its end.
   await expect(page.locator('#guard-friction-overlay')).toHaveCSS('display', 'none');
 
-  // ----- Step 10: guard debrief — pane promoted into the main column
+  // ----- Step 9: guard debrief — pane promoted into the main column
   // (item 5: the main column is otherwise near-empty here, task: null) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 12');
   const paneInSlot = page.locator('[data-role="pane-slot"] [data-role="live-pane"]');
   await expect(paneInSlot).toHaveCount(1);
   await expect(paneInSlot).toHaveClass(/promoted/);
@@ -225,22 +200,22 @@ test('happy path: all 13 steps, welcome through replicate-locally', async ({ pag
   await expect(page.locator('.lp-row')).toHaveCount(rowCountBeforeSignal + 1);
   await primaryButton(page).click();
 
-  // ----- Step 11: signals to scores (first tier vocabulary appears here) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 11 of 13');
-  // Pane demoted back to the instrument column on leaving step 10.
+  // ----- Step 10: signals to scores (first tier vocabulary appears here) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 12');
+  // Pane demoted back to the instrument column on leaving step 9.
   await expect(page.locator('.instrument [data-role="live-pane"]')).toHaveCount(1);
   await expect(page.locator('.instrument [data-role="live-pane"]')).not.toHaveClass(/promoted/);
   await expect(page.locator('[data-role="pane-slot"] [data-role="live-pane"]')).toHaveCount(0);
   await expect(page.locator('.stepcopy')).toContainText('HARD');
   await primaryButton(page).click();
 
-  // ----- Step 12: results (deep assertions live in the dedicated Results test) -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 12 of 13');
+  // ----- Step 11: results (deep assertions live in the dedicated Results test) -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 11 of 12');
   await expect(page.locator('.yourreport h3')).toBeVisible({ timeout: 8000 });
   await primaryButton(page).click();
 
-  // ----- Step 13: replicate locally -----
-  await expect(page.locator('.eyebrow')).toContainText('Step 13 of 13');
+  // ----- Step 12: replicate locally -----
+  await expect(page.locator('.eyebrow')).toContainText('Step 12 of 12');
   await expect(page.locator('.replicate')).toContainText('npx cyborg-hunter@0.7.2');
 
   const tmpDir = mkdtempSync(join(tmpdir(), 'ch-demo-e2e-'));
@@ -279,7 +254,7 @@ test('guard-cheat resume route: button unfloats after resume and advances exactl
   await startTour(page); // -> baseline
   await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry
   await page.locator('[data-action="enter-fullscreen"]').click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 });
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12', { timeout: 5000 });
 
   await fullscreenMock.exit(); // violation starts -> button floats above the overlay
   await expect(page.locator('.endguard')).toHaveClass(/floating/);
@@ -289,30 +264,30 @@ test('guard-cheat resume route: button unfloats after resume and advances exactl
   // The button unfloated back into its in-card spot...
   await expect(page.locator('#card .endguard')).toBeVisible();
   await expect(page.locator('.endguard')).not.toHaveClass(/floating/);
-  // ...and clicking it advances EXACTLY one step. Landing on step 11 here
+  // ...and clicking it advances EXACTLY one step. Landing on step 10 here
   // would mean the float-time direct listener survived the unfloat and
   // double-fired the advance alongside the card's delegated handler.
   await page.locator('.endguard').click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 12');
 });
 
 // ---------------------------------------------------------------------------
-// Step-10 pane promotion (item 5), the OTHER leave direction: the happy-path
-// test above covers forward (10 -> 11); goTo()'s demotePane() is called
-// unconditionally at the top of EVERY navigation, so Back (10 -> 9) must
+// Step-9 pane promotion (item 5), the OTHER leave direction: the happy-path
+// test above covers forward (9 -> 10); goTo()'s demotePane() is called
+// unconditionally at the top of EVERY navigation, so Back (9 -> 8) must
 // restore the pane to the instrument column too.
 // ---------------------------------------------------------------------------
-test('step 10: pane promotion also restores on Back to step 9', async ({ page }) => {
+test('step 9: pane promotion also restores on Back to step 8', async ({ page }) => {
   await startTour(page); // -> baseline
   await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry
   await page.locator('[data-action="enter-fullscreen"]').click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 });
-  await page.locator('.endguard').click(); // -> guard-debrief (step 10)
-  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12', { timeout: 5000 });
+  await page.locator('.endguard').click(); // -> guard-debrief (step 9)
+  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 12');
   await expect(page.locator('[data-role="pane-slot"] [data-role="live-pane"]')).toHaveCount(1);
 
-  await backButton(page).click(); // -> guard-cheat (step 9)
-  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13');
+  await backButton(page).click(); // -> guard-cheat (step 8)
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12');
   await expect(page.locator('.instrument [data-role="live-pane"]')).toHaveCount(1);
   await expect(page.locator('.instrument [data-role="live-pane"]')).not.toHaveClass(/promoted/);
   await expect(page.locator('[data-role="pane-slot"] [data-role="live-pane"]')).toHaveCount(0);
@@ -459,13 +434,13 @@ test('playground: paste threshold and tab-away/typing-speed cutoffs flip tiers',
 });
 
 // ---------------------------------------------------------------------------
-// 4b. Step 11 -> step 12 scoring-overrides persistence seam (walkthrough
-// item 7): a per-signal weight edit on step 11 must reach the results
-// screen's FIRST render (not just a later playground rerun), and step 12's
+// 4b. Step 10 -> step 11 scoring-overrides persistence seam (walkthrough
+// item 7): a per-signal weight edit on step 10 must reach the results
+// screen's FIRST render (not just a later playground rerun), and step 11's
 // own playground must initialize from the same shared state and show the
 // edit as a read-only summary line rather than a second editor.
 // ---------------------------------------------------------------------------
-test('step 11 weight edit reaches the results FIRST render, and step 12 agrees without a duplicate editor', async ({ page }) => {
+test('step 10 weight edit reaches the results FIRST render, and step 11 agrees without a duplicate editor', async ({ page }) => {
   test.setTimeout(60000);
   await startTour(page); // -> baseline
   await typeRealistically(page.locator('#card textarea'), 'a city in Australia');
@@ -474,9 +449,9 @@ test('step 11 weight edit reaches the results FIRST render, and step 12 agrees w
   await dispatchPaste(page, '#card textarea', ANSWER); // 1 paste — below the hard threshold (2), stays out of HARD
   await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry
   await page.locator('[data-action="enter-fullscreen"]').click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 });
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12', { timeout: 5000 });
   await page.locator('.endguard').click(); // -> guard-debrief
-  await primaryButton(page).click(); // -> signals-to-scores (step 11)
+  await primaryButton(page).click(); // -> signals-to-scores (step 10)
 
   // Baseline: the standard preset's copy weight (2) x 1 hit = a soft score
   // of 2, well under the flag threshold (6) — CLEAN going in.
@@ -491,7 +466,7 @@ test('step 11 weight edit reaches the results FIRST render, and step 12 agrees w
   await copyWeightInput.dispatchEvent('input');
   await expect(liveScore).toContainText(/so far: 20 \(/, { timeout: 5000 });
 
-  await primaryButton(page).click(); // -> results (step 12) — FIRST render must already reflect the edit
+  await primaryButton(page).click(); // -> results (step 11) — FIRST render must already reflect the edit
   await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
 
   // (i) First-render reflects the edit: the visitor's tier is SOFT, not
@@ -502,10 +477,10 @@ test('step 11 weight edit reaches the results FIRST render, and step 12 agrees w
   await frame.locator(`.cohort-row[data-pid="${participantId}"]`).waitFor({ timeout: 8000 });
   await expect(frame.locator(`.cohort-row[data-pid="${participantId}"]`)).toHaveAttribute('data-tier', 'soft');
 
-  // (ii) Step 12's playground initializes its threshold inputs from the
+  // (ii) Step 11's playground initializes its threshold inputs from the
   // shared state (untouched here, so the manifest's own defaults) and shows
-  // the active step-11 weight as a read-only summary — no second weight
-  // editor duplicating step 11's.
+  // the active step-10 weight as a read-only summary — no second weight
+  // editor duplicating step 10's.
   const pasteInput = page.locator('[data-k="pasteHardCount"]');
   await pasteInput.waitFor({ timeout: 8000 });
   await expect(pasteInput).toHaveValue('2');
@@ -527,7 +502,7 @@ test('zero-lamp path: skip everything via .skip links + guard skip -> clean repo
   const skipLink = page.locator('a[data-key="skipToScores"]');
   await expect(skipLink).toBeVisible();
   await skipLink.click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 11 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 12');
   await primaryButton(page).click(); // -> results
 
   await expect(page.locator('.yourreport h3')).toHaveText('A clean report', { timeout: 8000 });
@@ -549,7 +524,7 @@ test('act2-skip path: fullscreen failure falls back, skip lands on "From signals
   await expect(page.locator('.fallback-note')).toContainText("guarded act can’t run here");
 
   await page.locator('a[data-key="skipToScores"]').click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 11 of 13');
+  await expect(page.locator('.eyebrow')).toContainText('Step 10 of 12');
   await expect(page.locator('#card h2')).toHaveText('From signals to scores');
 
   await primaryButton(page).click(); // -> results
@@ -604,7 +579,7 @@ test('viewer-host teardown: Back-nav out of results revokes its Blob URL and rem
   await expect(page.locator('iframe.replay-host-frame')).toHaveCount(1);
   const atResults = await page.evaluate(() => window.__chBlobCounts);
 
-  await backButton(page).click(); // -> signals-to-scores (step 11)
+  await backButton(page).click(); // -> signals-to-scores (step 10)
   await expect(page.locator('iframe.replay-host-frame')).toHaveCount(0);
   const afterBack = await page.evaluate(() => window.__chBlobCounts);
   expect(afterBack.revoked).toBeGreaterThan(atResults.revoked);
@@ -645,7 +620,7 @@ test('replay: keycast overlay shows a chip during typed playback; DOM-tier recon
   await primaryButton(page).click(); // -> clipboard-cheat
   await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry
   await page.locator('[data-action="enter-fullscreen"]').click();
-  await expect(page.locator('.eyebrow')).toContainText('Step 9 of 13', { timeout: 5000 });
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12', { timeout: 5000 });
   await page.locator('.endguard').click(); // -> guard-debrief
   await primaryButton(page).click(); // -> signals-to-scores
   await primaryButton(page).click(); // -> results
