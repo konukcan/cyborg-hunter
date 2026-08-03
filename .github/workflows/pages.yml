@@ -110,7 +110,12 @@ jobs:
         run: GATE_SCAN_DIR=.demo-site bash scripts/check-public-hygiene.sh
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        # All three engines: the full tour runs on chromium, while the
+        # blob-iframe cross-browser smoke (demo/tests/blob-iframe.spec.js)
+        # also runs on firefox + webkit — playwright.config.js declares all
+        # three projects, so the install must cover them or those two specs
+        # fail with "Executable doesn't exist".
+        run: npx playwright install --with-deps chromium firefox webkit
 
       - name: E2E (Playwright, 12-step tour + boundaries + downloads-to-CLI + variants)
         run: npm run test:e2e
