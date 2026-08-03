@@ -62,9 +62,11 @@ export async function checkForUpdate({
     latest = cached.latest;
   } else {
     const controller = new AbortController();
+    // Deliberately NOT unref'd: on a hung fetch this timer can be the only
+    // live handle, and an unref'd one lets the event loop drain before it
+    // fires (Node 20 cancels pending awaits that way). It is cleared the
+    // moment fetch settles, so it never holds a normal run open.
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    // Never let the timer hold the process open if fetch settles first.
-    if (typeof timer.unref === 'function') timer.unref();
     try {
       const res = await fetchImpl(REGISTRY_LATEST_URL, { signal: controller.signal });
       if (!res.ok) return null;
