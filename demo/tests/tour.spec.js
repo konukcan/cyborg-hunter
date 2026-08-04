@@ -294,6 +294,45 @@ test('step 9: pane promotion also restores on Back to step 8', async ({ page }) 
 });
 
 // ---------------------------------------------------------------------------
+// 10. Fullscreen exit: the report screen leaves fullscreen through
+// the plugin's own exitFullscreen(), on the way into "Your report" — no Esc
+// press, no fullscreenMock.exit() call, anywhere in this test. The visitor
+// is fullscreen through the whole guarded act (step 8) and no longer
+// fullscreen once the report renders. Continuing to the download step and
+// checking guardFriction.violations pins the ORDERING the same way the
+// happy-path test pins violation phases above (exitFullscreenIfActive()
+// runs AFTER finalizeGuard(), demo.js's goTo()): a visitor who never left
+// fullscreen themselves must see an EMPTY violations list — any entry there
+// would mean the demo's own exit ran while the guard was still armed and
+// logged a false violation against the participant.
+// ---------------------------------------------------------------------------
+test('report screen leaves fullscreen via the plugin, with no false violation left behind', async ({ page }) => {
+  test.setTimeout(60000);
+  await startTour(page); // -> baseline
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry (step 7)
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12', { timeout: 5000 });
+  expect(await page.evaluate(() => !!document.fullscreenElement)).toBe(true);
+
+  await page.locator('.endguard').click(); // -> guard-debrief (step 9), violation-free
+  await primaryButton(page).click(); // -> signals-to-scores (step 10)
+  await primaryButton(page).click(); // -> results (step 11)
+  await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
+  expect(await page.evaluate(() => !!document.fullscreenElement)).toBe(false);
+
+  await primaryButton(page).click(); // -> replicate-locally (step 12)
+  const participantId = await pid(page);
+  const tmpDir = mkdtempSync(join(tmpdir(), 'ch-demo-e2e-exit-fs-'));
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('[data-action="download"][data-key="sessionData"]').click(),
+  ]);
+  await download.saveAs(join(tmpDir, download.suggestedFilename()));
+  const sessionData = JSON.parse(readFileSync(join(tmpDir, `${participantId}.json`), 'utf8'));
+  expect((sessionData.guardFriction && sessionData.guardFriction.violations) || []).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
 // 2. Live pane: row count grows across acts; raw-JSON tab shows the payload
 // ---------------------------------------------------------------------------
 test('live pane: row count strictly grows across acts; raw-JSON tab shows participantId', async ({ page, frozenClock }) => {
@@ -774,4 +813,63 @@ test('replay: continuous playback crosses trial boundaries by default; the pause
   await mount.locator('.replay-play').click();
   await expect(mount.locator('.replay-play')).toHaveAttribute('aria-label', 'Play', { timeout: 3000 }); // stopped itself
   await expect(mount.locator('.replay-session-pos')).toHaveText('Trial 1 of 2'); // did not advance
+});
+
+// ---------------------------------------------------------------------------
+// 11. Live pane: per-trial tab rail. Tabs appear in
+// STEPS' RUN order (TRIAL_TABS, demo.js) as each trial is actually reached,
+// All is the default (identical to today's view — the earlier tests above
+// that read `.lp-row` counts/text with no tab interaction stay valid
+// unchanged), and the rail keeps filtering after state.pane.freeze() runs
+// on entering results — filtering is a view concern layered on top of the
+// append-only stream, not something freeze() is meant to touch.
+// ---------------------------------------------------------------------------
+test('live pane rail: filters by trial in run order, All is the default view, and filtering survives freeze() at results', async ({ page }) => {
+  test.setTimeout(30000);
+  await startTour(page); // -> baseline (step 2); trial_start registers the type-answer tab
+  await typeRealistically(page.locator('#card textarea'), 'a city in Australia');
+  await primaryButton(page).click(); // -> clipboard-cheat (step 3); registers copy-paste
+  await dispatchPaste(page, '#card textarea', ANSWER);
+  await dispatchPaste(page, '#card textarea', ANSWER);
+
+  const rail = page.locator('[data-role="lp-trials"] .lp-trial-tab');
+  const allTab = page.locator('[data-role="lp-trials"] .lp-trial-tab', { hasText: 'All' });
+  const copyPasteTab = page.locator('[data-role="lp-trials"] .lp-trial-tab', { hasText: 'copy-paste' });
+  // Run order, not visit order — matters below once the guard-entry skip
+  // link is used, which never visits tab-away/rearrange/autotype at all.
+  await expect(rail).toHaveText(['All', 'type-answer', 'copy-paste']);
+  await expect(allTab).toHaveAttribute('aria-pressed', 'true'); // All is the default
+
+  const totalRows = await page.locator('.lp-row').count();
+  await copyPasteTab.click();
+  await expect(copyPasteTab).toHaveAttribute('aria-pressed', 'true');
+  const visibleTrials = await page.locator('.lp-row:not(.lp-off)')
+    .evaluateAll((rows) => rows.map((r) => r.dataset.trial));
+  expect(visibleTrials.length).toBeGreaterThan(0);
+  expect(visibleTrials.every((t) => t === 'act1-paste')).toBe(true);
+  // Baseline's rows are hidden, not gone — the stream is append-only, so
+  // they're still in the DOM under lp-off.
+  await expect(page.locator('.lp-row[data-trial="act1-baseline"]').first()).toHaveClass(/lp-off/);
+
+  await allTab.click();
+  await expect(page.locator('.lp-row:not(.lp-off)')).toHaveCount(totalRows); // full count back
+
+  // -> results (step 11), via the guard-entry skip route — freeze() runs on
+  // entry (goTo()'s results block), while addRow/setPayload stay frozen.
+  await page.locator('a[data-key="skipToGuardedAct"]').click(); // -> guard-entry (step 7)
+  await page.locator('[data-action="enter-fullscreen"]').click();
+  await expect(page.locator('.eyebrow')).toContainText('Step 8 of 12', { timeout: 5000 });
+  await page.locator('.endguard').click(); // -> guard-debrief (step 9)
+  await primaryButton(page).click(); // -> signals-to-scores (step 10)
+  await primaryButton(page).click(); // -> results (step 11)
+  await page.locator('.yourreport h3').waitFor({ timeout: 8000 });
+
+  const frozenTotal = await page.locator('.lp-row').count();
+  await copyPasteTab.click(); // same rail node, just reparented — freeze must not disable it
+  const frozenVisibleTrials = await page.locator('.lp-row:not(.lp-off)')
+    .evaluateAll((rows) => rows.map((r) => r.dataset.trial));
+  expect(frozenVisibleTrials.length).toBeGreaterThan(0);
+  expect(frozenVisibleTrials.every((t) => t === 'act1-paste')).toBe(true);
+  await allTab.click();
+  await expect(page.locator('.lp-row:not(.lp-off)')).toHaveCount(frozenTotal); // full count back, even frozen
 });

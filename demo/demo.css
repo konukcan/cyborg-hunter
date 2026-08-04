@@ -236,7 +236,24 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
   background:var(--ground);color:var(--dim);cursor:pointer;}
 .lp-tab.active{background:var(--live-bg);color:var(--live);font-weight:700;}
 
-.lp-stream{font-family:var(--mono);font-size:11.8px;line-height:1.5;
+/* Per-trial tab rail: a two-column grid, rail + views. The aside
+ * is 312px (.cols above) minus .card's 18px/20px padding = a 272px content
+ * box, so 68px for the rail track (border+padding live INSIDE that 68px)
+ * leaves the stream 196px — tight, but this pane was already a wrapping
+ * ticker at 272px, and the close reading happens in the two wide states
+ * below (step 9's promoted pane, results-mode), which keep today's columns. */
+.lp-body{display:grid;grid-template-columns:68px minmax(0,1fr);gap:8px;}
+.lp-trials{display:flex;flex-direction:column;gap:4px;
+  border-right:1px solid var(--line);padding-right:8px;min-width:0;}
+.lp-trial-tab{font:11px var(--mono);text-align:left;padding:3px 6px;border:none;
+  border-radius:5px;background:var(--ground);color:var(--dim);cursor:pointer;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} /* title carries the full name */
+.lp-trial-tab[aria-pressed="true"]{background:var(--live-bg);color:var(--live);font-weight:700;}
+
+.lp-views{min-width:0;}
+/* 11px in the aside (the rail costs the stream ~76px), back to 11.8px in the
+ * two wide states below where the record is actually read closely. */
+.lp-stream{font-family:var(--mono);font-size:11px;line-height:1.5;
   max-height:290px;overflow-y:auto;}
 
 /* Step-10 promoted state (item 5): demo.js moves the pane's own card node
@@ -245,15 +262,56 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
  * otherwise near-empty main column leaves open. */
 [data-role="live-pane"].promoted{width:100%;}
 [data-role="live-pane"].promoted .lp-stream{max-height:560px;}
-.lp-cols, .lp-row{display:grid;grid-template-columns:44px 1fr 1fr 2fr;gap:8px;
+/* Four columns in the rail-narrowed 196px stream, measured empirically:
+ *   - minmax(0,…) not bare fr — an `auto`-floored fr track grows to its
+ *     widest word, so `synthetic_insertion` / `act1-paste` ate the flexible
+ *     space and collapsed .lp-detail (the pasted-text column) to ~25px;
+ *   - trial and event single-line + ellipsis rather than wrapped: breaking
+ *     them mid-token ("act1 / past / e") cost four lines a row and read
+ *     worse than a truncation the row's own title attribute recovers;
+ *   - only .lp-detail wraps, since it's the column worth the vertical space.
+ * 37px holds "0:00.1" at 11px mono without eating the gap, and the trial
+ * column takes the smallest share of the rest (the active rail tab already
+ * names the trial) so the event column stays wide enough to tell trial_start
+ * from trial_end at a glance. The two wide states below undo all of it. */
+.lp-cols, .lp-row{display:grid;gap:6px;
+  grid-template-columns:37px minmax(0,.7fr) minmax(0,1.15fr) minmax(0,1.5fr);
   padding:4px 0;border-top:1px solid var(--line);}
+.lp-trial, .lp-event{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.lp-detail{overflow-wrap:anywhere;}
 .lp-cols{color:var(--dim);font-size:10px;text-transform:uppercase;
   letter-spacing:.06em;border-top:none;}
-.lp-t{color:var(--dim);font-variant-numeric:tabular-nums;}
+.lp-t{color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap;}
 .lp-trial{color:var(--dim);}
 .lp-event{font-weight:600;}
 .lp-detail{color:var(--dim);}
 .lp-row.hard .lp-event{color:var(--hard);font-weight:700;}
+.lp-row.lp-off{display:none;}
+
+/* The rail filters the STREAM only — hidden on the raw-JSON view (that view
+ * IS the whole payload, so a column of buttons that do nothing would just
+ * be noise). Driven by live-pane.js's stream/json pill handler stamping
+ * data-view on .lp-body. The grid MUST collapse to one column alongside the
+ * display:none — a hidden grid item stops being a grid item at all, so
+ * .lp-views would otherwise auto-place into the 68px rail track and squeeze
+ * the JSON <pre> down to rail width. */
+.lp-body[data-view="json"]{grid-template-columns:minmax(0,1fr);}
+.lp-body[data-view="json"] .lp-trials{display:none;}
+
+/* Roomier rail wherever the card is wide (today's four-column fractions
+ * restored there): step 9's promoted pane, and results-mode's full-width
+ * aside reflow (.results-mode .main-col below — the pane isn't .promoted
+ * there, so both selectors are spelled out). */
+[data-role="live-pane"].promoted .lp-body,
+.results-mode [data-role="live-pane"] .lp-body{grid-template-columns:150px minmax(0,1fr);}
+[data-role="live-pane"].promoted .lp-stream,
+.results-mode [data-role="live-pane"] .lp-stream{font-size:11.8px;}
+[data-role="live-pane"].promoted .lp-cols, [data-role="live-pane"].promoted .lp-row,
+.results-mode [data-role="live-pane"] .lp-cols, .results-mode [data-role="live-pane"] .lp-row{
+  grid-template-columns:44px minmax(0,1fr) minmax(0,1fr) minmax(0,2fr);gap:8px;}
+[data-role="live-pane"].promoted .lp-trial, [data-role="live-pane"].promoted .lp-event,
+.results-mode [data-role="live-pane"] .lp-trial, .results-mode [data-role="live-pane"] .lp-event{
+  white-space:normal;overflow:visible;text-overflow:clip;}
 
 .lp-json{background:none;color:var(--ink);margin:0;padding:0;border-radius:0;
   max-height:290px;overflow:auto;font:11.8px/1.6 var(--mono);}
