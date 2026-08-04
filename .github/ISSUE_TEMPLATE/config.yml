@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: Live demo
-    url: https://konukcan.github.io/cyborg-hunter/
+    url: https://cyborg-hunter.github.io/cyborg-hunter/
     about: Walk through what the library records and what a report looks like before filing.

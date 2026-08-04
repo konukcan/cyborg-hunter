@@ -31,7 +31,7 @@ async function build() {
     globalName: 'CyborgHunter',
     outfile: 'dist/cyborg-hunter.min.js',
     platform: 'browser',
-    banner: { js: `// cyborg-hunter v${pkg.version} — https://github.com/konukcan/cyborg-hunter` },
+    banner: { js: `// cyborg-hunter v${pkg.version} — https://github.com/cyborg-hunter/cyborg-hunter` },
     footer: { js: 'if(typeof window!=="undefined")window.IntegrityMonitor=CyborgHunter;' }
   });
 
@@ -92,7 +92,7 @@ async function build() {
     format: 'iife',
     outfile: 'dist/cyborg-hunter-replay.js',
     platform: 'browser',
-    banner: { js: `// cyborg-hunter-replay v${pkg.version} — https://github.com/konukcan/cyborg-hunter` }
+    banner: { js: `// cyborg-hunter-replay v${pkg.version} — https://github.com/cyborg-hunter/cyborg-hunter` }
   });
 
   console.log('Build complete: dist/');

@@ -456,9 +456,9 @@ export const FINISH_VARIANTS = {
 /** Closing call-to-action on the replicate screen. */
 export const CLOSING_CTA = {
   primaryLabel: 'Get started in your experiment',
-  primaryHref: 'https://github.com/konukcan/cyborg-hunter/blob/main/docs/quickstart.md',
+  primaryHref: 'https://github.com/cyborg-hunter/cyborg-hunter/blob/main/docs/quickstart.md',
   installInvitation:
     'The jsPsych wiring you saw at step 2 is the whole integration; the ' +
     'quickstart walks through it.',
-  githubHref: 'https://github.com/konukcan/cyborg-hunter',
+  githubHref: 'https://github.com/cyborg-hunter/cyborg-hunter',
 };

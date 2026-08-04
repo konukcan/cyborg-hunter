@@ -10,7 +10,7 @@ authors:
     given-names: Victor
   - family-names: Nunez
     given-names: Jose Luis
-repository-code: https://github.com/konukcan/cyborg-hunter
+repository-code: https://github.com/cyborg-hunter/cyborg-hunter
 abstract: >-
   A JavaScript library and CLI for detecting AI-tool use during browser-based
   behavioral experiments. Captures paste, copy, drag, tab-away, mouse
@@ -25,5 +25,5 @@ keywords:
   - prolific
   - behavioral-research
 license: MIT
-version: 0.7.3
+version: 0.7.4
 date-released: '2026-08-04'

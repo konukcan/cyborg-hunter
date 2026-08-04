@@ -4,7 +4,7 @@ Detects AI-tool use during browser-based behavioral experiments. Captures paste,
 
 Optional companion deterrence modules (`extension-guard-friction.js`, `extension-guard-honeypot.js`) ship in the same package: friction enforces fullscreen + blocks sidebars + scrambles content during violations + asks cooperative LLMs to refuse; honeypot exposes both hidden and visible bait fields that AI agents fill while human participants don't see them.
 
-**[Try the live demo →](https://konukcan.github.io/cyborg-hunter/)** — run the tour in your browser; nothing leaves your machine.
+**[Try the live demo →](https://cyborg-hunter.github.io/cyborg-hunter/)** — run the tour in your browser; nothing leaves your machine.
 
 ### Example: what a report looks like
 
@@ -51,7 +51,7 @@ Browser (experiment page) — load via unpkg or copy `dist/*.js` into your proje
 <script src="https://unpkg.com/cyborg-hunter/dist/cyborg-hunter-replay.js"></script>
 ```
 
-For production studies, pin a version: `https://unpkg.com/cyborg-hunter@0.7.3/dist/...`.
+For production studies, pin a version: `https://unpkg.com/cyborg-hunter@0.7.4/dist/...`.
 
 ## Plug into a jsPsych experiment
 
@@ -176,7 +176,7 @@ The optional **guard** extensions add: fullscreen / sidebar / focus enforcement 
 
 ## Reporting issues
 
-Bug reports and feature requests go to the [issue tracker](https://github.com/konukcan/cyborg-hunter/issues); the bug form asks for your version and environment. One hard rule: issues are public, so never paste participant data (session payloads, replay files, identifiers). Reproduce with synthetic or personal test runs instead.
+Bug reports and feature requests go to the [issue tracker](https://github.com/cyborg-hunter/cyborg-hunter/issues); the bug form asks for your version and environment. One hard rule: issues are public, so never paste participant data (session payloads, replay files, identifiers). Reproduce with synthetic or personal test runs instead.
 
 ## Development
 
@@ -189,8 +189,8 @@ Run the test suite with `npm test`. Before publishing, run `scripts/check-public
   author  = {Konuk, Can and Btesh, Victor and Nunez, Jose Luis},
   title   = {cyborg-hunter: detecting AI-tool use in browser-based behavioral experiments},
   year    = {2026},
-  version = {0.7.3},
-  url     = {https://github.com/konukcan/cyborg-hunter},
+  version = {0.7.4},
+  url     = {https://github.com/cyborg-hunter/cyborg-hunter},
   license = {MIT}
 }
 ```

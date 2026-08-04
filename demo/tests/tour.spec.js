@@ -216,7 +216,7 @@ test('happy path: all 12 steps, welcome through replicate-locally', async ({ pag
 
   // ----- Step 12: replicate locally -----
   await expect(page.locator('.eyebrow')).toContainText('Step 12 of 12');
-  await expect(page.locator('.replicate')).toContainText('npx cyborg-hunter@0.7.3');
+  await expect(page.locator('.replicate')).toContainText('npx cyborg-hunter@0.7.4');
 
   const tmpDir = mkdtempSync(join(tmpdir(), 'ch-demo-e2e-'));
   for (const key of ['sessionData', 'replay', 'config']) {

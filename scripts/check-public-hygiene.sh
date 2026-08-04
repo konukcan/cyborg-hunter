@@ -12,12 +12,13 @@
 # package.json / CITATION keywords. Only the study-specific identifier forms
 # (PROLIFIC_PID env var, Prolific completionCode) are treated as leakage.
 #
-# Likewise github.com/konukcan/... (the public repo URL) is fine; only the
-# personal Pages host konukcan.github.io is banned — EXCEPT this repo's own
-# live-demo URL (konukcan.github.io/cyborg-hunter), which is the intended
-# public link and gets allowlisted below. A hit on any OTHER path under that
-# host (e.g. a different personal project's Pages URL pasted by accident)
-# still fails the gate.
+# The personal Pages host konukcan.github.io is banned. One allowlisted
+# exception: konukcan.github.io/cyborg-hunter, the demo's PRE-org-migration
+# URL (repo moved to the cyborg-hunter org, 2026-08-04) — it survives only
+# as a historical mention in CHANGELOG entries, which we don't rewrite. The
+# current demo host (cyborg-hunter.github.io) never matches the ban. A hit
+# on any OTHER path under the personal host (e.g. a different personal
+# project's Pages URL pasted by accident) still fails the gate.
 #
 # GATE_SCAN_DIR: when set, this script ALSO plain-greps that directory (in
 # addition to the normal git-tracked-file scan) with the same patterns and

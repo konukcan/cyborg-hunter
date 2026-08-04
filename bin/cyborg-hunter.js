@@ -16,7 +16,7 @@ const subcommand = args[0];
 function crash(err) {
   console.error('Error:', err.message);
   console.error('\nIf this looks like a bug, please report it at');
-  console.error('  https://github.com/konukcan/cyborg-hunter/issues');
+  console.error('  https://github.com/cyborg-hunter/cyborg-hunter/issues');
   console.error('(include the command, the error, and your version; never include participant data)');
   process.exit(1);
 }

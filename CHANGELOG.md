@@ -3,6 +3,17 @@
 All notable changes to **cyborg-hunter** are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [0.7.4] — 2026-08-04
+
+### Changed
+- Repository moved to a GitHub organization: the canonical repo is now
+  https://github.com/cyborg-hunter/cyborg-hunter and the live demo lives at
+  https://cyborg-hunter.github.io/cyborg-hunter/. The old repo URL and git
+  remotes redirect permanently; the old demo URL does not (GitHub Pages
+  never redirects). All package links, the CLI's crash-footer issue URL,
+  the demo's GitHub links, and citation metadata now point at the org.
+  No functional changes.
+
 ## [0.7.3] — 2026-08-04
 
 ### Added
