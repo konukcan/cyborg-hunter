@@ -193,11 +193,15 @@ var RAIL_LABELS = {};
   RAIL_GROUPS[g].forEach(function (r) { RAIL_LABELS[r.key] = r.label; });
 });
 
-// Tab label + run order per trial: the name the task panel shows during the
-// run (task.kind), NOT the trialId the stream's trial column prints.
+// Tab label + run order per trial: the step's own heading — the
+// human-readable name the visitor read while running that trial ("Now cheat
+// with the clipboard") — NOT the trialId the stream's trial column prints
+// ('act1-paste'), and not task.kind's slug either. Titles for trial-owning
+// steps carry no {{placeholders}}, so they need no tpl() pass here (which
+// module scope couldn't reach anyway).
 var TRIAL_TABS = [];  // [{ id, label }] in STEPS order
 STEPS.forEach(function (s) {
-  if (s.task && s.task.trialId) TRIAL_TABS.push({ id: s.task.trialId, label: s.task.kind });
+  if (s.task && s.task.trialId) TRIAL_TABS.push({ id: s.task.trialId, label: s.title });
 });
 
 function startTour(participantId, capabilities, manifest) {
@@ -1137,15 +1141,10 @@ function startTour(participantId, capabilities, manifest) {
   // button wired to the existing fullscreen-entry flow. Not wrapped in
   // .jspsych-content: the guard curtain never scrambles this step (it isn't
   // armed yet — start() only runs after entry succeeds).
-  //
-  // The leading <p class="label"> mirrors renderTaskPanel()'s own task.kind
-  // line (task.kind here is 'fullscreen-entry') — without it, this was the
-  // one step whose live-pane tab label (TRIAL_TABS, module scope above)
-  // named something the visitor never actually saw on screen.
-  function renderGuardEntryPanel(task) {
+  function renderGuardEntryPanel() {
     var msg = (window.GuardFriction && window.GuardFriction.defaultEntryMessage) || '';
     return (
-      '<div class="entrybox"><p class="label">' + task.kind + '</p>' + msg +
+      '<div class="entrybox">' + msg +
       '<div class="btnrow"><button class="btn" data-action="enter-fullscreen">Enter fullscreen and continue</button></div>' +
       '</div>' +
       '<p class="rule fallback-note" hidden></p>'
@@ -1201,7 +1200,7 @@ function startTour(participantId, capabilities, manifest) {
   function renderTaskPanel(task) {
     if (!task) return '';
     if (task.kind === 'downloads') return renderDownloadsPanel(task);
-    if (task.kind === 'fullscreen-entry') return renderGuardEntryPanel(task);
+    if (task.kind === 'fullscreen-entry') return renderGuardEntryPanel();
     // scramble coupling: GuardFriction's obfuscateContent() only touches
     // getJsPsychContent()'s match (.jspsych-content / .jspsych-display-element
     // / #jspsych-content) — this class makes every task panel a valid target,

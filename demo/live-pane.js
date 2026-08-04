@@ -80,8 +80,13 @@ export function makeLivePane(mount, pid) {
       (activeTrial === 'all') + '" title="' + escHtml(LIVE_PANE.trials.allLabel) + '">' +
       escHtml(LIVE_PANE.trials.allLabel) + '</button>';
     trials.forEach(function (t) {
+      // The label is the step's heading, clamped to two lines in the narrow
+      // aside (demo.css) — so the title carries it whole, plus the trialId
+      // the stream's own trial column shows, which is the one place the two
+      // names are spelled out side by side.
+      var tip = t.label === t.id ? t.id : t.label + ' (' + t.id + ')';
       html += '<button class="lp-trial-tab" data-trial-key="' + escHtml(t.id) + '" aria-pressed="' +
-        (activeTrial === t.id) + '" title="' + escHtml(t.id) + '">' + escHtml(t.label) + '</button>';
+        (activeTrial === t.id) + '" title="' + escHtml(tip) + '">' + escHtml(t.label) + '</button>';
     });
     if (sessionTab) {
       html += '<button class="lp-trial-tab" data-trial-key="session" aria-pressed="' +

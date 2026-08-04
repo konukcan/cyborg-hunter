@@ -236,18 +236,22 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
   background:var(--ground);color:var(--dim);cursor:pointer;}
 .lp-tab.active{background:var(--live-bg);color:var(--live);font-weight:700;}
 
-/* Per-trial tab rail: a two-column grid, rail + views. The aside
- * is 312px (.cols above) minus .card's 18px/20px padding = a 272px content
- * box, so 68px for the rail track (border+padding live INSIDE that 68px)
- * leaves the stream 196px — tight, but this pane was already a wrapping
- * ticker at 272px, and the close reading happens in the two wide states
- * below (step 9's promoted pane, results-mode), which keep today's columns. */
-.lp-body{display:grid;grid-template-columns:68px minmax(0,1fr);gap:8px;}
-.lp-trials{display:flex;flex-direction:column;gap:4px;
-  border-right:1px solid var(--line);padding-right:8px;min-width:0;}
-.lp-trial-tab{font:11px var(--mono);text-align:left;padding:3px 6px;border:none;
-  border-radius:5px;background:var(--ground);color:var(--dim);cursor:pointer;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} /* title carries the full name */
+/* Per-trial tab rail: a two-column grid, rail + views. The aside is 312px
+ * (.cols above) minus .card's 18px/20px padding = a 272px content box, so an
+ * 88px rail track (border+padding live INSIDE it) leaves the stream 176px.
+ * Tabs are step headings, not slugs, so they get the body's sans face rather
+ * than the stream's mono and wrap to two lines here (clamped, with the full
+ * heading plus the trialId in each tab's title); the two wide states below
+ * drop the clamp and show them whole. */
+.lp-body{display:grid;grid-template-columns:80px minmax(0,1fr);gap:8px;}
+.lp-trials{display:flex;flex-direction:column;gap:4px;min-width:0;flex:none;
+  border-right:1px solid var(--line);padding-right:8px;
+  max-height:290px;overflow-y:auto;} /* matches .lp-stream: the rail scrolls rather than growing the card */
+.lp-trial-tab{font-family:inherit;font-size:11px;line-height:1.35;text-align:left;
+  padding:4px 6px;border:none;border-radius:5px;background:var(--ground);
+  color:var(--dim);cursor:pointer;flex:none;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;
+  max-height:calc(3 * 1.35em + 8px);} /* three lines fits every heading whole at this width */
 .lp-trial-tab[aria-pressed="true"]{background:var(--live-bg);color:var(--live);font-weight:700;}
 
 .lp-views{min-width:0;}
@@ -303,7 +307,11 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
  * aside reflow (.results-mode .main-col below — the pane isn't .promoted
  * there, so both selectors are spelled out). */
 [data-role="live-pane"].promoted .lp-body,
-.results-mode [data-role="live-pane"] .lp-body{grid-template-columns:150px minmax(0,1fr);}
+.results-mode [data-role="live-pane"] .lp-body{grid-template-columns:172px minmax(0,1fr);}
+[data-role="live-pane"].promoted .lp-trials{max-height:560px;} /* tracks .promoted .lp-stream */
+[data-role="live-pane"].promoted .lp-trial-tab,
+.results-mode [data-role="live-pane"] .lp-trial-tab{display:block;font-size:12px;
+  -webkit-line-clamp:none;max-height:none;} /* room for the whole heading */
 [data-role="live-pane"].promoted .lp-stream,
 .results-mode [data-role="live-pane"] .lp-stream{font-size:11.8px;}
 [data-role="live-pane"].promoted .lp-cols, [data-role="live-pane"].promoted .lp-row,
