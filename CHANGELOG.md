@@ -3,7 +3,7 @@
 All notable changes to **cyborg-hunter** are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [0.7.5] — 2026-08-05
 
 ### Added
 - `GuardFriction.exitFullscreen()`: prefix-aware counterpart to

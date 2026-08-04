@@ -2,7 +2,7 @@
 // Default thresholds and preset configurations for Cyborg Hunter.
 // Single source of truth — used by both the browser library and CLI report tool.
 
-export const VERSION = "0.7.4";
+export const VERSION = "0.7.5";
 
 // Default detection thresholds shared across presets.
 // Researchers can override any value at init() time.
