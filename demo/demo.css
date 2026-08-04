@@ -306,7 +306,10 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
  * restored there): step 9's promoted pane, and results-mode's full-width
  * aside reflow (.results-mode .main-col below — the pane isn't .promoted
  * there, so both selectors are spelled out). */
-[data-role="live-pane"].promoted .lp-body,
+/* 156px in the promoted pane, 172px at the report: both fit a wrapped heading,
+ * but step 9's pane only has the main column's width to spend, and the 16px
+ * buys .lp-detail back the room the event column's floor needs. */
+[data-role="live-pane"].promoted .lp-body{grid-template-columns:156px minmax(0,1fr);}
 .results-mode [data-role="live-pane"] .lp-body{grid-template-columns:172px minmax(0,1fr);}
 [data-role="live-pane"].promoted .lp-trials{max-height:560px;} /* tracks .promoted .lp-stream */
 [data-role="live-pane"].promoted .lp-trial-tab,
@@ -314,12 +317,25 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
   -webkit-line-clamp:none;max-height:none;} /* room for the whole heading */
 [data-role="live-pane"].promoted .lp-stream,
 .results-mode [data-role="live-pane"] .lp-stream{font-size:11.8px;}
+/* Wide-state columns are floored, not purely fractional: the event column has
+ * to hold `synthetic_insertion` (135px at 11.8px mono) and the trial column
+ * `act1-autotype` (92px), and neither has a break opportunity — an underscore
+ * isn't one — so an fr track too narrow for them spills its text into the
+ * next column instead of wrapping. Sized so .lp-detail keeps the 238px it
+ * had at 1fr/1fr/2fr; when the pane is narrower than this needs, the floors
+ * hold and detail absorbs it, which is the right column to squeeze since it's
+ * the only one that wraps. */
 [data-role="live-pane"].promoted .lp-cols, [data-role="live-pane"].promoted .lp-row,
 .results-mode [data-role="live-pane"] .lp-cols, .results-mode [data-role="live-pane"] .lp-row{
-  grid-template-columns:44px minmax(0,1fr) minmax(0,1fr) minmax(0,2fr);gap:8px;}
+  grid-template-columns:44px minmax(90px,.8fr) minmax(140px,1.19fr) minmax(0,2fr);gap:8px;}
+/* Wide states wrap these two instead of truncating them (a violation row's
+ * "violation: not_fullscreen" reads far better over two lines than clipped),
+ * but keep overflow hidden as the hard backstop: the column floors above are
+ * sized for this mono face, and a wider one must break the word rather than
+ * paint it over .lp-detail. */
 [data-role="live-pane"].promoted .lp-trial, [data-role="live-pane"].promoted .lp-event,
 .results-mode [data-role="live-pane"] .lp-trial, .results-mode [data-role="live-pane"] .lp-event{
-  white-space:normal;overflow:visible;text-overflow:clip;}
+  white-space:normal;text-overflow:clip;overflow-wrap:break-word;overflow:hidden;}
 
 .lp-json{background:none;color:var(--ink);margin:0;padding:0;border-radius:0;
   max-height:290px;overflow:auto;font:11.8px/1.6 var(--mono);}
@@ -367,6 +383,11 @@ body[data-view="act2"] .check li.guardrow .lamp{background:var(--hard);border-co
  * Results screen (step 12) — full-width, instruments retired.
  * --------------------------------------------------------------------- */
 .results-mode .main-col{grid-column:1 / -1;}
+/* The lamp rail is hidden for good from this step on (demo.js), so the
+ * instrument column holds nothing but the live-record card — let it span the
+ * whole grid rather than sit in the 1fr track, matching the report frame
+ * above it and giving the record's own columns room to breathe. */
+.results-mode .instrument{grid-column:1 / -1;}
 .yourreport{border-left:3px solid var(--live);padding:2px 0 2px 16px;margin:0 0 18px;}
 .yourreport h3{font-size:20px;margin:0 0 8px;}
 .yourreport li{margin:0 0 8px;max-width:60ch;}
