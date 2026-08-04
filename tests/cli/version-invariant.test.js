@@ -30,3 +30,29 @@ it('both jsPsych extension info.version fields match package.json', async () => 
     assert.strictEqual(m[1], pkg.version, `stale version in ${f}`);
   }
 });
+
+// 0.7.2 shipped while CITATION.cff and the README bibtex still said 0.7.1 —
+// citation metadata is exactly the field nobody rechecks by hand.
+it('CITATION.cff version matches package.json', () => {
+  const cff = readFileSync(new URL('../../CITATION.cff', import.meta.url), 'utf8');
+  const m = cff.match(/^version:\s*(.+)$/m);
+  assert.ok(m, 'no version field in CITATION.cff');
+  assert.strictEqual(m[1].trim(), pkg.version);
+});
+
+it('README bibtex + version pins match package.json', () => {
+  const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+  const bib = readme.match(/version = \{([^}]+)\}/);
+  assert.ok(bib, 'no bibtex version field in README');
+  assert.strictEqual(bib[1], pkg.version, 'stale bibtex version in README');
+  for (const [, v] of readme.matchAll(/cyborg-hunter@(\d+\.\d+\.\d+)/g)) {
+    assert.strictEqual(v, pkg.version, 'stale version pin in README');
+  }
+});
+
+it('docs/quickstart.md version pins match package.json', () => {
+  const qs = readFileSync(new URL('../../docs/quickstart.md', import.meta.url), 'utf8');
+  for (const [, v] of qs.matchAll(/cyborg-hunter@(\d+\.\d+\.\d+)/g)) {
+    assert.strictEqual(v, pkg.version, 'stale version pin in docs/quickstart.md');
+  }
+});

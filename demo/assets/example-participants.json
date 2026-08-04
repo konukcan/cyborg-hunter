@@ -1383,7 +1383,7 @@
           "mouseTrackingCapped": false,
           "mouseTrackingCappedAtMs": null,
           "duration_ms": 41000,
-          "libraryVersion": "0.7.2",
+          "libraryVersion": "0.7.3",
           "participantId": "example-1",
           "timestamp": "2026-01-01T00:00:41.100Z",
           "trialSoftScore": 0,
@@ -3089,7 +3089,7 @@
           "mouseTrackingCapped": false,
           "mouseTrackingCappedAtMs": null,
           "duration_ms": 62000,
-          "libraryVersion": "0.7.2",
+          "libraryVersion": "0.7.3",
           "participantId": "example-1",
           "timestamp": "2026-01-01T00:01:43.100Z",
           "trialSoftScore": 4,
@@ -3711,7 +3711,7 @@
           "mouseTrackingCapped": false,
           "mouseTrackingCappedAtMs": null,
           "duration_ms": 38000,
-          "libraryVersion": "0.7.2",
+          "libraryVersion": "0.7.3",
           "participantId": "example-1",
           "timestamp": "2026-01-01T00:02:21.100Z",
           "trialSoftScore": 3,
@@ -3859,7 +3859,7 @@
             "typingSpeedCps": 10
           }
         },
-        "libraryVersion": "0.7.2"
+        "libraryVersion": "0.7.3"
       },
       "integrityScore": {
         "hardScore": {
@@ -5411,7 +5411,7 @@
           "mouseTrackingCapped": false,
           "mouseTrackingCappedAtMs": null,
           "duration_ms": 36000,
-          "libraryVersion": "0.7.2",
+          "libraryVersion": "0.7.3",
           "participantId": "example-2",
           "timestamp": "2026-01-01T00:00:36.080Z",
           "trialSoftScore": 0,
@@ -7222,7 +7222,7 @@
           "mouseTrackingCapped": false,
           "mouseTrackingCappedAtMs": null,
           "duration_ms": 52000,
-          "libraryVersion": "0.7.2",
+          "libraryVersion": "0.7.3",
           "participantId": "example-2",
           "timestamp": "2026-01-01T00:01:28.080Z",
           "trialSoftScore": 0,
@@ -8582,7 +8582,7 @@
           "mouseTrackingCapped": false,
           "mouseTrackingCappedAtMs": null,
           "duration_ms": 33000,
-          "libraryVersion": "0.7.2",
+          "libraryVersion": "0.7.3",
           "participantId": "example-2",
           "timestamp": "2026-01-01T00:02:01.080Z",
           "trialSoftScore": 0,
@@ -8717,7 +8717,7 @@
             "typingSpeedCps": 10
           }
         },
-        "libraryVersion": "0.7.2"
+        "libraryVersion": "0.7.3"
       },
       "integrityScore": {
         "hardScore": {
