@@ -58,7 +58,10 @@ async function waitForFreshRebuild(page, prevText) {
     const el = document.querySelector('[data-role="pg-status"]');
     const t = (el && el.textContent) || '';
     return /rebuilt in/.test(t) && t !== prev;
-  }, prevText, { timeout: 5000 });
+  }, prevText, { timeout: 15000 });
+  // 15s, not 5s: the debounce + recompute + iframe-swap cycle is sub-second
+  // locally but has blown a 5s budget on slow shared CI runners (PR #3's
+  // spurious red X). The budget is patience, not a performance assertion.
 }
 
 // Baseline (step 2, typed) + two dispatched pastes of ANSWER (step 3, hard-
