@@ -48,6 +48,7 @@ export const LIVE_PANE = {
     'Every row accumulates into {{pid}}.json, the file you download at the ' +
     'end and feed to the CLI. The stream is the demo\'s live view; the JSON ' +
     'is the product\'s actual file.',
+  trials: { allLabel: 'All', sessionLabel: 'session', groupLabel: 'Filter the stream by trial' },
 };
 
 /** Step-2 integration code box: what this question looks like in your code. */

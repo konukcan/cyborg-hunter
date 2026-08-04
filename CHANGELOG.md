@@ -3,6 +3,18 @@
 All notable changes to **cyborg-hunter** are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- `GuardFriction.exitFullscreen()`: prefix-aware counterpart to
+  `requestFullscreen()`; a no-op when not fullscreen and while the guard is
+  armed (call it after `stop()`).
+
+### Changed
+- Live demo: the report screen now leaves fullscreen through the plugin, and
+  the live-session record gained a per-trial tab rail (`All` first) that
+  filters the stream to one trial at a time.
+
 ## [0.7.4] — 2026-08-04
 
 ### Changed

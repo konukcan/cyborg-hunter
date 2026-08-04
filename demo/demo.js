@@ -65,6 +65,36 @@ function fullscreenIsActive() {
   return !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement);
 }
 
+// Leaves fullscreen through the plugin's own exitFullscreen() (the demo's
+// own requestFullscreen counterpart to raceFullscreenEntry() below stays
+// separate — this is the exit side, and the plugin now owns it). Same
+// try/catch + console.warn posture as startGuardFriction()/finalizeGuard():
+// never throws, degrades silently. Falls back to a local prefix-aware
+// document method, invoked as fn.call(document) (same "Illegal invocation"
+// hazard as the plugin's own exitFullscreenFnOf), only when the plugin
+// bundle never loaded — a path the demo already tolerates elsewhere
+// (handleFullscreenEntry). Idempotent: a no-op when not fullscreen, so
+// calling this after act 2 was skipped or the visitor already pressed Esc
+// is harmless.
+function exitFullscreenIfActive() {
+  if (!fullscreenIsActive()) return;
+  if (window.GuardFriction && typeof window.GuardFriction.exitFullscreen === 'function') {
+    try {
+      window.GuardFriction.exitFullscreen();
+    } catch (err) {
+      console.warn('cyborg-hunter demo: GuardFriction.exitFullscreen failed', err);
+    }
+    return;
+  }
+  var fn = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen;
+  if (!fn) return;
+  try {
+    fn.call(document);
+  } catch (err) {
+    console.warn('cyborg-hunter demo: fallback exitFullscreen failed', err);
+  }
+}
+
 // Step 8's 1.5s fullscreen-entry race. Calls OUR OWN requestFullscreen() —
 // not GuardFriction.requestFullscreen(), which fires the request and
 // swallows any promise rejection (prior eng review) — so we get a real
@@ -163,6 +193,17 @@ var RAIL_LABELS = {};
   RAIL_GROUPS[g].forEach(function (r) { RAIL_LABELS[r.key] = r.label; });
 });
 
+// Tab label + run order per trial: the step's own heading — the
+// human-readable name the visitor read while running that trial ("Now cheat
+// with the clipboard") — NOT the trialId the stream's trial column prints
+// ('act1-paste'), and not task.kind's slug either. Titles for trial-owning
+// steps carry no {{placeholders}}, so they need no tpl() pass here (which
+// module scope couldn't reach anyway).
+var TRIAL_TABS = [];  // [{ id, label }] in STEPS order
+STEPS.forEach(function (s) {
+  if (s.task && s.task.trialId) TRIAL_TABS.push({ id: s.task.trialId, label: s.title });
+});
+
 function startTour(participantId, capabilities, manifest) {
   var version = (window.CyborgHunter && CyborgHunter.VERSION) || 'unknown';
 
@@ -242,14 +283,22 @@ function startTour(participantId, capabilities, manifest) {
   state.pane = makeLivePane(paneEl, participantId);
   state.t0 = performance.now();
 
-  function buildCurrentPayload() {
+  // opts.final is the download seam's flag ONLY (buildDownloadFile passes
+  // it for 'sessionData') — with it set, and once the results step has
+  // snapshotted state.sessionReport, this reads that frozen snapshot instead
+  // of a fresh live one. Without it (paneRow()'s live-pane feed, and step
+  // 11's "your soft score … from the session so far" readout), this keeps
+  // reading monitor.getSessionReport() live, same as before — freezing
+  // either of those inputs would quietly make "so far" false.
+  function buildCurrentPayload(opts) {
     var trials = state.trialReports.map(function (r) {
       return { trialId: r.trialId, integrity: r };
     });
+    var sessionReport = (opts && opts.final && state.sessionReport) || monitor.getSessionReport();
     return buildPayload({
       pid: participantId,
       trials: trials,
-      sessionReport: monitor.getSessionReport(),
+      sessionReport: sessionReport,
       violations: state.violations
     });
   }
@@ -294,12 +343,21 @@ function startTour(participantId, capabilities, manifest) {
     pinPaneScroll();
   }
 
-  // Lamp wiring is lifecycle-bound (spec: "starts and stops with the tour").
-  // startLampWiring/stopLampWiring are idempotent: entering the results step
-  // stops the poll and turns every lamp handler into a no-op (the interactive
-  // tasks are over; the monitor itself keeps running — finalization belongs
-  // to the payload task); navigating Back into the tour restarts it.
+  // Lamp wiring is lifecycle-bound (spec: "starts and stops with the tour"),
+  // but retires PERMANENTLY once the results step is reached — Back-nav can
+  // no longer restart it, unlike a plain stop/start pair. startLampWiring/
+  // stopLampWiring stay idempotent; lampWiringRetired is the one-way latch
+  // startLampWiring() checks before ever flipping lampWiringActive back on.
+  // Without it, Back-then-forward through results would restart the 5s poll
+  // (pollSessionSignals -> syncCountLamp -> acknowledge()), which would see
+  // the sidebar/viewport artifact our OWN post-results fullscreen exit
+  // produces (exitFullscreenIfActive(), goTo()'s results block below) and
+  // announce a false "✓ detected" strip for a detection the visitor never
+  // produced. Safe to retire for good: the rail is already hidden
+  // permanently from results onward, and the monitor itself keeps recording
+  // regardless (finalization belongs to the payload task, not this wiring).
   var lampWiringActive = false;
+  var lampWiringRetired = false;
   var sessionPollId = null;
   // Step 6 (autotype)'s char-by-char animation runs its own setInterval,
   // outside the library entirely — tracked here so goTo() can cancel a
@@ -316,7 +374,7 @@ function startTour(participantId, capabilities, manifest) {
   }
 
   function startLampWiring() {
-    if (lampWiringActive) return;
+    if (lampWiringRetired || lampWiringActive) return;
     lampWiringActive = true;
     sessionPollId = setInterval(pollSessionSignals, SESSION_POLL_MS);
   }
@@ -326,6 +384,14 @@ function startTour(participantId, capabilities, manifest) {
     lampWiringActive = false;
     clearInterval(sessionPollId);
     sessionPollId = null;
+  }
+
+  // One-way: called only from goTo()'s results block, below. Sets the latch
+  // startLampWiring() checks, so a later Back-nav out of results can never
+  // restart the poll (see the docblock above lampWiringActive's declaration).
+  function retireLampWiring() {
+    lampWiringRetired = true;
+    stopLampWiring();
   }
 
   // Lights `key` only if `count` is a new high — makes both the event-driven
@@ -747,7 +813,13 @@ function startTour(participantId, capabilities, manifest) {
   // fallback, so both always agree on exactly what would have been saved.
   function buildDownloadFile(key) {
     if (key === 'sessionData') {
-      return { filename: participantId + '.json', data: buildCurrentPayload() };
+      // final:true — the download must match EXACTLY what the on-screen
+      // report read (state.sessionReport, snapshotted once at results), not
+      // a fresh live read that could pick up a sidebar/viewport event our
+      // OWN post-results fullscreen exit produced (exitFullscreenIfActive()
+      // in goTo()'s results block) — a demo whose whole claim is "this file
+      // produces that report" can't let the file disagree with the report.
+      return { filename: participantId + '.json', data: buildCurrentPayload({ final: true }) };
     }
     if (key === 'replay') {
       // renderDownloadsPanel() disables this button when
@@ -1258,10 +1330,21 @@ function startTour(participantId, capabilities, manifest) {
 
     lifecycle.transitionTo(trialId);
     if (prevTrialId != null) paneRow(prevTrialId, 'trial_end', null);
+    // Register the rail tab BEFORE the trial_start row below: addTrial() is
+    // idempotent and inserts by run-order ordinal (not visit order), so a
+    // skip link followed by Back can never leave the rail out of order or
+    // duplicate a tab.
+    if (trialId != null) {
+      for (var ti = 0; ti < TRIAL_TABS.length; ti++) {
+        if (TRIAL_TABS[ti].id === trialId) { state.pane.addTrial(trialId, TRIAL_TABS[ti].label, ti); break; }
+      }
+    }
     if (trialId != null) paneRow(trialId, 'trial_start', null);
 
-    // Lamp wiring stops at the results step (interactive tasks are over) and
-    // restarts if the visitor navigates Back into the tour. Both idempotent.
+    // Lamp wiring stops at the results step (interactive tasks are over).
+    // startLampWiring() no-ops once lampWiringRetired is set (results block
+    // below), so Back-nav out of the tour can no longer restart it past
+    // that point — see the docblock at lampWiringActive's declaration.
     if (i >= resultsIndex) stopLampWiring(); else startLampWiring();
     document.body.dataset.view = step.act;
     // Full-width payoff — toggled here (not by results.js) so every OTHER
@@ -1287,10 +1370,27 @@ function startTour(participantId, capabilities, manifest) {
       // done — and the rail (a demo-only "current session" instrument)
       // retires with them; the live pane stays visible, frozen, as the
       // historical record.
-      state.sessionReport = monitor.getSessionReport();
+      // Snapshotted ONCE: re-reading on every results entry (e.g. a visitor
+      // who goes Back then forward) would let the exit's own sidebar/
+      // viewport artifact (exitFullscreenIfActive(), below) slip into a
+      // LATER read even though the first read already froze it — the report
+      // is supposed to be the complete session as of the moment results was
+      // first reached, not a moving target on re-entry.
+      if (!state.sessionReport) state.sessionReport = monitor.getSessionReport();
       state.pane.freeze();
       finalizeReplay();
       finalizeGuard();
+      // AFTER finalizeGuard() deliberately: exiting fullscreen under an
+      // armed guard logs a false 'not_fullscreen' violation (the plugin now
+      // refuses that outright — exitFullscreen()'s own guard — but this
+      // ordering is the real guarantee, not the refusal). Step 8's copy
+      // already promises fullscreen is no longer required once the guarded
+      // act ends; this makes that literal on the way into the report.
+      exitFullscreenIfActive();
+      // One-way latch (see the docblock at lampWiringActive's declaration):
+      // must retire AFTER the sessionReport snapshot above, not before —
+      // retiring only stops the POLL, it doesn't touch the snapshot logic.
+      retireLampWiring();
       railEl.hidden = true;
       var mount = cardEl.querySelector('[data-role="results-mount"]');
       // Dynamic import: results.js (and its plot-adapter.js dependency) are

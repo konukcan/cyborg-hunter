@@ -72,6 +72,23 @@ export function fullscreenElementOf(doc) {
         || null;
 }
 
+// Mirrors requestFullscreen()'s prefix fallback on the exit side: Safari
+// <16.4 exposes only webkitExitFullscreen, older Firefox
+// mozCancelFullScreen. Pure + exported for unit testing, like
+// fullscreenElementOf above. Returns the METHOD, unbound — every caller
+// must invoke it as fn.call(document) (see exitFullscreen below): a
+// detached call (fn()) throws "Illegal invocation" in real Chrome, because
+// document.exitFullscreen is a native method that requires document as its
+// receiver.
+export function exitFullscreenFnOf(doc) {
+    doc = doc || (typeof document !== 'undefined' ? document : null);
+    if (!doc) return null;
+    return doc.exitFullscreen
+        || doc.webkitExitFullscreen
+        || doc.mozCancelFullScreen
+        || null;
+}
+
 (function (global) {
     'use strict';
 
@@ -789,6 +806,42 @@ export function fullscreenElementOf(doc) {
         }
     }
 
+    // Counterpart to requestFullscreen() above, on the exit side. Two guards
+    // before ever touching the native method: a no-op when nothing is
+    // fullscreen (fullscreenElementOf(document) is null — nothing to exit),
+    // and a no-op while the guard is armed (state.active, the same flag
+    // start()/stop() maintain and getCurrentState() reports). The second
+    // guard matters because check() runs on every fullscreenchange: exiting
+    // while armed would immediately log a false 'not_fullscreen' violation
+    // against the participant — a footgun for any study calling this
+    // mid-timeline. Callers must stop() first. Never throws.
+    function exitFullscreen() {
+        if (!fullscreenElementOf(document)) {
+            logDebug('exit_fullscreen.not_fullscreen', { diagnostics: getDiagnostics() });
+            return;
+        }
+        if (state.active) {
+            logDebug('exit_fullscreen.refused_guard_active', { diagnostics: getDiagnostics() });
+            return;
+        }
+        const exit = exitFullscreenFnOf(document);
+        if (exit) {
+            try {
+                logDebug('exit_fullscreen.attempt', { diagnostics: getDiagnostics() });
+                // .call(document) is mandatory, not stylistic — see
+                // exitFullscreenFnOf's comment above.
+                exit.call(document);
+            } catch (e) {
+                logDebug('exit_fullscreen.error', {
+                    message: e && e.message ? e.message : String(e),
+                    diagnostics: getDiagnostics(),
+                });
+            }
+        } else {
+            logDebug('exit_fullscreen.unavailable_api', { diagnostics: getDiagnostics() });
+        }
+    }
+
     function start(opts = {}) {
         state.jsPsych = opts.jsPsych || state.jsPsych;
         if (typeof opts.sidebarTolerance === 'number') {
@@ -1050,6 +1103,11 @@ export function fullscreenElementOf(doc) {
         stop: function (token) { stop(token); },
         setJsPsych: function (j) { state.jsPsych = j; },
         requestFullscreen: function () { requestFullscreen(); },
+        // Counterpart to requestFullscreen() above. Call this AFTER stop() —
+        // it no-ops while the guard is still armed (see exitFullscreen's
+        // guard above), so the ordering (not just the refusal) is what a
+        // caller should rely on.
+        exitFullscreen: function () { exitFullscreen(); },
         injectRefusalNotices: function () { injectRefusalNotices(); },
         createEntryTrial: function (opts) { return createEntryTrial(opts); },
         onViolation: function (handler) { return onViolation(handler); },
@@ -1086,7 +1144,7 @@ class GuardFrictionExtension {
     // Hand-bumped on each release to track the package version
     // (package.json / src/shared/constants.js). Shown in the jsPsych developer
     // console only; the runtime library version is independent.
-    version: '0.6.0',
+    version: '0.7.0',
     data: {}
   };
 
