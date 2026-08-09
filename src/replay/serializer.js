@@ -1,6 +1,7 @@
 // src/replay/serializer.js
-// In-memory recorder state → SessionRecording v1 (jsPsych PR #3661 wire
-// format) with a ch_extensions namespace for CH-only data.
+// In-memory recorder state → CH's SessionRecording v1 wire format (modeled
+// on jsPsych PR #3661's schema; joint v2 unification in progress) with a
+// ch_extensions namespace for CH-only data.
 //
 // This is one of exactly two places in the system that convert time bases
 // (the other is the CLI ingest): in-memory events carry absolute

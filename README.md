@@ -97,8 +97,10 @@ Output: `summary.csv` (per-participant columns), `triage.md` (ranked list), `eve
 
 The optional replay recorder captures what the participant did and (at the
 `dom` tier) what the page looked like, so a flagged session can be reviewed
-visually instead of adjudicated from counts alone. Recordings use jsPsych
-PR #3661's `SessionRecording v1` wire format with a `ch_extensions` block.
+visually instead of adjudicated from counts alone. Recordings use CH's
+`SessionRecording v1` wire format (modeled on the format of jsPsych's
+in-development replay feature) with a `ch_extensions` block; a unified v2
+format is being developed jointly with jsPsych.
 
 ```javascript
 // jsPsych: one more extension (declare anywhere; finalize LAST)

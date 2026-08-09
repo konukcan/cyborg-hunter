@@ -204,11 +204,14 @@ The library exports `window.CyborgHunter` for forward use; `window.IntegrityMoni
 exposes `window.CyborgHunterReplay` (standalone use) and
 `window.jsPsychCyborgHunterReplay` (jsPsych extension) from one file, and it
 does not require the CH monitor — but merges CH's session report into the
-recording when one is available. The wire format is jsPsych PR #3661's
-`SessionRecording v1`; CH-only data (scoring, guard violations, sidebar
-events) lives under a `ch_extensions` namespace, so a CH recording plays in
-upstream #3661 tooling and a plain #3661 recording ingests into the CH
-report.
+recording when one is available. The wire format is CH's `SessionRecording
+v1`, modeled on the format of jsPsych's in-development replay (PR #3661)
+but not yet field-compatible with it; CH-only data (scoring, guard
+violations, sidebar events) lives under a `ch_extensions` namespace. A
+unified v2 format that round-trips between the two tools is being developed
+jointly with jsPsych. Until it lands, each tool's player renders only its
+own recordings; #3661-shaped files still attach to the CH report for
+bookkeeping.
 
 ### jsPsych wiring
 

@@ -24,9 +24,11 @@ import { extractIntegrityData, ruleChronologicalCompare } from './extract-core.j
 // never enter the participant-file pass.
 const REPLAY_FILE_RE = /-replay-\d+\.json(\.gz)?$/i;
 
-// Content sniff: replay artifacts (ours or #3661's) are identified by
-// structure, not just filename — schema_version plus either our recorder
-// stamp or a #3661-shaped trials array.
+// Content sniff: replay artifacts (ours, or #3661-shaped files from
+// jsPsych's in-development recorder) are identified by structure, not just
+// filename — schema_version plus either our recorder stamp or a
+// #3661-shaped trials array. Foreign recordings attach for bookkeeping;
+// the viewer renders CH recordings only until the joint v2 format lands.
 function looksLikeReplayArtifact(text) {
   try {
     const j = JSON.parse(text);
