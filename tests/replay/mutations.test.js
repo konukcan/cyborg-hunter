@@ -19,7 +19,7 @@ import { validateStrict } from './schema-v2/validator.js';
 import { createPlayer } from './support/dom-player.js';
 import { mapMutations, MUTATION_OBSERVER_INIT } from '../../src/replay/mutations.js';
 import { serializeTree, nearestEmittedAncestor } from '../../src/replay/snapshot.js';
-import { createRegistry } from '../../src/replay/node-registry.js';
+import { createSpan } from '../../src/replay/span.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const canonical = JSON.parse(
@@ -33,27 +33,28 @@ function session(html, opts = {}) {
   const doc = win.document;
   doc.body.innerHTML = html;
   const root = doc.body.firstElementChild;
-  // The registry is wrapped so a test can count lookups: `before` resolution
-  // walks siblings through peekId, which is where the cost of a mass append
-  // shows up (I1).
-  const inner = createRegistry();
+  // The span's registry is wrapped so a test can count lookups: `before`
+  // resolution walks siblings through peekId, which is where the cost of a
+  // mass append shows up (I1).
+  const inner = createSpan();
   const stats = { peek: 0 };
   const registry = {
-    idFor: (n) => inner.idFor(n),
-    assignTree: (n) => inner.assignTree(n),
-    peekId: (n) => { stats.peek++; return inner.peekId(n); },
-    resetSpan: () => inner.resetSpan(),
-    get count() { return inner.count; },
+    idFor: (n) => inner.registry.idFor(n),
+    assignTree: (n) => inner.registry.assignTree(n),
+    peekId: (n) => { stats.peek++; return inner.registry.peekId(n); },
+    resetSpan: () => inner.registry.resetSpan(),
+    get count() { return inner.registry.count; },
   };
-  const keyframe = serializeTree(root, registry, opts);
+  const span = { registry: registry, delivery: inner.delivery, reset: inner.reset };
+  const keyframe = serializeTree(root, span, opts);
   const observer = new win.MutationObserver(() => {});
   observer.observe(root, MUTATION_OBSERVER_INIT);
   return {
-    win, doc, root, registry, keyframe, stats,
+    win, doc, root, registry, span, keyframe, stats,
     // One observer callback = one batch = one `t`.
     flush(t = 100) {
       return mapMutations(observer.takeRecords(),
-        Object.assign({ root, registry, t }, opts));
+        Object.assign({ root, span, t }, opts));
     },
     takeRecords() { return observer.takeRecords(); },
   };
@@ -605,7 +606,7 @@ describe('mapMutations — root and detachment (M4)', () => {
 
     assert.ok(records.length > 0);
     assert.deepStrictEqual(
-      mapMutations(records, { root: null, registry: s.registry, t: 1 }), []);
+      mapMutations(records, { root: null, span: s.span, t: 1 }), []);
   });
 
   it('drops patches for a target this batch detached from the root', () => {
@@ -843,19 +844,34 @@ describe('mapMutations — batch composition (N1 to N4)', () => {
     assert.strictEqual(shape(p.root), shape(s.root));
   });
 
-  it('N6: emits no removal for an insertion it never emitted', () => {
+  it('N6: says nothing about a node whose insertion it never emitted', () => {
+    // Pins the delivery predicate rather than a defect the pre-round-2 mapper
+    // had: p1 leaves the file with the collapse, is inserted somewhere the
+    // patch stream never mentions, and is gone by flush. The whole batch is
+    // the collapse sequence and nothing else. (Guard-level bite verified by
+    // fault injection: disabling the holds/parentOf check in mapRemoved fails
+    // this test. It does NOT reproduce on c2e0d36, whose per-batch
+    // `skippedAdd` bookkeeping covered this particular shape.)
     const s = session(
       '<div id="stage"><div id="box"><p id="p1">one</p></div><p id="z">z</p></div>');
     const p = playerFor(s);
     const box = s.doc.getElementById('box');
+    const boxId = s.registry.peekId(box);
     const p1 = s.doc.getElementById('p1');
+    const p1Id = s.registry.peekId(p1);
 
     box.setAttribute('data-record-exclude', 'on');   // the collapse takes p1 away
     s.root.appendChild(p1);                          // p1 moves out…
     p1.remove();                                     // …and is gone by flush
-    p.apply(s.flush(111));
+    const events = s.flush(111);
 
-    assert.strictEqual(p.node(s.registry.peekId(box)).childNodes.length, 0);
+    assert.deepStrictEqual(events, [
+      { type: 'dom.remove', t: 111, node: p1Id },
+      { type: 'dom.attr', t: 111, node: boxId, name: 'id', value: null },
+      { type: 'dom.attr', t: 111, node: boxId, name: 'data-record-exclude', value: null },
+    ]);
+    p.apply(events);
+    assert.strictEqual(p.node(boxId).childNodes.length, 0);
   });
 
   it('N7: a collapse clears an attribute the same batch removed', () => {
@@ -876,19 +892,30 @@ describe('mapMutations — batch composition (N1 to N4)', () => {
   });
 
   it('N8: states an insertion where the node ends up, not where it first landed', () => {
+    // ONE add per inserted node, at the record that placed it where it stays.
+    // Stating the first landing and correcting it afterwards reaches the same
+    // player state by luck: the correction's `before` has to resolve against a
+    // sibling whose own insertion is still pending, which is precisely what
+    // beforeId refuses to name.
     const s = session('<div id="stage"><div id="dst"><p id="anchor">a</p></div></div>');
     const p = playerFor(s);
     const dst = s.doc.getElementById('dst');
     const dstId = s.registry.peekId(dst);
     const anchor = s.doc.getElementById('anchor');
+    const anchorId = s.registry.peekId(anchor);
     const moved = s.doc.createElement('em');
     const between = s.doc.createElement('i');
 
     s.root.appendChild(moved);              // first record puts it in the stage…
     dst.insertBefore(between, anchor);
     dst.insertBefore(moved, anchor);        // …and this one is where it stays
-    p.apply(s.flush(113));
+    const events = s.flush(113);
 
+    assert.deepStrictEqual(events.map(e => [e.type, e.parent, e.before, e.node.tag]), [
+      ['dom.add', dstId, anchorId, 'i'],
+      ['dom.add', dstId, anchorId, 'em'],
+    ]);
+    p.apply(events);
     assert.strictEqual(shape(p.node(dstId)), shape(dst));
   });
 
@@ -914,7 +941,10 @@ describe('mapMutations — batch composition (N1 to N4)', () => {
 
   it('N9: says nothing more about children a reveal re-emitted', () => {
     // The reveal writes the element's children from the final DOM, so the
-    // records describing how they got there are already told.
+    // records describing how they got there are already told. Restating them
+    // costs a remove-and-re-add whose `before` cannot name the sibling still
+    // waiting for its own insertion — so the node comes back in the wrong
+    // place. The patch count is the assertion that catches the restatement.
     const s = session(
       '<div id="stage"><div id="box" data-record-exclude="on"><b id="kid">k</b></div></div>');
     const p = playerFor(s);
@@ -924,8 +954,10 @@ describe('mapMutations — batch composition (N1 to N4)', () => {
     box.removeAttribute('data-record-exclude');
     box.appendChild(s.doc.getElementById('kid'));   // reorder, then grow
     box.appendChild(s.doc.createElement('em'));
-    p.apply(s.flush(115));
+    const events = s.flush(115);
 
+    assert.deepStrictEqual(events.map(e => e.type), ['dom.attr', 'dom.add', 'dom.add']);
+    p.apply(events);
     assert.strictEqual(shape(p.node(boxId)), shape(box));
   });
 
@@ -984,7 +1016,11 @@ describe('mapMutations — before resolution cost (I1)', () => {
     const small = peeks(50);
     const big = peeks(200);
 
-    // Quadratic would be ~16x for 4x the nodes; linear is ~4x.
+    // Bounds, not the figure: quadratic would be ~16x for 4x the nodes, and
+    // linear is ~4x. The measured cost is currently one lookup per appended
+    // node (50/100/200/400 for N of 50/100/200/400) — the delivery check
+    // answers what a second peekId used to — but the test is deliberately
+    // loose, so a cheap constant-factor change is not a failure.
     assert.ok(big < small * 6, `peekId calls grew ${(big / small).toFixed(1)}x for 4x nodes`);
     assert.ok(big < 200 * 8, `peekId calls ${big} for 200 appends`);
   });
@@ -1043,7 +1079,7 @@ describe('mapMutations — minors', () => {
     const events = mapMutations([{
       type: 'attributes', target: svg, attributeName: 'href',
       attributeNamespace: 'http://www.w3.org/1999/xlink', oldValue: null,
-    }], { root: s.root, registry: s.registry, t: 5 });
+    }], { root: s.root, span: s.span, t: 5 });
 
     assert.deepStrictEqual(events,
       [{ type: 'dom.attr', t: 5, node: id, name: 'xlink:href', value: '#icon' }]);
@@ -1058,7 +1094,7 @@ describe('mapMutations — minors', () => {
     const events = mapMutations([{
       type: 'attributes', target: svg, attributeName: 'href',
       attributeNamespace: 'http://www.w3.org/1999/xlink', oldValue: '#icon',
-    }], { root: s.root, registry: s.registry, t: 6 });
+    }], { root: s.root, span: s.span, t: 6 });
 
     assert.deepStrictEqual(events, []);
   });
@@ -1082,6 +1118,42 @@ describe('mapMutations — minors', () => {
   });
 });
 
+describe('capture span (span.js)', () => {
+  it('is unaffected by a serialization taken on another span', () => {
+    // Sizing a snapshot means serializing the tree the recorder is recording.
+    // On a shared model that write is indistinguishable from the recorder's
+    // own: the mapper reads "the player already holds this" and drops the
+    // patch, and the node never reaches the file. A separate span makes the
+    // measurement inert.
+    const s = session('<div id="stage"><p id="a">a</p></div>');
+    const p = playerFor(s);
+
+    s.root.appendChild(s.doc.createElement('em'));
+    serializeTree(s.root, createSpan(), {});          // a tool, mid-batch
+    const events = s.flush(200);
+
+    assert.deepStrictEqual(events.map(e => e.type), ['dom.add']);
+    p.apply(events);
+    assert.strictEqual(shape(p.root), shape(s.root));
+  });
+
+  it('resets ids and the delivered picture in one call', () => {
+    // The two halves cannot be reset apart. A keyframe taken with a stale
+    // delivery model believes the player holds what it is about to stop
+    // describing, and the next patch for that node is suppressed — silent
+    // node loss, not stale bookkeeping.
+    const s = session('<div id="stage"><p id="a">a</p></div>');
+    assert.ok(s.span.registry.count > 0);
+    assert.strictEqual(s.span.delivery.holds(s.root), true);
+
+    s.span.reset();
+
+    assert.strictEqual(s.span.registry.count, 0);
+    assert.strictEqual(s.span.delivery.holds(s.root), false);
+    assert.strictEqual(serializeTree(s.root, s.span, {}).id, 1);
+  });
+});
+
 describe('nearestEmittedAncestor (M6)', () => {
   const MIXED =
     '<section id="stage"><script>alert(1)</script>' +
@@ -1094,14 +1166,14 @@ describe('nearestEmittedAncestor (M6)', () => {
     const win = new Window({ url: 'https://example.org/exp/' });
     win.document.body.innerHTML = MIXED;
     const root = win.document.body.firstElementChild;
-    const registry = createRegistry();
+    const span = createSpan();
 
-    const tree = serializeTree(root, registry, {});
+    const tree = serializeTree(root, span, {});
     const emitted = new Set(flattenIds(tree));
 
     for (const node of allNodes(root)) {
       const self = nearestEmittedAncestor(node, root, {}) === node;
-      assert.strictEqual(self, emitted.has(registry.peekId(node)),
+      assert.strictEqual(self, emitted.has(span.registry.peekId(node)),
         'disagreement at ' + (node.tagName || node.nodeName));
     }
   });

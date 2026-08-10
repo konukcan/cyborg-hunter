@@ -53,8 +53,9 @@
 //     CPU. A `dom.add` carries only the inserted subtree, and `before`
 //     resolution short-circuits the append run (see `noHeldFrom`), so the same
 //     batch costs O(total inserted) — the storm guard now costs precision
-//     (dropping the 2nd..Nth insertion's position) and buys nothing. The
-//     linear cost is test-pinned; a forward sibling walk per insertion is not
+//     (dropping the 2nd..Nth insertion's position) and buys nothing. Measured
+//     at one registry lookup per appended node; the test pins a linear BOUND
+//     rather than that figure. A forward sibling walk per insertion is not
 //     free, and an earlier draft of this module reintroduced v1's O(N²) here.
 //   - the characterData→parent-childList fold. It existed because text nodes
 //     had no parser-stable address, so text changes had to be re-expressed as
@@ -71,7 +72,6 @@ import {
   carriesChildren, emittedAttrs, attrPatchValue, ATTR_WITHHELD,
 } from './snapshot.js';
 import { isInRedactedSubtree, markRedacted, isRedactionTainted } from './redaction.js';
-import { deliveryFor } from './delivery.js';
 
 var ELEMENT_NODE = 1;
 
@@ -97,7 +97,7 @@ export var MUTATION_OBSERVER_INIT = {
  * Map one observer callback's records to `dom.*` events.
  *
  * @param {Array} records  the batch, in the order the observer reported it
- * @param {object} ctx     {root, registry, t, keepBait?, redactSelector?, taint?}
+ * @param {object} ctx     {root, span, t, keepBait?, redactSelector?, taint?}
  *                         `ctx` doubles as the serializer's options bag — same
  *                         keys, so exclusion and redaction cannot be answered
  *                         one way here and another way in the keyframe.
@@ -117,18 +117,19 @@ export function mapMutations(records, ctx) {
   if (!records || !records.length || !ctx) return out;
   // A root that resolved to null (a host that wiped its display container)
   // drops the batch rather than throwing inside the observer callback.
-  if (!ctx.root || !ctx.registry) return out;
+  if (!ctx.root || !ctx.span) return out;
 
   var state = {
     out: out,
     root: ctx.root,
-    registry: ctx.registry,
+    // The capture span (span.js): node ids, and what the file already
+    // contains. Every "does the player have this, and where" question is
+    // answered from the delivery model rather than inferred from the live DOM.
+    span: ctx.span,
+    registry: ctx.span.registry,
+    delivery: ctx.span.delivery,
     t: ctx.t,
     opts: ctx,
-    // What the file already contains (delivery.js). Every "does the player
-    // have this, and where" question is answered here rather than inferred
-    // from the live DOM.
-    delivery: deliveryFor(ctx.delivery),
     // Pre-scan results: removals and insertions not yet processed (a `before`
     // may only name a sibling whose position is already final), and
     // element → attribute → its first oldValue.
@@ -403,7 +404,7 @@ function mapAdded(node, into, state) {
 
   var parentId = state.registry.peekId(parent);
   if (parentId == null) return;
-  var tree = serializeTree(node, state.registry, state.opts);
+  var tree = serializeTree(node, state.span, state.opts);
   if (!tree) return;
 
   state.out.push({
@@ -630,7 +631,7 @@ function restoreFromPlaceholder(el, id, state) {
     // A child the file carries somewhere ELSE has to leave that place first,
     // or the reveal hands the player a second copy.
     pullForwardMoves(kid, state);
-    var tree = serializeTree(kid, state.registry, state.opts);
+    var tree = serializeTree(kid, state.span, state.opts);
     if (!tree) continue;
     // The player holds this placeholder EMPTY — transitions run before any
     // insertion is mapped — so appending in document order reproduces it.

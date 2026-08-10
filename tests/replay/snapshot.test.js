@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 
 import { serializeTree, isExcluded } from '../../src/replay/snapshot.js';
-import { createRegistry } from '../../src/replay/node-registry.js';
+import { createSpan } from '../../src/replay/span.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const canonical = JSON.parse(
@@ -29,7 +29,7 @@ function build(html, url = 'https://example.org/exp/') {
 }
 
 // Every node the serializer emitted, flattened — the counterpart to
-// registry.count, which counts every node it NUMBERED.
+// span.registry.count, which counts every node it NUMBERED.
 function flatten(node, out = []) {
   if (!node) return out;
   out.push(node);
@@ -44,9 +44,9 @@ describe('serializeTree — node shapes (spec §4)', () => {
     // ids included (1..5 pre-order).
     const { root } = build(
       '<div id="stage"><button id="go">Go</button><p id="msg">Hello</p></div>');
-    const reg = createRegistry();
+    const span = createSpan();
 
-    const tree = serializeTree(root, reg, {});
+    const tree = serializeTree(root, span, {});
 
     assert.deepStrictEqual(tree, canonical.segments[0].initial_dom);
   });
@@ -60,9 +60,9 @@ describe('serializeTree — node shapes (spec §4)', () => {
       '<div id="stage"><form>' +
       '<input id="answer" type="text"><input id="secret" type="password">' +
       '</form></div>');
-    const reg = createRegistry();
+    const span = createSpan();
 
-    const tree = serializeTree(root, reg, {});
+    const tree = serializeTree(root, span, {});
 
     assert.deepStrictEqual(tree, canonical.segments[2].initial_dom);
     assert.deepStrictEqual(tree.children[0].attrs, {});   // <form> has no attributes
@@ -71,9 +71,9 @@ describe('serializeTree — node shapes (spec §4)', () => {
 
   it('emits text and comment nodes with their own ids', () => {
     const { root } = build('<div>lead<!--note--><span>inner</span></div>');
-    const reg = createRegistry();
+    const span = createSpan();
 
-    const tree = serializeTree(root, reg, {});
+    const tree = serializeTree(root, span, {});
 
     assert.deepStrictEqual(tree.children[0], { id: 2, kind: 'text', text: 'lead' });
     assert.deepStrictEqual(tree.children[1], { id: 3, kind: 'comment', text: 'note' });
@@ -85,7 +85,7 @@ describe('serializeTree — node shapes (spec §4)', () => {
 
   it('lowercases tag names', () => {
     const { root } = build('<div><SPAN></SPAN></div>');
-    const tree = serializeTree(root, createRegistry(), {});
+    const tree = serializeTree(root, createSpan(), {});
     assert.strictEqual(tree.children[0].tag, 'span');
   });
 });
@@ -94,13 +94,13 @@ describe('serializeTree — registry integration', () => {
   it('numbers in pre-order and every emitted id matches the registry', () => {
     const { root } = build(
       '<div id="stage"><button id="go">Go</button><p id="msg">Hello</p></div>');
-    const reg = createRegistry();
+    const span = createSpan();
     const live = [root, root.childNodes[0], root.childNodes[0].childNodes[0],
                   root.childNodes[1], root.childNodes[1].childNodes[0]];
 
-    const tree = serializeTree(root, reg, {});
+    const tree = serializeTree(root, span, {});
 
-    assert.deepStrictEqual(live.map(n => reg.peekId(n)), [1, 2, 3, 4, 5]);
+    assert.deepStrictEqual(live.map(n => span.registry.peekId(n)), [1, 2, 3, 4, 5]);
     assert.deepStrictEqual(flatten(tree).map(n => n.id), [1, 2, 3, 4, 5]);
   });
 
@@ -108,15 +108,15 @@ describe('serializeTree — registry integration', () => {
     // resetSpan is the CALLER's call (keyframe cadence, Task 8). If
     // serializeTree reset the span itself, a mid-span dom.add subtree walk
     // would silently renumber the whole keyframe.
-    const reg = createRegistry();
+    const span = createSpan();
     const first = build('<div><span></span></div>');
     const second = build('<p></p>');
 
-    serializeTree(first.root, reg, {});
-    const added = serializeTree(second.root, reg, {});
+    serializeTree(first.root, span, {});
+    const added = serializeTree(second.root, span, {});
 
     assert.strictEqual(added.id, 3);
-    assert.strictEqual(reg.count, 3);
+    assert.strictEqual(span.registry.count, 3);
   });
 
   it('mints no ids during emission — every id comes from the numbering pass', () => {
@@ -129,37 +129,41 @@ describe('serializeTree — registry integration', () => {
     const { root } = build(
       '<section><script>x()</script><div data-record-exclude><b>hidden</b></div>' +
       '<iframe>fallback</iframe><!--c-->text<span>kept</span></section>');
-    const inner = createRegistry();
+    const inner = createSpan();
     let countAfterNumbering = null;
     const spy = {
-      assignTree(node) {
-        const id = inner.assignTree(node);
-        countAfterNumbering = inner.count;
-        return id;
+      delivery: inner.delivery,
+      reset: inner.reset,
+      registry: {
+        assignTree(node) {
+          const id = inner.registry.assignTree(node);
+          countAfterNumbering = inner.registry.count;
+          return id;
+        },
+        idFor: (n) => inner.registry.idFor(n),
+        peekId: (n) => inner.registry.peekId(n),
+        resetSpan: () => inner.registry.resetSpan(),
+        get count() { return inner.registry.count; },
       },
-      idFor: (n) => inner.idFor(n),
-      peekId: (n) => inner.peekId(n),
-      resetSpan: () => inner.resetSpan(),
-      get count() { return inner.count; },
     };
 
     const tree = serializeTree(root, spy, {});
 
     assert.ok(countAfterNumbering > 0);
-    assert.strictEqual(inner.count, countAfterNumbering);
+    assert.strictEqual(inner.registry.count, countAfterNumbering);
     // ...on a tree that really does exercise the three never-emitted classes
     // (script/noscript, exclusion-placeholder descendants, iframe children).
     assert.ok(flatten(tree).length < countAfterNumbering);
   });
 
   it('is the first allocation after resetSpan, so the keyframe root is id 1', () => {
-    const reg = createRegistry();
+    const span = createSpan();
     const a = build('<div><span></span></div>');
-    serializeTree(a.root, reg, {});
+    serializeTree(a.root, span, {});
 
-    reg.resetSpan();
+    span.reset();
     const b = build('<div><span></span></div>');
-    const tree = serializeTree(b.root, reg, {});
+    const tree = serializeTree(b.root, span, {});
 
     assert.strictEqual(tree.id, 1);
     assert.strictEqual(tree.children[0].id, 2);
@@ -170,9 +174,9 @@ describe('serializeTree — script/noscript', () => {
   it('skips script and noscript entirely — no node, no placeholder', () => {
     const { root } = build(
       '<div><script>alert(1)</script><noscript>no js</noscript><span>kept</span></div>');
-    const reg = createRegistry();
+    const span = createSpan();
 
-    const tree = serializeTree(root, reg, {});
+    const tree = serializeTree(root, span, {});
 
     assert.strictEqual(tree.children.length, 1);
     assert.strictEqual(tree.children[0].tag, 'span');
@@ -186,15 +190,15 @@ describe('serializeTree — script/noscript', () => {
     // assignTree stays unconditional, the SERIALIZER decides what ships.
     const { root } = build(
       '<div><script>alert(1)</script><noscript>no js</noscript><span>kept</span></div>');
-    const reg = createRegistry();
+    const span = createSpan();
 
-    const tree = serializeTree(root, reg, {});
+    const tree = serializeTree(root, span, {});
 
     // div, script, script-text, noscript, noscript-text, span, span-text = 7
-    assert.strictEqual(reg.count, 7);
+    assert.strictEqual(span.registry.count, 7);
     assert.strictEqual(flatten(tree).length, 3);          // div, span, "kept"
-    assert.ok(reg.count > flatten(tree).length);
-    assert.strictEqual(reg.peekId(root.childNodes[0]), 2); // the script IS numbered
+    assert.ok(span.registry.count > flatten(tree).length);
+    assert.strictEqual(span.registry.peekId(root.childNodes[0]), 2); // the script IS numbered
     assert.strictEqual(tree.children[0].id, 6);            // ...and the span follows it
   });
 });
@@ -205,9 +209,9 @@ describe('serializeTree — iframe', () => {
     // player can size and label the region (spec §12).
     const { root } = build(
       '<div><iframe src="survey.html" width="200" height="100">fallback</iframe></div>');
-    const reg = createRegistry();
+    const span = createSpan();
 
-    const tree = serializeTree(root, reg, {});
+    const tree = serializeTree(root, span, {});
     const frame = tree.children[0];
 
     assert.strictEqual(frame.kind, 'element');
@@ -220,11 +224,11 @@ describe('serializeTree — iframe', () => {
 
   it('numbers the fallback content it does not emit', () => {
     const { root } = build('<div><iframe>fallback</iframe></div>');
-    const reg = createRegistry();
+    const span = createSpan();
 
-    serializeTree(root, reg, {});
+    serializeTree(root, span, {});
 
-    assert.strictEqual(reg.count, 3);                     // div, iframe, "fallback"
+    assert.strictEqual(span.registry.count, 3);                     // div, iframe, "fallback"
   });
 
   it('drops srcdoc, which would inline a whole document (scripts included)', () => {
@@ -235,7 +239,7 @@ describe('serializeTree — iframe', () => {
       '<div><iframe src="survey.html" width="200" ' +
       'srcdoc="&lt;script&gt;alert(1)&lt;/script&gt;&lt;b&gt;hi&lt;/b&gt;"></iframe></div>');
 
-    const tree = serializeTree(root, createRegistry(), {});
+    const tree = serializeTree(root, createSpan(), {});
     const frame = tree.children[0];
 
     assert.ok(!('srcdoc' in frame.attrs));
@@ -255,9 +259,9 @@ describe('serializeTree — exclusion (spec §4 placeholders)', () => {
   for (const [name, inner] of cases) {
     it(`replaces a subtree marked by ${name} with a placeholder`, () => {
       const { root } = build('<section>' + inner + '<span>kept</span></section>');
-      const reg = createRegistry();
+      const span = createSpan();
 
-      const tree = serializeTree(root, reg, {});
+      const tree = serializeTree(root, span, {});
       const placeholder = tree.children[0];
 
       assert.deepStrictEqual(placeholder, { id: 2, kind: 'element', tag: 'div' });
@@ -274,11 +278,11 @@ describe('serializeTree — exclusion (spec §4 placeholders)', () => {
     // ancestor, Task 3/5).
     const { root } = build(
       '<section><div data-record-exclude><b>secret</b></div><span>kept</span></section>');
-    const reg = createRegistry();
+    const span = createSpan();
 
-    const tree = serializeTree(root, reg, {});
+    const tree = serializeTree(root, span, {});
 
-    assert.strictEqual(reg.count, 6);        // section, div, b, "secret", span, "kept"
+    assert.strictEqual(span.registry.count, 6);        // section, div, b, "secret", span, "kept"
     assert.strictEqual(tree.children[0].id, 2);
     assert.strictEqual(tree.children[1].id, 5);
   });
@@ -294,7 +298,7 @@ describe('serializeTree — exclusion (spec §4 placeholders)', () => {
       '<div data-record-exclude><b>consent</b></div>' +
       '</section>');
 
-    const tree = serializeTree(root, createRegistry(), { keepBait: true });
+    const tree = serializeTree(root, createSpan(), { keepBait: true });
     const json = JSON.stringify(tree);
 
     assert.ok(json.includes('bait'));
@@ -310,7 +314,7 @@ describe('serializeTree — exclusion (spec §4 placeholders)', () => {
     const { root } = build(
       '<div class="private"><div data-record-exclude><b>hidden</b></div><p>typed</p></div>');
 
-    const tree = serializeTree(root, createRegistry(), { redactSelector: '.private' });
+    const tree = serializeTree(root, createSpan(), { redactSelector: '.private' });
 
     assert.deepStrictEqual(tree.children[0], { id: 2, kind: 'element', tag: 'div' });
     assert.deepStrictEqual(tree.children[1].children, [{ id: 6, kind: 'text', text: '' }]);
@@ -327,7 +331,7 @@ describe('serializeTree — exclusion (spec §4 placeholders)', () => {
       '<input class="private" value="ZQX-SEL-9"><input type="password" value="ZQX-PW-9">' +
       '</div></section>');
 
-    const tree = serializeTree(root, createRegistry(), { redactSelector: '.private' });
+    const tree = serializeTree(root, createSpan(), { redactSelector: '.private' });
 
     assert.deepStrictEqual(tree.children[0], { id: 2, kind: 'element', tag: 'div' });
     assert.ok(!JSON.stringify(tree).includes('ZQX-SEL-9'));
@@ -352,7 +356,7 @@ describe('serializeTree — redaction (spec §8)', () => {
     const { root } = build(
       '<form><input id="pw" type="password" value="hunter2"></form>');
 
-    const tree = serializeTree(root, createRegistry(), {});
+    const tree = serializeTree(root, createSpan(), {});
     const input = tree.children[0];
 
     assert.deepStrictEqual(input.attrs, { id: 'pw', type: 'password' });
@@ -365,7 +369,7 @@ describe('serializeTree — redaction (spec §8)', () => {
     const { root } = build(
       '<div class="private"><p><b>typed answer</b></p><input value="typed answer"></div>');
 
-    const tree = serializeTree(root, createRegistry(), { redactSelector: '.private' });
+    const tree = serializeTree(root, createSpan(), { redactSelector: '.private' });
 
     assert.strictEqual(tree.tag, 'div');
     assert.strictEqual(tree.children.length, 2);
@@ -379,7 +383,7 @@ describe('serializeTree — redaction (spec §8)', () => {
     const { root } = build(
       '<section><div class="private"><span>inner secret</span></div><span>public</span></section>');
 
-    const tree = serializeTree(root, createRegistry(), { redactSelector: '.private' });
+    const tree = serializeTree(root, createSpan(), { redactSelector: '.private' });
     const json = JSON.stringify(tree);
 
     assert.ok(!json.includes('inner secret'));
@@ -397,7 +401,7 @@ describe('serializeTree — redaction (spec §8)', () => {
       `<input id="note" value="${SENTINEL}"><video src="clip.mp4"></video></div>` +
       '<p>visible</p></form>');
 
-    const tree = serializeTree(root, createRegistry(), { redactSelector: '.private' });
+    const tree = serializeTree(root, createSpan(), { redactSelector: '.private' });
 
     assert.ok(!JSON.stringify(tree).includes(SENTINEL));
     assert.ok(JSON.stringify(tree).includes('visible'));
@@ -428,7 +432,7 @@ describe('serializeTree — redaction (spec §8)', () => {
       `placeholder="${S}-ph">` +
       '</div>');
 
-    const [img, pw] = serializeTree(root, createRegistry(),
+    const [img, pw] = serializeTree(root, createSpan(),
       { redactSelector: '.private' }).children;
 
     assert.strictEqual(img.attrs.src, 'https://example.org/exp/diagram.png');
@@ -447,7 +451,7 @@ describe('serializeTree — redaction (spec §8)', () => {
 describe('serializeTree — annotations (spec §4)', () => {
   it('annotates canvas elements with canvas_size', () => {
     const { root } = build('<div><canvas width="120" height="80"></canvas></div>');
-    const canvasNode = serializeTree(root, createRegistry(), {}).children[0];
+    const canvasNode = serializeTree(root, createSpan(), {}).children[0];
     assert.deepStrictEqual(canvasNode.canvas_size, { w: 120, h: 80 });
   });
 
@@ -457,20 +461,20 @@ describe('serializeTree — annotations (spec §4)', () => {
     // the annotation. Only a duck-typed node with neither property nor
     // attribute falls through to no annotation.
     const { root } = build('<div><canvas></canvas></div>');
-    const canvasNode = serializeTree(root, createRegistry(), {}).children[0];
+    const canvasNode = serializeTree(root, createSpan(), {}).children[0];
     assert.deepStrictEqual(canvasNode.canvas_size, { w: 300, h: 150 });
   });
 
   it('annotates media elements with a resolved media_src', () => {
     const { root } = build('<div><video src="clip.mp4"></video><audio src="tone.ogg"></audio></div>');
-    const [video, audio] = serializeTree(root, createRegistry(), {}).children;
+    const [video, audio] = serializeTree(root, createSpan(), {}).children;
     assert.strictEqual(video.media_src, 'https://example.org/exp/clip.mp4');
     assert.strictEqual(audio.media_src, 'https://example.org/exp/tone.ogg');
   });
 
   it('omits the annotations on elements that carry no such state', () => {
     const { root } = build('<div><span></span><video></video></div>');
-    const [span, video] = serializeTree(root, createRegistry(), {}).children;
+    const [span, video] = serializeTree(root, createSpan(), {}).children;
     assert.ok(!('canvas_size' in span));
     assert.ok(!('media_src' in span));
     assert.ok(!('media_src' in video));    // no source: nothing to point at
@@ -478,7 +482,7 @@ describe('serializeTree — annotations (spec §4)', () => {
 
   it('withholds media_src inside a redacted subtree', () => {
     const { root } = build('<div class="private"><video src="clip.mp4"></video></div>');
-    const video = serializeTree(root, createRegistry(),
+    const video = serializeTree(root, createSpan(),
       { redactSelector: '.private' }).children[0];
     assert.ok(!('media_src' in video));
   });
@@ -495,7 +499,7 @@ describe('serializeTree — shadow hosts', () => {
     host.attachShadow({ mode: 'open' });
     host.shadowRoot.innerHTML = '<i>ZQX-SHADOW-7</i>';
 
-    const tree = serializeTree(root, createRegistry(), {});
+    const tree = serializeTree(root, createSpan(), {});
     const hostNode = tree.children[0];
 
     assert.strictEqual(hostNode.attrs['data-ch-shadow'], '');
@@ -510,18 +514,18 @@ describe('serializeTree — shadow hosts', () => {
     const { root, doc } = build('<div><span id="host"><b>light child</b></span></div>');
     doc.getElementById('host').attachShadow({ mode: 'open' });
     doc.getElementById('host').shadowRoot.innerHTML = '<i>hidden</i>';
-    const reg = createRegistry();
+    const span = createSpan();
 
-    serializeTree(root, reg, {});
+    serializeTree(root, span, {});
 
-    assert.strictEqual(reg.count, 4);          // div, span, b, "light child"
+    assert.strictEqual(span.registry.count, 4);          // div, span, b, "light child"
   });
 });
 
 describe('serializeTree — attribute handling', () => {
   it('drops event-handler attributes (defense-in-depth beyond the player sandbox)', () => {
     const { root } = build('<div><img src="x.png" onerror="alert(1)" onload="evil()"></div>');
-    const img = serializeTree(root, createRegistry(), {}).children[0];
+    const img = serializeTree(root, createSpan(), {}).children[0];
     assert.ok(!('onerror' in img.attrs));
     assert.ok(!('onload' in img.attrs));
     assert.ok('src' in img.attrs);
@@ -531,7 +535,7 @@ describe('serializeTree — attribute handling', () => {
     // Reconstruction happens in a document with a different base URL, where a
     // relative stimulus path resolves to nothing (v1 behaviour, kept).
     const { root } = build('<div><img src="stim/card.png" alt="card"></div>');
-    const img = serializeTree(root, createRegistry(), {}).children[0];
+    const img = serializeTree(root, createSpan(), {}).children[0];
     assert.deepStrictEqual(img.attrs,
       { src: 'https://example.org/exp/stim/card.png', alt: 'card' });
   });

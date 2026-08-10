@@ -25,7 +25,8 @@ import { Window } from 'happy-dom';
 
 import { mapMutations, MUTATION_OBSERVER_INIT } from '../../src/replay/mutations.js';
 import { serializeTree } from '../../src/replay/snapshot.js';
-import { createRegistry } from '../../src/replay/node-registry.js';
+import { createSpan } from '../../src/replay/span.js';
+import { createDelivery } from '../../src/replay/delivery.js';
 import { createPlayer, asPlayerTree } from './support/dom-player.js';
 
 // mulberry32: 32-bit state, uniform enough for op selection and short enough
@@ -182,14 +183,24 @@ const SEEDS = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 115, 121, 144, 202, 233,
 const BATCHES = 8;
 const OPS_PER_BATCH = 6;
 
+// A span for a serialization whose output is NOT going into the file. It
+// keeps the recording's REGISTRY, because the ids are half of what is being
+// compared and a second walk of the same nodes only re-reads what the
+// recording already assigned, and takes its OWN delivery, because that model
+// is the thing under test: writing into it between batches would re-sync it to
+// the live DOM and repair exactly the drift this suite exists to catch.
+function oracleSpan(span) {
+  return { registry: span.registry, delivery: createDelivery(), reset() {} };
+}
+
 function runSession(mixName, seed) {
   const rng = mulberry32(seed);
   const win = new Window({ url: 'https://example.org/exp/' });
   const doc = win.document;
   doc.body.innerHTML = SEED_DOM;
   const root = doc.body.firstElementChild;
-  const registry = createRegistry();
-  const keyframe = serializeTree(root, registry, {});
+  const span = createSpan();
+  const keyframe = serializeTree(root, span, {});
   const player = createPlayer(keyframe);
   const observer = new win.MutationObserver(() => {});
   observer.observe(root, MUTATION_OBSERVER_INIT);
@@ -204,7 +215,7 @@ function runSession(mixName, seed) {
       const line = OPS[op](ctx, rng);
       if (line) log.push('  batch ' + batch + ': ' + line);
     }
-    const events = mapMutations(observer.takeRecords(), { root, registry, t: batch });
+    const events = mapMutations(observer.takeRecords(), { root, span, t: batch });
     const where = 'mix "' + mixName + '" seed ' + seed + ' after batch ' + batch +
       '\n' + log.join('\n') + '\nevents: ' + JSON.stringify(events);
 
@@ -214,7 +225,12 @@ function runSession(mixName, seed) {
       assert.fail('player rejected a patch: ' + err.message + '\n' + where);
     }
     // The oracle: what a fresh keyframe of the captured DOM says right now.
-    const expected = asPlayerTree(serializeTree(root, registry, {}));
+    // On its OWN span, because a serialization is a write: sharing the
+    // recording's span would re-sync the delivery model to the live DOM
+    // between batches and quietly repair the drift this suite exists to
+    // catch. Ids still line up, since the recording's span assigned them and
+    // a second walk of the same nodes only re-reads what it already knows.
+    const expected = asPlayerTree(serializeTree(root, oracleSpan(span), {}));
     assert.deepStrictEqual(player.tree(), expected, 'player diverged, ' + where);
   }
 }

@@ -28,7 +28,6 @@
 import {
   isRedacted, isInRedactedSubtree, markRedacted, isRedactionTainted,
 } from './redaction.js';
-import { deliveryFor } from './delivery.js';
 
 var ELEMENT_NODE = 1;
 var TEXT_NODE = 3;
@@ -292,14 +291,15 @@ export function nearestEmittedAncestor(node, root, opts, detachedParent) {
   return emitted;
 }
 
-function emitNode(node, registry, opts, inheritedRedaction, parent) {
+function emitNode(node, span, opts, inheritedRedaction, parent) {
   if (!isEmittableNode(node)) return null;
   var type = node.nodeType;
-  // Everything this function emits enters the file, and delivery.js is where
-  // the file's contents are tracked (mutations.js reads it to decide what the
-  // player already holds). Recording it HERE means the keyframe walk and a
-  // mid-span dom.add subtree are accounted for by the same line.
-  deliveryFor(opts.delivery).deliver(node, parent || null);
+  // Everything this function emits enters the file, and the span's delivery
+  // model is where the file's contents are tracked (mutations.js reads it to
+  // decide what the player already holds). Recording it HERE means the
+  // keyframe walk and a mid-span dom.add subtree are accounted for by the
+  // same line.
+  span.delivery.deliver(node, parent || null);
   // Redaction travels WITH the node, not with its current position: a node
   // this recording once stripped stays stripped even after it is moved out of
   // the redacted subtree (redaction.js on the taint set). Every node emitted
@@ -313,13 +313,13 @@ function emitNode(node, registry, opts, inheritedRedaction, parent) {
     // spec §4 types it as a required string.
     if (inheritedRedaction) markRedacted(node, opts.taint);
     return {
-      id: registry.idFor(node),
+      id: span.registry.idFor(node),
       kind: type === TEXT_NODE ? 'text' : 'comment',
       text: inheritedRedaction ? '' : String(node.textContent || ''),
     };
   }
   var tagName = node.tagName || '';
-  var id = registry.idFor(node);
+  var id = span.registry.idFor(node);
   if (isExcluded(node, opts)) return { id: id, kind: 'element', tag: tagName.toLowerCase() };
 
   var redacted = inheritedRedaction || isRedacted(node, opts.redactSelector);
@@ -346,7 +346,7 @@ function emitNode(node, registry, opts, inheritedRedaction, parent) {
 
   var kids = node.childNodes || [];
   for (var i = 0; i < kids.length; i++) {
-    var child = emitNode(kids[i], registry, opts, redacted, node);
+    var child = emitNode(kids[i], span, opts, redacted, node);
     if (child) out.children.push(child);
   }
   return out;
@@ -355,10 +355,11 @@ function emitNode(node, registry, opts, inheritedRedaction, parent) {
 /**
  * Serialize a subtree into the DomNode tree of a keyframe (spec §4).
  *
- * @param {object} root      the observed root (or, mid-span, an inserted subtree)
- * @param {object} registry  a node-registry (node-registry.js) — supplies the ids
- * @param {object} [opts]    {keepBait, redactSelector}
- * @returns {object|null}    the root DomNode; null if the root itself is unserializable
+ * @param {object} root   the observed root (or, mid-span, an inserted subtree)
+ * @param {object} span   a capture span (span.js): supplies the ids and
+ *                        receives the record of what this walk put in the file
+ * @param {object} [opts] {keepBait, redactSelector, taint}
+ * @returns {object|null} the root DomNode; null if the root itself is unserializable
  *
  * Registry contract: the whole tree is numbered FIRST, in one unconditional
  * pre-order pass, and only then walked for emission. That ordering is what
@@ -366,18 +367,20 @@ function emitNode(node, registry, opts, inheritedRedaction, parent) {
  * exclusion placeholder or skipped as a script still holds its number, so
  * removing an exclusion attribute later does not renumber its siblings.
  *
- * `resetSpan` is the CALLER's call (keyframe cadence, Task 8): this function
- * only ever adds to the current span. Calling it at a keyframe means calling
- * `registry.resetSpan()` first, so that this walk is the span's first
- * allocation and the tree numbers 1..N (the precondition node-registry.js
- * documents).
+ * `span.reset()` is the CALLER's call (keyframe cadence, Task 8): this
+ * function only ever adds to the span it is given. Calling it at a keyframe
+ * means resetting first, so that this walk is the span's first allocation and
+ * the tree numbers 1..N (the precondition node-registry.js documents). A walk
+ * whose output is NOT going into the file — sizing a snapshot, inspecting a
+ * tree — takes a fresh span of its own, which is what keeps it from telling a
+ * live recording that the player holds what it has never been sent.
  */
-export function serializeTree(root, registry, opts) {
+export function serializeTree(root, span, opts) {
   opts = opts || {};
   if (!root) return null;
-  registry.assignTree(root);
+  span.registry.assignTree(root);
   // Ancestors above the root count: a redaction selector matching a wrapper
   // outside the observed root still redacts everything inside it.
-  return emitNode(root, registry, opts,
+  return emitNode(root, span, opts,
     isInRedactedSubtree(root, opts.redactSelector), root.parentNode || null);
 }

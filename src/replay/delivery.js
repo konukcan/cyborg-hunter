@@ -11,8 +11,11 @@
 // ancestors — and a differential fuzz kept finding compositions the reasoning
 // missed, because the live DOM is not the question. It is the DESTINATION.
 //
-// Lifetime is the keyframe span, the same as node ids: a keyframe re-serializes
-// the whole tree, so `reset()` belongs beside `registry.resetSpan()`.
+// Lifetime is the keyframe span, the same as node ids — which is why the two
+// are handed out together (span.js) rather than left to be reset in step by
+// convention. Nothing here is shared or ambient: a serialization that is not
+// going into the file gets its own span, so it cannot tell a live recording
+// that the player already holds what it has never been sent.
 //
 // Identity-keyed WeakMaps: nothing here holds a node alive, and two recorders
 // on one page never see each other's nodes.
@@ -76,13 +79,4 @@ export function createDelivery() {
 
     reset: function () { parents = new WeakMap(); children = new WeakMap(); },
   };
-}
-
-// On by default, so a capture path that forgets to thread one still tracks
-// delivery rather than silently guessing. Callers that need their own scope —
-// a second recorder, or a serialization taken purely to inspect it — pass one.
-var defaultDelivery = createDelivery();
-
-export function deliveryFor(candidate) {
-  return candidate && typeof candidate.holds === 'function' ? candidate : defaultDelivery;
 }
