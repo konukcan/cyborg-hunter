@@ -364,11 +364,39 @@ export function attachTraceCapture(rec, env) {
     }
   }), true);
 
+  // ── Scrolled-element tracker (spec §3 initial_state.element_scroll) ──
+  // Which inner scrollers a keyframe has to seed is not answerable from the
+  // DOM: `overflow` says an element COULD scroll, not that it has, and the
+  // participant's offsets are the state a fresh snapshot cannot carry. The one
+  // place that knows is the scroll listener below, so it keeps the set.
+  //
+  // Lifetime is the RECORDING, not the trial: an element scrolled during trial
+  // 2 still needs seeding at the keyframe of trial 7, so the Set lives in this
+  // attachment (created once, at startSession) rather than on a trial.
+  //
+  // A strong Set, because the seed has to ENUMERATE it — which makes it a
+  // retention leak by construction, one detached subtree per scrolled element
+  // per trial over a long session. Pruning on read and once per trial bounds
+  // it without a reaper: `isConnected === false` is the browser's own answer,
+  // and reading it explicitly (rather than falsy) keeps duck-typed test nodes,
+  // which claim nothing, in the Set.
+  //
+  // Deliberately dumb: every element that scrolls goes in, redacted or
+  // excluded or outside the observed root. What may be SEEDED is one question
+  // with one answer, and it lives in initial-state.js.
+  var scrolledElements = new Set();
+  function pruneScrolledElements() {
+    scrolledElements.forEach(function (el) {
+      if (el && el.isConnected === false) scrolledElements.delete(el);
+    });
+  }
+
   // ── Scroll (RAF-coalesced, per target, original timestamps) ──
   rec.addListener(win, 'scroll', guard(rec, 'scroll', function (e) {
     var target = e && e.target && e.target.tagName ? e.target : null;
     if (target) {
       pendingElementScrolls.set(target, { t: now() });
+      scrolledElements.add(target);
     } else {
       pendingWindowScroll = { t: now() };
     }
@@ -457,6 +485,7 @@ export function attachTraceCapture(rec, env) {
   // begins mid-scroll (the user's fixture, trial 2) replays from a wrong
   // camera until its first in-trial scroll/resize event.
   rec.onTrialStart(function (trial) {
+    pruneScrolledElements();
     var dims = clientDims();
     trial.viewState = {
       x: Math.round(win.scrollX || 0), y: Math.round(win.scrollY || 0),
@@ -465,4 +494,16 @@ export function attachTraceCapture(rec, env) {
       dpr: win.devicePixelRatio || 1
     };
   });
+
+  // The capture handle. v1 callers ignore the return value (index.js calls
+  // this for its side effects), so the addition is invisible to them; the
+  // keyframe path (Tasks 6/8) reads the scrolled-element set through it.
+  return {
+    // The LIVE Set, pruned of detached elements first. Read-only by contract:
+    // buildInitialState iterates it and the tracker owns its contents.
+    getScrolledElements: function () {
+      pruneScrolledElements();
+      return scrolledElements;
+    },
+  };
 }
