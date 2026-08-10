@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 
 import { validateStrict } from './schema-v2/validator.js';
+import { createPlayer } from './support/dom-player.js';
 import { mapMutations, MUTATION_OBSERVER_INIT } from '../../src/replay/mutations.js';
 import { serializeTree, nearestEmittedAncestor } from '../../src/replay/snapshot.js';
 import { createRegistry } from '../../src/replay/node-registry.js';
@@ -83,62 +84,8 @@ function shape(node) {
     kids + '</' + node.tagName.toLowerCase() + '>';
 }
 
-/**
- * A spec §5.1 player, deliberately UNFORGIVING. The fork's `applyEvent`
- * (engine.ts) falls back to appendChild when a `before` id is unmapped and
- * swallows DOMExceptions, which turns a dangling reference into silent node
- * loss or a quiet reorder. Here every reference to an id the player was never
- * sent throws, so a patch stream that only survives by the player's charity
- * fails the test rather than passing it.
- */
-function playerFor(session) {
-  const win = new Window({ url: 'https://example.org/exp/' });
-  const doc = win.document;
-  const idMap = new Map();
-
-  function instantiate(domNode) {
-    let el;
-    if (domNode.kind === 'text') el = doc.createTextNode(domNode.text);
-    else if (domNode.kind === 'comment') el = doc.createComment(domNode.text);
-    else {
-      el = doc.createElement(domNode.tag);
-      const attrs = domNode.attrs || {};
-      for (const name of Object.keys(attrs)) el.setAttribute(name, attrs[name]);
-      for (const child of domNode.children || []) el.appendChild(instantiate(child));
-    }
-    idMap.set(domNode.id, el);
-    return el;
-  }
-
-  function held(id, what) {
-    const el = idMap.get(id);
-    if (!el) throw new Error('patch names id ' + id + ' the player never received (' + what + ')');
-    return el;
-  }
-
-  const root = instantiate(session.keyframe);
-  return {
-    root,
-    node: (id) => held(id, 'lookup'),
-    apply(events) {
-      for (const e of events) {
-        if (e.type === 'dom.add') {
-          const parent = held(e.parent, 'dom.add parent');
-          const ref = e.before === null ? null : held(e.before, 'dom.add before');
-          parent.insertBefore(instantiate(e.node), ref);
-        } else if (e.type === 'dom.remove') {
-          held(e.node, 'dom.remove').remove();
-        } else if (e.type === 'dom.attr') {
-          const el = held(e.node, 'dom.attr');
-          if (e.value === null) el.removeAttribute(e.name);
-          else el.setAttribute(e.name, e.value);
-        } else if (e.type === 'dom.text') {
-          held(e.node, 'dom.text').data = e.text;
-        }
-      }
-    },
-  };
-}
+// The fork-faithful, dangling-intolerant player (support/dom-player.js).
+const playerFor = (session) => createPlayer(session.keyframe);
 
 describe('mapMutations — canonical shapes (spec §5.1)', () => {
   it('reproduces the canonical-core mid-span dom.attr / dom.add / dom.remove', () => {
@@ -800,6 +747,200 @@ describe('mapMutations — batch coherence (C1 to C3)', () => {
     p.apply(s.flush(71));
 
     assert.strictEqual(shape(p.node(pId)), shape(P));
+  });
+});
+
+describe('mapMutations — batch composition (N1 to N4)', () => {
+  it('N1: removes children drained into a detached fragment', () => {
+    // "Empty the list" as every list-reorder library writes it. The nodes are
+    // gone from the player's point of view, but their flush-time chain leads
+    // into a fragment, so asking where they are NOW answers nothing.
+    const s = session(
+      '<div id="stage"><ul id="list"><li id="a">a</li><li id="b">b</li></ul></div>');
+    const p = playerFor(s);
+    const list = s.doc.getElementById('list');
+    const listId = s.registry.peekId(list);
+    const gone = ['a', 'b'].map(x => s.registry.peekId(s.doc.getElementById(x)));
+
+    const frag = s.doc.createDocumentFragment();
+    while (list.firstChild) frag.appendChild(list.firstChild);
+    const events = s.flush(100);
+
+    assert.deepStrictEqual(events, gone.map(id => ({ type: 'dom.remove', t: 100, node: id })));
+    p.apply(events);
+    assert.strictEqual(p.node(listId).childNodes.length, 0);
+  });
+
+  it('N2: never names a sibling the player purged with its removed ancestor', () => {
+    // p1 leaves the detached P without a record of its own — the observer
+    // stops reporting inside a subtree that has left the tree — so nothing in
+    // `removedNodes` says the player no longer holds it.
+    const s = session(
+      '<div id="stage"><div id="P"><p id="p1">1</p></div><p id="z">z</p></div>');
+    const p = playerFor(s);
+    // References taken before the removal: happy-dom's getElementById cache
+    // loses siblings once a subtree is detached.
+    const P = s.doc.getElementById('P');
+    const p1 = s.doc.getElementById('p1');
+    const z = s.doc.getElementById('z');
+    const em = s.doc.createElement('em');
+    em.appendChild(s.doc.createTextNode('N'));
+
+    P.remove();
+    s.root.insertBefore(em, z);
+    s.root.insertBefore(p1, z);
+    p.apply(s.flush(101));
+
+    assert.strictEqual(shape(p.root), shape(s.root));
+  });
+
+  it('N3: a nested reveal in one batch delivers the inner subtree once', () => {
+    const s = session(
+      '<div id="stage"><div id="P" data-record-exclude>' +
+      '<p id="p1" data-record-exclude><b>x</b></p><i id="p2">y</i></div></div>');
+    const p = playerFor(s);
+    const P = s.doc.getElementById('P');
+    const pId = s.registry.peekId(P);
+
+    P.removeAttribute('data-record-exclude');
+    s.doc.getElementById('p1').removeAttribute('data-record-exclude');
+    p.apply(s.flush(102));
+
+    assert.strictEqual(shape(p.node(pId)), shape(P));
+  });
+
+  it('N3: a reveal outside and an exclusion inside, same batch', () => {
+    // The mirror: P's reveal serializes p1 as a placeholder, so p1's own
+    // collapse would address children the player was never sent.
+    const s = session(
+      '<div id="stage"><div id="P" data-record-exclude>' +
+      '<p id="p1"><b>x</b></p></div></div>');
+    const p = playerFor(s);
+    const P = s.doc.getElementById('P');
+    const pId = s.registry.peekId(P);
+
+    s.doc.getElementById('p1').setAttribute('data-record-exclude', '');
+    P.removeAttribute('data-record-exclude');
+    p.apply(s.flush(103));
+
+    assert.strictEqual(p.node(pId).childNodes.length, 1);
+    assert.strictEqual(p.node(pId).firstChild.childNodes.length, 0);
+  });
+
+  it('N5: takes the old copy away before a new container re-delivers it', () => {
+    // Wrapping existing content in a new element. The container's patch
+    // carries the moved node, so the copy the player still holds elsewhere
+    // has to go first — and the move's own removal record arrives after the
+    // container's insertion, not before.
+    const s = session('<div id="stage"><p id="keep">k</p><span id="move">m</span></div>');
+    const p = playerFor(s);
+    const wrap = s.doc.createElement('div');
+
+    s.root.appendChild(wrap);
+    wrap.appendChild(s.doc.getElementById('move'));
+    p.apply(s.flush(110));
+
+    assert.strictEqual(shape(p.root), shape(s.root));
+  });
+
+  it('N6: emits no removal for an insertion it never emitted', () => {
+    const s = session(
+      '<div id="stage"><div id="box"><p id="p1">one</p></div><p id="z">z</p></div>');
+    const p = playerFor(s);
+    const box = s.doc.getElementById('box');
+    const p1 = s.doc.getElementById('p1');
+
+    box.setAttribute('data-record-exclude', 'on');   // the collapse takes p1 away
+    s.root.appendChild(p1);                          // p1 moves out…
+    p1.remove();                                     // …and is gone by flush
+    p.apply(s.flush(111));
+
+    assert.strictEqual(p.node(s.registry.peekId(box)).childNodes.length, 0);
+  });
+
+  it('N7: a collapse clears an attribute the same batch removed', () => {
+    // The player holds `data-k` from the keyframe. Clearing only the
+    // flush-time attributes would leave it on the placeholder.
+    const s = session(
+      '<div id="stage"><div id="box" class="c" data-k="v"><b>x</b></div></div>');
+    const p = playerFor(s);
+    const box = s.doc.getElementById('box');
+    const boxId = s.registry.peekId(box);
+
+    box.removeAttribute('data-k');
+    box.setAttribute('data-record-exclude', 'on');
+    p.apply(s.flush(112));
+
+    assert.strictEqual(p.node(boxId).attributes.length, 0);
+    assert.strictEqual(p.node(boxId).childNodes.length, 0);
+  });
+
+  it('N8: states an insertion where the node ends up, not where it first landed', () => {
+    const s = session('<div id="stage"><div id="dst"><p id="anchor">a</p></div></div>');
+    const p = playerFor(s);
+    const dst = s.doc.getElementById('dst');
+    const dstId = s.registry.peekId(dst);
+    const anchor = s.doc.getElementById('anchor');
+    const moved = s.doc.createElement('em');
+    const between = s.doc.createElement('i');
+
+    s.root.appendChild(moved);              // first record puts it in the stage…
+    dst.insertBefore(between, anchor);
+    dst.insertBefore(moved, anchor);        // …and this one is where it stays
+    p.apply(s.flush(113));
+
+    assert.strictEqual(shape(p.node(dstId)), shape(dst));
+  });
+
+  it('N9: says nothing more about a rearrangement inside a fresh payload', () => {
+    const s = session('<div id="stage"></div>');
+    const p = playerFor(s);
+    const box = s.doc.createElement('div');
+    const first = s.doc.createElement('b');
+    const second = s.doc.createElement('i');
+    first.appendChild(s.doc.createTextNode('1'));
+    second.appendChild(s.doc.createTextNode('2'));
+
+    box.appendChild(first);
+    s.root.appendChild(box);       // the payload is written from the FINAL DOM…
+    box.appendChild(second);
+    box.appendChild(first);        // …including this reorder
+    const events = s.flush(114);
+
+    assert.strictEqual(events.length, 1);
+    p.apply(events);
+    assert.strictEqual(shape(p.root), shape(s.root));
+  });
+
+  it('N9: says nothing more about children a reveal re-emitted', () => {
+    // The reveal writes the element's children from the final DOM, so the
+    // records describing how they got there are already told.
+    const s = session(
+      '<div id="stage"><div id="box" data-record-exclude="on"><b id="kid">k</b></div></div>');
+    const p = playerFor(s);
+    const box = s.doc.getElementById('box');
+    const boxId = s.registry.peekId(box);
+
+    box.removeAttribute('data-record-exclude');
+    box.appendChild(s.doc.getElementById('kid'));   // reorder, then grow
+    box.appendChild(s.doc.createElement('em'));
+    p.apply(s.flush(115));
+
+    assert.strictEqual(shape(p.node(boxId)), shape(box));
+  });
+
+  it('N4: keeps a node re-delivered inside a re-emitted ancestor', () => {
+    const s = session(
+      '<div id="stage"><div id="src"><div id="Q">' +
+      '<span id="a">a</span><span id="b">b</span></div></div><div id="dst"></div></div>');
+    const p = playerFor(s);
+    const Q = s.doc.getElementById('Q');
+
+    s.doc.getElementById('dst').appendChild(Q);      // move Q…
+    Q.appendChild(s.doc.getElementById('a'));        // …then reorder inside it
+    p.apply(s.flush(104));
+
+    assert.strictEqual(shape(p.root), shape(s.root));
   });
 });
 

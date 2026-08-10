@@ -28,6 +28,7 @@
 import {
   isRedacted, isInRedactedSubtree, markRedacted, isRedactionTainted,
 } from './redaction.js';
+import { deliveryFor } from './delivery.js';
 
 var ELEMENT_NODE = 1;
 var TEXT_NODE = 3;
@@ -291,9 +292,14 @@ export function nearestEmittedAncestor(node, root, opts, detachedParent) {
   return emitted;
 }
 
-function emitNode(node, registry, opts, inheritedRedaction) {
+function emitNode(node, registry, opts, inheritedRedaction, parent) {
   if (!isEmittableNode(node)) return null;
   var type = node.nodeType;
+  // Everything this function emits enters the file, and delivery.js is where
+  // the file's contents are tracked (mutations.js reads it to decide what the
+  // player already holds). Recording it HERE means the keyframe walk and a
+  // mid-span dom.add subtree are accounted for by the same line.
+  deliveryFor(opts.delivery).deliver(node, parent || null);
   // Redaction travels WITH the node, not with its current position: a node
   // this recording once stripped stays stripped even after it is moved out of
   // the redacted subtree (redaction.js on the taint set). Every node emitted
@@ -340,7 +346,7 @@ function emitNode(node, registry, opts, inheritedRedaction) {
 
   var kids = node.childNodes || [];
   for (var i = 0; i < kids.length; i++) {
-    var child = emitNode(kids[i], registry, opts, redacted);
+    var child = emitNode(kids[i], registry, opts, redacted, node);
     if (child) out.children.push(child);
   }
   return out;
@@ -372,5 +378,6 @@ export function serializeTree(root, registry, opts) {
   registry.assignTree(root);
   // Ancestors above the root count: a redaction selector matching a wrapper
   // outside the observed root still redacts everything inside it.
-  return emitNode(root, registry, opts, isInRedactedSubtree(root, opts.redactSelector));
+  return emitNode(root, registry, opts,
+    isInRedactedSubtree(root, opts.redactSelector), root.parentNode || null);
 }
