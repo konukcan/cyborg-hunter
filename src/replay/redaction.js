@@ -1,0 +1,78 @@
+// src/replay/redaction.js
+// Redaction predicates, shared by every capture path.
+//
+// Spec §8 makes redaction a property of the FILE, not of one capture channel:
+// a redacted subtree's content must not appear in `initial_dom`, in
+// `initial_state.form`, in `dom.text`/`dom.attr`, in key identities, in
+// clipboard payloads, or in anchor identity. A single predicate is what makes
+// that claim checkable — v1 had two implementations (capture-trace's
+// `inRedactedSubtree`, capture-dom's `isInRedactedSubtree`) with different
+// signatures and quietly different password detection, so "is this node
+// redacted" could be answered two ways in one recording.
+//
+// The unified definition takes the SELECTOR (the actual configuration datum),
+// not an options bag, so both capture modules call it the same way:
+//   capture-trace: isInRedactedSubtree(el, config.redactSelector)
+//   snapshot/dom:  isInRedactedSubtree(node, opts.redactSelector)
+//
+// Adoption status: the snapshot serializer (`snapshot.js`) uses this module.
+// The v1 duplicates in `capture-trace.js` and `capture-dom.js` stay live until
+// Tasks 3 and 5 rewrite their call sites onto it — until then the three
+// implementations must stay semantically identical, which is why the union of
+// their password checks (property OR attribute) lives here.
+
+var ELEMENT_NODE = 1;
+
+function hasTypePasswordAttr(el) {
+  var attrs = el.attributes || [];
+  for (var i = 0; i < attrs.length; i++) {
+    if (attrs[i].name === 'type') return attrs[i].value === 'password';
+  }
+  return false;
+}
+
+/**
+ * The spec §8 floor: `<input type="password">` values are never recorded, in
+ * any channel, and no configuration can turn that off.
+ *
+ * Property OR attribute: the `type` IDL property is the browser's answer, but
+ * it is absent on duck-typed fixture nodes and reads "text" for an unknown
+ * type — so a field the page author wrote as `type="password"` must be caught
+ * by the attribute too. Detection stays declarative (spec §8): a name or
+ * placeholder that merely looks password-ish is not a password field.
+ */
+export function isPasswordField(el) {
+  if (!el || el.tagName !== 'INPUT') return false;
+  return el.type === 'password' || hasTypePasswordAttr(el);
+}
+
+/**
+ * True when this element is itself redacted: a password field (always) or a
+ * match for the researcher-configured redaction selector.
+ *
+ * A selector that throws (invalid syntax) redacts nothing rather than
+ * everything — the alternative is a typo silently emptying a whole recording.
+ */
+export function isRedacted(el, selector) {
+  if (isPasswordField(el)) return true;
+  if (!selector || !el || typeof el.matches !== 'function') return false;
+  try { return el.matches(selector); } catch (e) { return false; }
+}
+
+/**
+ * True when the node is a redacted element or lives inside one.
+ *
+ * The ancestor walk is what makes redaction a subtree property: text nodes and
+ * comments have no `matches()` of their own, so typed content under a redacted
+ * container (a contenteditable, a wrapper div matched by the selector) is only
+ * caught by asking about its ancestors. Elements above the observed root count
+ * too — the walk follows `parentNode` as far as it goes.
+ */
+export function isInRedactedSubtree(node, selector) {
+  var cur = node;
+  while (cur) {
+    if (cur.nodeType === ELEMENT_NODE && isRedacted(cur, selector)) return true;
+    cur = cur.parentNode;
+  }
+  return false;
+}
