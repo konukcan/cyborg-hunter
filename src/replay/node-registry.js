@@ -33,15 +33,22 @@ export function createRegistry() {
   // Assign-if-absent for a SINGLE node (no descendant walk). In normal
   // operation every node of the observed tree is numbered by assignTree
   // first — snapshot walk at the keyframe, dom.add walks mid-span — so this
-  // is the fallback path: event capture resolving a target/anchor node that
-  // was never walked (e.g. a listener firing on a node outside the observed
-  // root, or before the first snapshot).
+  // is the fallback path for a node that WILL be serialized but has not been
+  // walked yet.
+  //
+  // NOT the way to resolve an event target or anchor: use peekId there. A
+  // target outside the observed root must resolve to null (design §2), and
+  // minting an id for it would put a number in the file that names nothing in
+  // the player's tree. dom.remove (Task 3) and anchors (Task 5) are peekId
+  // callers for the same reason.
+  //
+  // ids.set BEFORE the counter advances, so a call that throws (a non-object
+  // node) burns no id and leaves the span's numbering intact.
   function idFor(node) {
     const existing = ids.get(node);
     if (existing !== undefined) return existing;
-    const id = nextId++;
-    ids.set(node, id);
-    return id;
+    ids.set(node, nextId);
+    return nextId++;
   }
 
   // Pre-order walk: root, then each child's whole subtree, left to right.
@@ -54,6 +61,13 @@ export function createRegistry() {
   // position and still needs an id, and the serializer decides what of the
   // subtree reaches the file. Keeping the walk unconditional means ids stay
   // stable regardless of what the serializer later chooses to emit.
+  //
+  // Precondition for the fixture's tidy 1..N numbering: the keyframe snapshot
+  // walk must be the FIRST allocation after each resetSpan(). Spec §4 only
+  // demands unique first-seen ids, and this registry stays correct either way
+  // (an idFor between reset and snapshot just shifts the tree to 2..N+1), but
+  // the canonical-core keyframe reads 1..5 only because nothing allocates
+  // ahead of its walk. Callers: reset, then snapshot, then everything else.
   function assignTree(root) {
     const rootId = idFor(root);
     const children = root.childNodes;
@@ -63,10 +77,19 @@ export function createRegistry() {
     return rootId;
   }
 
-  // Read-only lookup: never allocates. Used wherever an id is only meaningful
-  // if the node was already part of the recorded tree — `dom.remove` targets,
-  // event anchors — where inventing an id would point the player at a node it
-  // has never seen.
+  // Read-only lookup: never allocates. Used wherever minting an id would be
+  // wrong rather than merely early — `dom.remove` targets, event anchors —
+  // because a fresh id there names a node the player was never sent.
+  //
+  // What it does NOT tell you: a non-null id does not mean the player has the
+  // node. assignTree numbers unconditionally, so descendants of a
+  // data-record-exclude placeholder, script/noscript elements the serializer
+  // skips, and anything numbered by an idFor fallback outside the observed
+  // root all peek non-null while appearing nowhere in the file. Strict
+  // validation only number-checks `node` fields, so a dangling reference
+  // survives validation and shows up as broken replay. Resolving a hit up to
+  // the nearest EMITTED ancestor (the placeholder, per spec §4) is the
+  // caller's job — this function answers "was it numbered", not "was it sent".
   function peekId(node) {
     const id = ids.get(node);
     return id === undefined ? null : id;

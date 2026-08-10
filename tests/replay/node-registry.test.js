@@ -44,8 +44,8 @@ describe('createRegistry — pre-order assignment', () => {
   it('is idempotent: re-assigning an already-numbered tree keeps the ids', () => {
     const reg = createRegistry();
     const { div, msgText } = canonicalTree();
-    reg.assignTree(div);
-    reg.assignTree(div);
+    assert.strictEqual(reg.assignTree(div), 1);
+    assert.strictEqual(reg.assignTree(div), 1);   // return value too: Task 3 uses it
     assert.strictEqual(reg.peekId(msgText), 5);
     assert.strictEqual(reg.count, 5);
   });
@@ -81,6 +81,48 @@ describe('createRegistry — span scoping', () => {
     assert.strictEqual(addedId, 6);
     assert.strictEqual(reg.peekId(noteText), 7);
     assert.strictEqual(reg.count, 7);
+  });
+});
+
+describe('createRegistry — allocation order', () => {
+  it('allocating before the snapshot walk shifts the tree but keeps ids unique', () => {
+    // The fixture's 1..N keyframe numbering holds ONLY because the snapshot
+    // walk is the first allocation after resetSpan(). Spec §4 asks for unique
+    // first-seen ids and nothing more, so an early idFor is legal — it just
+    // moves the tree. Pinned so a future caller reordering reset/snapshot
+    // fails here rather than silently producing off-by-one keyframes.
+    const reg = createRegistry();
+    const early = el('section', []);
+
+    assert.strictEqual(reg.idFor(early), 1);       // jumps the queue
+    const { div, msgText } = canonicalTree();
+    assert.strictEqual(reg.assignTree(div), 2);    // tree shifted to 2..6
+    assert.strictEqual(reg.peekId(msgText), 6);
+    assert.strictEqual(reg.count, 6);
+
+    // Same registry, precondition respected: back to the canonical 1..5.
+    reg.resetSpan();
+    const fresh = canonicalTree();
+    assert.strictEqual(reg.assignTree(fresh.div), 1);
+    assert.strictEqual(reg.peekId(fresh.msgText), 5);
+  });
+
+  it('numbering a child before its parent keeps the map correct, out of document order', () => {
+    // Pre-order is a property of the WALK, not of the id space: whatever the
+    // allocation order, every node keeps exactly one id and no id repeats.
+    const reg = createRegistry();
+    const { div, button, goText, p, msgText } = canonicalTree();
+
+    assert.strictEqual(reg.idFor(button), 1);      // child first
+    assert.strictEqual(reg.assignTree(div), 2);    // parent numbered after it
+
+    assert.strictEqual(reg.peekId(button), 1);     // child keeps its id
+    assert.deepStrictEqual(
+      [reg.peekId(div), reg.peekId(goText), reg.peekId(p), reg.peekId(msgText)],
+      [2, 3, 4, 5]);
+    const all = [div, button, goText, p, msgText].map(n => reg.peekId(n));
+    assert.strictEqual(new Set(all).size, 5);      // still unique
+    assert.strictEqual(reg.count, 5);              // and no id burned
   });
 });
 
