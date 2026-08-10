@@ -1,0 +1,88 @@
+{
+  "schema_version": 2,
+  "recorder": { "name": "hand-authored", "version": "0.0.1" },
+  "host": null,
+  "participant_id": "P-CANON-01",
+  "recording_started_at": "2026-08-09T12:00:00.000Z",
+  "recording_started_at_perf": 0,
+  "user_agent": "canonical-fixture",
+  "viewport": { "w": 1280, "h": 800, "dpr": 1, "scale": 1, "offset_x": 0, "offset_y": 0 },
+  "observed_root": null,
+  "stylesheets": [ { "id": 1, "kind": "inline", "css": "#stage{margin:16px}", "media": null } ],
+  "stylesheet_events": [],
+  "viewport_changes": [],
+  "rng": null,
+  "rng_calls": null,
+  "ended_at_perf": 5000,
+  "end_reason": "finished",
+  "truncated": false,
+  "extensions": null,
+  "segments": [
+    {
+      "index": 0, "label": "intro", "plugin": null,
+      "t_start": 0, "t_dom_ready": 10, "t_load": 10, "t_end": 2000,
+      "initial_dom": {
+        "id": 1, "kind": "element", "tag": "div", "attrs": { "id": "stage" }, "children": [
+          { "id": 2, "kind": "element", "tag": "button", "attrs": { "id": "go" }, "children": [
+            { "id": 3, "kind": "text", "text": "Go" } ] },
+          { "id": 4, "kind": "element", "tag": "p", "attrs": { "id": "msg" }, "children": [
+            { "id": 5, "kind": "text", "text": "Hello" } ] }
+        ]
+      },
+      "initial_state": null,
+      "events": [
+        { "type": "mouse.move", "t": 100.0, "x": 300, "y": 200 },
+        { "type": "mouse.click", "t": 450.5, "x": 322, "y": 214, "button": 0, "target": 2,
+          "camera": { "scroll_x": 0, "scroll_y": 0, "viewport_w": 1280, "viewport_h": 800,
+                       "client_w": 1280, "client_h": 800, "dpr": 1,
+                       "vv_scale": 1, "vv_offset_x": 0, "vv_offset_y": 0 },
+          "anchor": { "tag": "button", "id": "go",
+                       "rect": { "x": 310, "y": 205, "w": 64, "h": 28 }, "node": 2 } },
+        { "type": "dom.text", "t": 460.0, "node": 5, "text": "Clicked!" },
+        { "type": "key.down", "t": 900.0, "key": "a", "code": "KeyA",
+          "mods": { "ctrl": false, "shift": false, "alt": false, "meta": false },
+          "repeat": false, "target": null },
+        { "type": "key.up", "t": 980.0, "key": "a", "code": "KeyA",
+          "mods": { "ctrl": false, "shift": false, "alt": false, "meta": false },
+          "repeat": false, "target": null }
+      ],
+      "host_data": null, "extensions": null
+    },
+    {
+      "index": 1, "label": "continuation", "plugin": null,
+      "t_start": 2000, "t_dom_ready": null, "t_load": null, "t_end": 3500,
+      "initial_dom": null, "initial_state": null,
+      "events": [
+        { "type": "dom.attr", "t": 2100.0, "node": 2, "name": "disabled", "value": "" },
+        { "type": "scroll.window", "t": 2500.0, "x": 0, "y": 120 },
+        { "type": "visibility.hidden", "t": 3000.0 },
+        { "type": "visibility.visible", "t": 3400.0 }
+      ],
+      "host_data": null, "extensions": null
+    },
+    {
+      "index": 2, "label": "form", "plugin": null,
+      "t_start": 3500, "t_dom_ready": 3510, "t_load": 3510, "t_end": 5000,
+      "initial_dom": {
+        "id": 1, "kind": "element", "tag": "div", "attrs": { "id": "stage" }, "children": [
+          { "id": 2, "kind": "element", "tag": "form", "attrs": {}, "children": [
+            { "id": 3, "kind": "element", "tag": "input", "attrs": { "id": "answer", "type": "text" }, "children": [] },
+            { "id": 4, "kind": "element", "tag": "input", "attrs": { "id": "secret", "type": "password" }, "children": [] }
+          ] }
+        ]
+      },
+      "initial_state": {
+        "scroll": { "x": 0, "y": 120 },
+        "element_scroll": [],
+        "media": [],
+        "form": [ { "node": 3, "value": "ab" } ]
+      },
+      "events": [
+        { "type": "input.value", "t": 4000.0, "node": 3, "value": "abc" },
+        { "type": "key.down", "t": 4200.0, "redacted": true },
+        { "type": "input.value", "t": 4250.0, "node": 4, "redacted": true, "value_len": 1 }
+      ],
+      "host_data": { "correct": true }, "extensions": null
+    }
+  ]
+}

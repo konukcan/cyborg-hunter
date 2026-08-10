@@ -204,3 +204,16 @@ test('strict: media, canvas, and clipboard event checks', () => {
   assert.ok(!res.errors.some(e => e.includes('events[2]')));
   assert.ok(res.errors.some(e => e.includes('events[3]')));
 });
+
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+test('canonical-core fixture is strict-valid', () => {
+  const raw = readFileSync(join(HERE, 'fixtures', 'canonical-core.json'), 'utf8');
+  const res = validateStrict(raw);
+  assert.deepEqual(res.errors, []);
+  assert.equal(res.ok, true);
+});
