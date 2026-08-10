@@ -1,15 +1,16 @@
 {
   "fixture": "canonical-core.json",
   "strict_valid": true,
-  "counts": { "segments": 3, "events_total": 12, "keyframes": 2, "continuations": 1 },
+  "counts": { "segments": 3, "events_total": 14, "keyframes": 2, "continuations": 1 },
   "spot_checks": [
     { "path": "segments.0.events.1.type", "equals": "mouse.click" },
     { "path": "segments.0.events.1.anchor.node", "equals": 2 },
     { "path": "segments.1.initial_dom", "equals": null },
+    { "path": "segments.1.events.1.node.id", "equals": 6 },
     { "path": "segments.2.initial_state.scroll.y", "equals": 120 },
     { "path": "segments.2.events.1.redacted", "equals": true },
     { "path": "segments.2.events.2.value_len", "equals": 1 }
   ],
-  "invariants": [ "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe" ],
+  "invariants": [ "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe", "no_redaction_leak" ],
   "checkpoints": []
 }

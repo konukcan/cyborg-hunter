@@ -54,6 +54,10 @@
       "initial_dom": null, "initial_state": null,
       "events": [
         { "type": "dom.attr", "t": 2100.0, "node": 2, "name": "disabled", "value": "" },
+        { "type": "dom.add", "t": 2200.0, "parent": 1, "before": null,
+          "node": { "id": 6, "kind": "element", "tag": "span", "attrs": { "id": "note" }, "children": [
+            { "id": 7, "kind": "text", "text": "saved" } ] } },
+        { "type": "dom.remove", "t": 2300.0, "node": 6 },
         { "type": "scroll.window", "t": 2500.0, "x": 0, "y": 120 },
         { "type": "visibility.hidden", "t": 3000.0 },
         { "type": "visibility.visible", "t": 3400.0 }
