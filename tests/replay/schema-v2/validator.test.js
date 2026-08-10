@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
-import { detectGzip } from './validator.js';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { detectGzip, validateTolerant, validateStrict } from './validator.js';
 
 test('detectGzip: true for gzipped bytes, false for JSON text and short input', () => {
   const gz = gzipSync(Buffer.from('{"schema_version":2}'));
@@ -10,8 +13,6 @@ test('detectGzip: true for gzipped bytes, false for JSON text and short input', 
   assert.equal(detectGzip(Buffer.from([0x1f])), false);
   assert.equal(detectGzip(null), false);
 });
-
-import { validateTolerant } from './validator.js';
 
 const MIN_VALID = {
   schema_version: 2,
@@ -48,8 +49,6 @@ test('tolerant: parses JSON strings and rejects invalid JSON', () => {
   assert.equal(validateTolerant(JSON.stringify(MIN_VALID)).ok, true);
   assert.equal(validateTolerant('{not json').ok, false);
 });
-
-import { validateStrict } from './validator.js';
 
 function strictBase() {
   return {
@@ -177,6 +176,20 @@ test('strict: a non-object initial_dom is not a keyframe', () => {
   assert.ok(res.errors.some(e => e.includes('keyframe')));
 });
 
+test('strict: an array initial_dom is not a keyframe', () => {
+  // `typeof [] === "object"`, so the object test alone lets an array through
+  // and the segment silently counts as a keyframe — licensing every later
+  // dom.* patch against a snapshot that has no nodes to patch.
+  const r = strictBase();
+  r.segments = [seg({
+    initial_dom: [],
+    events: [{ type: 'dom.attr', t: 1, node: 1, name: 'class', value: 'x' }],
+  })];
+  const res = validateStrict(r);
+  assert.ok(res.errors.some(e => e.includes('initial_dom') && e.includes('DomNode')));
+  assert.ok(res.errors.some(e => e.includes('keyframe')));
+});
+
 test('strict: redacted input.value must not carry the plaintext value', () => {
   const r = strictBase();
   r.segments = [seg({ events: [
@@ -188,6 +201,43 @@ test('strict: redacted input.value must not carry the plaintext value', () => {
   assert.ok(!res.errors.some(e => e.includes('events[1]')));
 });
 
+test('strict: `redacted` must be the boolean true, never a string or false', () => {
+  // The field is a variant marker, not a toggle: it selects the redacted event
+  // shape. A truthy string would otherwise fail the `=== true` variant test,
+  // fall through to the plaintext branch, and license the very `value` the
+  // redaction was meant to remove. `redacted: false` is rejected for the same
+  // reason — absence, not a false flag, is how a non-redacted event says so.
+  const r = strictBase();
+  r.segments = [seg({ events: [
+    { type: 'input.value', t: 1, node: 1, redacted: 'true', value: 'secret' },
+    { type: 'input.value', t: 2, node: 1, redacted: false, value: 'plain' },
+    { type: 'input.value', t: 3, node: 1, value: 'plain' },
+  ] })];
+  const res = validateStrict(r);
+  assert.ok(res.errors.some(e => e.includes('events[0]') && e.includes('redacted')));
+  assert.ok(res.errors.some(e => e.includes('events[1]') && e.includes('redacted')));
+  assert.ok(!res.errors.some(e => e.includes('events[2]')), 'an absent marker is the normal case');
+});
+
+test('strict: `redacted` is illegal on event types with no redacted variant', () => {
+  // Spec §5.2 defines a redacted shape for four event types only. On any other
+  // type the marker is a claim the validator cannot honour: nothing in that
+  // type's check removes content, so the event asserts redaction while keeping
+  // the payload. A redacted canvas.snapshot still carrying its data_url is the
+  // concrete case — strict has to refuse the marker, not just type-check it.
+  const r = strictBase();
+  r.segments = [seg({ initial_dom: KEYFRAME_DOM, events: [
+    { type: 'canvas.snapshot', t: 1, node: 2, data_url: 'data:image/png;base64,AAA', redacted: true },
+    { type: 'dom.text', t: 2, node: 5, text: 'still here', redacted: true },
+    { type: 'key.down', t: 3, redacted: true },
+  ] })];
+  const res = validateStrict(r);
+  assert.ok(res.errors.some(e => e.includes('events[0]') && e.includes('canvas.snapshot')
+    && e.includes('no redacted variant')));
+  assert.ok(res.errors.some(e => e.includes('events[1]') && e.includes('no redacted variant')));
+  assert.ok(!res.errors.some(e => e.includes('events[2]')), 'the spec-defined variants stay legal');
+});
+
 test('strict: media, canvas, and clipboard event checks', () => {
   const r = strictBase();
   r.segments = [seg({
@@ -196,6 +246,9 @@ test('strict: media, canvas, and clipboard event checks', () => {
       { type: 'canvas.snapshot', t: 2, node: 2, data_url: 'data:,', region: { x: 0, y: 0, w: 10, h: 10 } },
       { type: 'clipboard.paste', t: 3, target: null, len: 5 },
       { type: 'clipboard.paste', t: 4, redacted: true, text: 'leak' },
+      { type: 'media.play', t: 5, node: 1 },                            // missing current_time
+      { type: 'canvas.snapshot', t: 6, node: 2, data_url: 'data:,',     // non-numeric region.w
+        region: { x: 0, y: 0, w: '10', h: 10 } },
     ],
   })];
   const res = validateStrict(r);
@@ -203,11 +256,11 @@ test('strict: media, canvas, and clipboard event checks', () => {
   assert.ok(!res.errors.some(e => e.includes('events[1]')));
   assert.ok(!res.errors.some(e => e.includes('events[2]')));
   assert.ok(res.errors.some(e => e.includes('events[3]')));
+  // Reject direction: an accept-only test passes just as well against a check
+  // that returns true unconditionally.
+  assert.ok(res.errors.some(e => e.includes('events[4]') && e.includes('media.play')));
+  assert.ok(res.errors.some(e => e.includes('events[5]') && e.includes('canvas.snapshot')));
 });
-
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 

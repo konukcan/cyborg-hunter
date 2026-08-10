@@ -107,7 +107,7 @@ export function validateStrict(input) {
   if (!Array.isArray(r.viewport_changes)) errors.push('viewport_changes must be an array');
   else checkSorted(r.viewport_changes, 'viewport_changes must be time-sorted', errors);
 
-  checkSegmentsStrict(r, errors);   // Task 4 — stub for now
+  checkSegmentsStrict(r, errors);
   return { ok: errors.length === 0, errors, warnings: t.warnings };
 }
 
@@ -151,6 +151,15 @@ const CORE_EVENT_CHECKS = {
   'recording.capture_stopped': e => e.reason === 'buffer_limit' || e.reason === 'error',
 };
 
+// The event types spec §5.2 gives a redacted variant. These are exactly the
+// types whose check above has a `redacted === true` branch that strips
+// content, so the set and the branches must be extended together: a type
+// listed here without such a branch would accept the marker and the payload.
+const REDACTABLE_TYPES = new Set([
+  'key.down', 'key.up', 'input.value',
+  'clipboard.copy', 'clipboard.cut', 'clipboard.paste', 'clipboard.drop',
+]);
+
 // Clipboard fields are all optional (a length-only record is the redacted
 // shape), so each is typed only when present. Under `redacted: true` the
 // content fields must be absent: a surviving text/html is a redaction leak.
@@ -187,12 +196,16 @@ function checkSegmentsStrict(r, errors) {
     if (!strOrNull(s.plugin ?? null)) errors.push(`${at}.plugin must be a string or null`);
     const hasDomEvents = s.events.some(e => typeof e?.type === 'string' && e.type.startsWith('dom.'));
     // A keyframe is a DomNode object. A primitive here is a producer bug, and
-    // treating it as a keyframe would license later dom.* patches against a
-    // snapshot the player cannot reconstruct.
-    if (s.initial_dom != null && typeof s.initial_dom !== 'object') {
+    // so is an array — `typeof [] === 'object'`, but an array carries none of
+    // a DomNode's fields. Either way, treating it as a keyframe would license
+    // later dom.* patches against a snapshot the player cannot reconstruct,
+    // so the keyframe status and the shape error read off one test.
+    const isKeyframe = s.initial_dom != null && typeof s.initial_dom === 'object'
+      && !Array.isArray(s.initial_dom);
+    if (s.initial_dom != null && !isKeyframe) {
       errors.push(`${at}.initial_dom must be a DomNode object or null`);
     }
-    if (s.initial_dom != null && typeof s.initial_dom === 'object') sawKeyframe = true;
+    if (isKeyframe) sawKeyframe = true;
     else if (hasDomEvents && !sawKeyframe) {
       errors.push(`${at}: continuation carries dom.* events before any keyframe (spec §3)`);
     }
@@ -200,6 +213,23 @@ function checkSegmentsStrict(r, errors) {
     s.events.forEach((e, j) => {
       const eAt = `${at}.events[${j}]`;
       if (!e || typeof e.type !== 'string' || !isNum(e.t)) { errors.push(`${eAt}: events need string type and numeric t`); return; }
+      // `redacted` is a variant marker, not a toggle. Every per-type check
+      // selects the redacted shape on `=== true`, so a truthy non-boolean
+      // (`"true"`, `1`) would fall through to the plaintext branch and license
+      // exactly the content the redaction removed. `false` is rejected too:
+      // absence is how a non-redacted event says so, and a false marker only
+      // invites producers to emit the field on events that never redact.
+      // On a type outside REDACTABLE_TYPES the marker is a claim nothing
+      // enforces: that type's check has no redacted branch, so the event
+      // asserts redaction and keeps its payload (a canvas.snapshot with both
+      // `redacted: true` and its data_url). Strict refuses the marker there.
+      if ('redacted' in e) {
+        if (e.redacted !== true) {
+          errors.push(`${eAt}: redacted must be the boolean true when present (it marks the redacted variant; omit it on non-redacted events)`);
+        } else if (!REDACTABLE_TYPES.has(e.type)) {
+          errors.push(`${eAt}: ${e.type} has no redacted variant (spec §5.2/§8); the marker must not appear on it`);
+        }
+      }
       const check = CORE_EVENT_CHECKS[e.type];
       if (!check) errors.push(`${eAt}: unknown top-level event type "${e.type}" (vendor events belong in extensions, spec §5.8)`);
       else if (!check(e)) errors.push(`${eAt}: ${e.type} missing/invalid required fields (e.g. ${hintFor(e.type)})`);
