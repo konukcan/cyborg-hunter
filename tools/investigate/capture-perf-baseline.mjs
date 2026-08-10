@@ -68,6 +68,7 @@ function opt(name, dflt) {
 }
 const CFG = {
   page: String(opt('page', 'tests/browser/replay/demo-standalone.html')),
+  tier: String(opt('tier', 'dom')),            // asserted back off rec.config
   runs: Number(opt('runs', 3)),
   keys: Number(opt('keys', 200)),
   keyDelay: Number(opt('key-delay', 10)),      // ms between keystrokes
@@ -261,6 +262,49 @@ function installInstrumentation() {
   };
   P.crossOriginIsolated = !!window.crossOriginIsolated;
 
+  // 5. schema-agnostic segment index ---------------------------------------
+  // Finds every segment-ish object in a serialized recording and reports
+  // whether it carries a DOM snapshot. Deliberately keyed on the ONE field
+  // name the v1 and v2 wire formats share (`initial_dom`): v1 puts an HTML
+  // string there, v2 a DomNode tree, and v2 continuation segments put null.
+  // Segment identity is read from whichever of trial_id/label/segment_id/id
+  // holds a string, which covers v1's trial_id and v2's label.
+  P.segmentIndex = function (recording) {
+    var out = [];
+    var seen = new Set();
+    (function walk(node, depth) {
+      if (!node || typeof node !== 'object' || depth > 12 || seen.has(node)) return;
+      seen.add(node);
+      if (Array.isArray(node)) {
+        for (var i = 0; i < node.length; i++) walk(node[i], depth + 1);
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(node, 'initial_dom')) {
+        var id = null;
+        var idKeys = ['trial_id', 'label', 'segment_id', 'id'];
+        for (var k = 0; k < idKeys.length; k++) {
+          if (typeof node[idKeys[k]] === 'string') { id = node[idKeys[k]]; break; }
+        }
+        var d = node.initial_dom;
+        var bytes = 0, has = false;
+        if (typeof d === 'string') { bytes = d.length; has = bytes > 0; }
+        else if (d && typeof d === 'object') {
+          try { bytes = JSON.stringify(d).length; } catch (e) { bytes = -1; }
+          has = Object.keys(d).length > 0;
+        }
+        out.push({ id: id, hasSnapshot: has, bytes: bytes });
+      }
+      for (var key in node) {
+        // never descend INTO a snapshot: v2's node tree is deep and it holds
+        // no segments of its own.
+        if (key !== 'initial_dom' && Object.prototype.hasOwnProperty.call(node, key)) {
+          walk(node[key], depth + 1);
+        }
+      }
+    })(recording, 0);
+    return out;
+  };
+
   window.__CHPERF = P;
 }
 
@@ -271,11 +315,11 @@ function installInstrumentation() {
 // Attach the recorder under test with the wrapper ARMED, so exactly its own
 // listeners/observer/rAF work is attributed. Public API only — survives the
 // v1→v2 rewrite untouched.
-function pageSetupRecorder() {
+function pageSetupRecorder(wantTier) {
   window.__CHPERF.armLabel = 'replay';
   var rec = window.CyborgHunterReplay.attach({
     participantId: 'PERF-BASELINE',
-    tier: 'dom',
+    tier: wantTier,
     autoSave: { mode: 'none' },
     root: document.body,
   });
@@ -283,9 +327,31 @@ function pageSetupRecorder() {
   rec.startTrial({ trialId: 'perf-trial-1', plugin: 'ch:perf' });
   window.__CHPERF.armLabel = null;
   window.__REC = rec;
+
+  // COVERAGE ASSERTIONS. attach() validates none of its config, so a renamed
+  // tier token silently downgrades capture and every number below collapses
+  // toward zero while the harness still exits 0. Both checks below turn that
+  // class of failure into a hard error.
+  var gotTier = rec.config && rec.config.tier;
+  if (gotTier !== wantTier) {
+    throw new Error('tier not honoured: asked ' + wantTier + ', rec.config.tier is ' + gotTier
+      + ' — DOM capture is probably not attached, so the numbers would be meaningless');
+  }
+  var segs = window.__CHPERF.segmentIndex(rec.getRecording())
+    .filter(function (s) { return s.id === 'perf-trial-1'; });
+  if (!segs.length) {
+    throw new Error('no segment named perf-trial-1 in the recording — segment identity field changed?');
+  }
+  if (!segs[0].hasSnapshot) {
+    throw new Error('first segment carries no initial DOM snapshot (bytes=' + segs[0].bytes
+      + ') — DOM capture is not running, scenario (c) would measure nothing');
+  }
+
   return {
     nodes: countNodes(),
     bodyBytes: document.body.innerHTML.length,
+    snapshotBytes: segs[0].bytes,
+    tier: gotTier,
   };
   function countNodes() {
     var w = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_ALL);
@@ -295,19 +361,38 @@ function pageSetupRecorder() {
   }
 }
 
-// Scenario (c): time the public segment boundary directly.
-function pageBoundaryLoop(n) {
+// Scenario (c): time the public segment boundary directly, then classify each
+// iteration by whether its segment actually emitted a snapshot.
+//
+// This classification is what makes the row comparable across the rewrite. v1
+// snapshots every trial start, so all N iterations are keyframes. v2's cadence
+// (Task 8) keyframes only some of them on the standalone path these pages
+// drive, and a continuation boundary skips the serializer entirely. Pooling
+// the two populations would put p95 on whichever kind happens to sit at rank
+// ceil(0.95N), so keyframe and continuation are reported apart and the budget
+// gates the keyframe subset.
+function pageBoundaryLoop(args) {
   var rec = window.__REC;
-  var out = [];
+  var n = args.n, prefix = args.prefix;
+  var timings = [];
   for (var i = 0; i < n; i++) {
     var t0 = performance.now();
     rec.endTrial();
     var t1 = performance.now();
-    rec.startTrial({ trialId: 'perf-boundary-' + i, plugin: 'ch:perf' });
+    rec.startTrial({ trialId: prefix + i, plugin: 'ch:perf' });
     var t2 = performance.now();
-    out.push({ end: t1 - t0, start: t2 - t1, total: t2 - t0 });
+    timings.push({ end: t1 - t0, start: t2 - t1, total: t2 - t0 });
   }
-  return out;
+  var byId = new Map();
+  window.__CHPERF.segmentIndex(rec.getRecording()).forEach(function (s) {
+    if (s.id != null) byId.set(s.id, s);
+  });
+  for (var j = 0; j < n; j++) {
+    var seg = byId.get(prefix + j);
+    timings[j].keyframe = seg ? !!seg.hasSnapshot : null;
+    timings[j].snapshotBytes = seg ? seg.bytes : null;
+  }
+  return timings;
 }
 
 // Inflate the DOM to ~mult x its node count with structurally ordinary
@@ -370,13 +455,24 @@ function stats(vals) {
 }
 const ms = (v) => (v == null ? '—' : v.toFixed(3));
 
-// Per-keystroke overhead: sum every timed invocation that falls in the window
-// opened by one keydown and closed by the next (so the amortised rAF input
-// flush lands in the keystroke that caused it).
-function windowSums(records, boundaryType) {
+// Per-unit overhead: sum every timed invocation that falls in the window
+// opened by one boundary-type handler call and closed by the next, so
+// coalesced rAF work lands in the unit that caused it. Used for BOTH input
+// scenarios: filtering on a single event type instead would silently drop
+// whatever a future recorder moves into a flush.
+//
+// `expect` is a coverage assertion, not decoration: if the recorder stops
+// registering the boundary listener, `starts` empties, every downstream stat
+// becomes an empty array, and p95 arrives as -Infinity through Math.max.
+// Failing here converts that into an exit-1.
+function windowSums(records, boundaryType, expect) {
   const byT0 = records.slice().sort((a, b) => a.t0 - b.t0);
   const starts = [];
   for (const r of byT0) if (r.ch === 'listener' && r.type === boundaryType) starts.push(r.t0);
+  if (expect && !expect.check(starts.length)) {
+    throw new Error('coverage assertion failed for ' + boundaryType + ': saw ' + starts.length
+      + ' handler calls, ' + expect.describe + ' — the recorder is not capturing this channel');
+  }
   const out = [];
   for (let i = 0; i < starts.length; i++) {
     const lo = starts[i];
@@ -390,7 +486,7 @@ function windowSums(records, boundaryType) {
 function byType(records) {
   const m = new Map();
   for (const r of records) {
-    const k = r.ch === 'listener' ? r.type : r.type;
+    const k = r.ch + '/' + r.type;
     if (!m.has(k)) m.set(k, []);
     m.get(k).push(r.dur);
   }
@@ -414,15 +510,36 @@ async function runOnce(browser, baseUrl, runIdx) {
     granularity: window.__CHPERF.clockGranularity(200000),
     ua: navigator.userAgent,
   }));
+  // Measuring the clock and then ignoring what it says would be theatre: at
+  // the 100us Spectre clamp these handlers are sub-tick and every row reads 0.
+  if (!env.isolated) {
+    throw new Error('renderer is not crossOriginIsolated — performance.now() is clamped to 100us '
+      + 'and the handler timings would be meaningless. Check the COOP/COEP headers.');
+  }
+  if (!(env.granularity > 0) || env.granularity > 0.01) {
+    throw new Error('clock granularity ' + env.granularity + ' ms is too coarse (need <= 0.01 ms)');
+  }
   const floor = stats(await page.evaluate(() => window.__CHPERF.instrumentFloor(3000)));
 
-  const dom0 = await page.evaluate(pageSetupRecorder);
+  const dom0 = await page.evaluate(pageSetupRecorder, CFG.tier);
 
   // ── (a) typing burst ─────────────────────────────────────────────────────
+  // The focus target must be on the FULL capture path. Both v1 and v2 record
+  // redacted fields through a shorter branch (no value, no marker ref), so a
+  // selector that lands on one reads low and flatters the recorder.
   await page.evaluate((sel) => {
     var el = document.querySelector(sel);
     if (!el) throw new Error('no text input matching ' + sel);
+    if (el.type === 'password') {
+      throw new Error('focus target ' + sel + ' is a password field — always redacted, '
+        + 'so it measures the cheap path. Pass --input pointing at an ordinary field.');
+    }
+    if (el.closest('[data-ch-redact]')) {
+      throw new Error('focus target ' + sel + ' sits inside a [data-ch-redact] subtree — '
+        + 'measures the redacted path. Pass --input pointing at an ordinary field.');
+    }
     el.focus();
+    if (document.activeElement !== el) throw new Error('focus target did not take focus');
     window.__CHPERF.reset();
   }, CFG.input);
   const alphabet = 'abcdefghijklmnopqrstuvwxyz ';
@@ -434,17 +551,23 @@ async function runOnce(browser, baseUrl, runIdx) {
   const typeWall = Date.now() - t0Type;
   await page.waitForTimeout(50); // let the last rAF flush land
   const typeRecords = await page.evaluate(() => window.__CHPERF.take().slice());
+  const perKeystroke = windowSums(typeRecords, 'keydown', {
+    check: (n) => n === CFG.keys,
+    describe: 'expected exactly ' + CFG.keys,
+  });
   const typing = {
-    perKeystroke: stats(windowSums(typeRecords, 'keydown')),
+    perKeystroke: stats(perKeystroke),
     byType: byType(typeRecords),
     invocations: typeRecords.length,
+    keystrokes: perKeystroke.length,
     wallMs: typeWall,
   };
 
   // ── (b) mousemove storm ──────────────────────────────────────────────────
-  await page.evaluate(() => window.__CHPERF.reset());
+  // Prime the pointer BEFORE resetting, so the priming move is not counted.
   const stepsPerSeg = Math.max(1, Math.round(CFG.moves / CFG.moveSegments));
   await page.mouse.move(60, 60);
+  await page.evaluate(() => window.__CHPERF.reset());
   const t0Move = Date.now();
   for (let i = 0; i < CFG.moveSegments; i++) {
     const x = i % 2 === 0 ? 1180 : 80;
@@ -454,7 +577,13 @@ async function runOnce(browser, baseUrl, runIdx) {
   const moveWall = Date.now() - t0Move;
   await page.waitForTimeout(50);
   const moveRecords = await page.evaluate(() => window.__CHPERF.take().slice());
-  const moveOnly = moveRecords.filter((r) => r.type === 'mousemove');
+  const dispatched = CFG.moveSegments * stepsPerSeg;
+  // Same window treatment as typing: whatever the recorder does per move,
+  // including anything it defers to a rAF flush, is charged to that move.
+  const perMove = windowSums(moveRecords, 'mousemove', {
+    check: (n) => n >= 0.9 * dispatched,
+    describe: 'expected at least ' + Math.round(0.9 * dispatched) + ' of ' + dispatched + ' dispatched',
+  });
   // How many of those handler calls actually EMITTED an event (the recorder
   // throttles moves to mouseHz)? Counted schema-agnostically off the serialized
   // recording so the same probe works for v1 "mousemove" and v2 "mouse.move".
@@ -465,38 +594,66 @@ async function runOnce(browser, baseUrl, runIdx) {
       return m ? m.length : 0;
     } catch { return null; }
   });
+  const stormTotal = perMove.reduce((a, b) => a + b, 0);
   const storm = {
-    perMove: stats(moveOnly.map((r) => r.dur)),
-    allInvocations: stats(moveRecords.map((r) => r.dur)),
+    perMove: stats(perMove),
     byType: byType(moveRecords),
-    dispatched: CFG.moveSegments * stepsPerSeg,
-    handlerCalls: moveOnly.length,
+    dispatched,
+    handlerCalls: perMove.length,
     emittedMoves,
+    emittedFraction: emittedMoves != null && perMove.length ? emittedMoves / perMove.length : null,
     wallMs: moveWall,
-    movesPerSec: moveOnly.length / (moveWall / 1000),
+    movesPerSec: perMove.length / (moveWall / 1000),
+    // Aggregate normalised PER EMITTED EVENT. The raw total is bounded by wall
+    // clock (the 30 Hz throttle emits ~wall/33ms events however many moves the
+    // driver manages), so a slow run under load would fail a raw-total gate
+    // for reasons that have nothing to do with the recorder.
+    totalMs: stormTotal,
+    perEmittedMove: emittedMoves ? stormTotal / emittedMoves : null,
   };
 
   // ── (c) segment boundary, natural DOM then inflated DOM ──────────────────
   await page.evaluate(() => window.__CHPERF.reset());
-  const bNatural = await page.evaluate(pageBoundaryLoop, CFG.boundaries);
+  const bNatural = await page.evaluate(pageBoundaryLoop,
+    { n: CFG.boundaries, prefix: 'perf-boundary-nat-' });
   const inflation = await page.evaluate(pageInflateDom, CFG.inflate);
   await page.waitForTimeout(50);
   await page.evaluate(() => window.__CHPERF.reset());
-  const bInflated = await page.evaluate(pageBoundaryLoop, CFG.boundaries);
+  const bInflated = await page.evaluate(pageBoundaryLoop,
+    { n: CFG.boundaries, prefix: 'perf-boundary-inf-' });
 
+  const split = (rows) => {
+    const kf = rows.filter((r) => r.keyframe === true);
+    const cont = rows.filter((r) => r.keyframe === false);
+    const unknown = rows.filter((r) => r.keyframe == null).length;
+    return {
+      keyframe: {
+        total: stats(kf.map((r) => r.total)),
+        startTrial: stats(kf.map((r) => r.start)),
+        endTrial: stats(kf.map((r) => r.end)),
+      },
+      continuation: {
+        total: stats(cont.map((r) => r.total)),
+        startTrial: stats(cont.map((r) => r.start)),
+        endTrial: stats(cont.map((r) => r.end)),
+      },
+      counts: { keyframe: kf.length, continuation: cont.length, unclassified: unknown },
+      snapshotBytes: kf.length ? kf[kf.length - 1].snapshotBytes : null,
+    };
+  };
   const boundary = {
-    natural: {
-      total: stats(bNatural.map((b) => b.total)),
-      startTrial: stats(bNatural.map((b) => b.start)),
-      endTrial: stats(bNatural.map((b) => b.end)),
-    },
-    inflated: {
-      total: stats(bInflated.map((b) => b.total)),
-      startTrial: stats(bInflated.map((b) => b.start)),
-      endTrial: stats(bInflated.map((b) => b.end)),
-    },
+    natural: split(bNatural),
+    inflated: split(bInflated),
     dom: { ...dom0, ...inflation },
   };
+  // A boundary the segment index could not classify means the identity field
+  // moved; the split would then be silently wrong rather than absent.
+  for (const [where, s] of [['natural', boundary.natural], ['inflated', boundary.inflated]]) {
+    if (s.counts.unclassified) {
+      throw new Error(s.counts.unclassified + ' of ' + CFG.boundaries + ' ' + where
+        + ' boundaries could not be matched to a segment — segment identity field changed?');
+    }
+  }
 
   await page.close();
   return {
@@ -540,31 +697,75 @@ try {
 if (failed) process.exit(1);
 
 // pooled + spread -----------------------------------------------------------
+// `gated` scenarios carry a budget and must have samples in every run.
+// `agg` is the per-unit aggregate: quantization-proof, because it sums
+// thousands of clock ticks instead of asking p95 to resolve three of them.
 const scenarios = {
-  'typing-burst (per keystroke)': runs.map((r) => r.typing.perKeystroke),
-  'mousemove-storm (per move)': runs.map((r) => r.storm.perMove),
-  'boundary natural (total)': runs.map((r) => r.boundary.natural.total),
-  'boundary inflated (total)': runs.map((r) => r.boundary.inflated.total),
+  'typing-burst (per keystroke)': {
+    gated: true, perRun: runs.map((r) => r.typing.perKeystroke),
+    agg: runs.map((r) => r.typing.perKeystroke.total / r.typing.keystrokes),
+    aggUnit: 'ms/keystroke (' + CFG.keys + '-key burst)',
+  },
+  'mousemove-storm (per move)': {
+    gated: true, perRun: runs.map((r) => r.storm.perMove),
+    agg: runs.map((r) => r.storm.perEmittedMove),
+    aggUnit: 'ms/emitted move (' + CFG.moves + '-move storm)',
+  },
+  'boundary natural, keyframe': {
+    gated: true, perRun: runs.map((r) => r.boundary.natural.keyframe.total),
+  },
+  'boundary natural, continuation': {
+    gated: false, perRun: runs.map((r) => r.boundary.natural.continuation.total),
+  },
+  'boundary inflated, keyframe': {
+    gated: true, perRun: runs.map((r) => r.boundary.inflated.keyframe.total),
+  },
+  'boundary inflated, continuation': {
+    gated: false, perRun: runs.map((r) => r.boundary.inflated.continuation.total),
+  },
 };
 const summary = {};
-for (const [name, perRun] of Object.entries(scenarios)) {
-  const p95s = perRun.map((s) => s.p95).filter((v) => v != null);
-  const p50s = perRun.map((s) => s.p50).filter((v) => v != null);
-  const lo = Math.min(...p95s), hi = Math.max(...p95s);
+const med = (a) => (a.length ? a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)] : null);
+for (const [name, def] of Object.entries(scenarios)) {
+  const perRun = def.perRun;
+  const p95s = perRun.map((s) => s.p95).filter((v) => v != null && Number.isFinite(v));
+  const p50s = perRun.map((s) => s.p50).filter((v) => v != null && Number.isFinite(v));
+  const samplesPerRun = perRun.map((s) => s.n);
+  const empty = samplesPerRun.some((n) => !n);
+  const lo = p95s.length ? Math.min(...p95s) : null;
+  const hi = p95s.length ? Math.max(...p95s) : null;
   const spread = lo > 0 ? hi / lo : null;
-  const med = (a) => (a.length ? a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)] : null);
+  // Enough samples for a p99 to mean anything? At n=25 (the boundary rows)
+  // p99 and max are the same single cold-start observation.
+  const p99able = samplesPerRun.every((n) => n >= 100);
+  const aggs = (def.agg || []).filter((v) => v != null && Number.isFinite(v));
   summary[name] = {
-    perRunP50: p50s, perRunP95: p95s,
+    gated: def.gated, empty,
+    perRunP50: p50s, perRunP95: p95s, samplesPerRun,
     p50: med(p50s),
     p95: hi,                       // conservative: worst run's p95
     p95Median: med(p95s), p95Min: lo,
-    p99: Math.max(...perRun.map((s) => s.p99 ?? 0)),
+    p99: p99able ? Math.max(...perRun.map((s) => s.p99 ?? 0)) : null,
     max: Math.max(...perRun.map((s) => s.max ?? 0)),
-    samplesPerRun: perRun.map((s) => s.n),
     spread,
     noisy: spread != null && spread > CFG.noiseMax,
-    budget: hi * 1.25,
+    budget: hi == null ? null : hi * 1.25,
+    aggUnit: def.aggUnit || null,
+    aggPerRun: aggs.length ? aggs : null,
+    agg: aggs.length ? Math.max(...aggs) : null,
+    aggBudget: aggs.length ? Math.max(...aggs) * 1.25 : null,
   };
+}
+
+// HARD VALIDATION. A gated scenario with no samples, or a p95 that is not a
+// finite number, means the harness measured nothing — which used to sail
+// through as a -Infinity budget and exit 0.
+const problems = [];
+for (const [name, s] of Object.entries(summary)) {
+  if (!s.gated) continue;
+  if (s.empty) problems.push(name + ': a run produced 0 samples (n per run: ' + s.samplesPerRun.join(', ') + ')');
+  else if (!Number.isFinite(s.p95)) problems.push(name + ': p95 is not finite (' + s.p95 + ')');
+  else if (!Number.isFinite(s.budget)) problems.push(name + ': budget is not finite');
 }
 
 // report --------------------------------------------------------------------
@@ -590,39 +791,61 @@ console.log('DOM               : ' + runs[0].boundary.dom.before + ' nodes natur
 console.log('machine           : ' + machine.cpu + ' / ' + machine.cores + ' cores / chromium '
   + machine.chromium + ' / load ' + runs.map((r) => r.loadavg[0]).join(', '));
 console.log('mouse throttle    : ' + runs[0].storm.handlerCalls + ' handler calls, '
-  + runs[0].storm.emittedMoves + ' emitted events, '
+  + runs[0].storm.emittedMoves + ' emitted events ('
+  + (runs[0].storm.emittedFraction * 100).toFixed(0) + '%), '
   + Math.round(runs[0].storm.movesPerSec) + ' moves/s wall');
+console.log('boundary mix      : natural ' + runs[0].boundary.natural.counts.keyframe + ' keyframe / '
+  + runs[0].boundary.natural.counts.continuation + ' continuation;  inflated '
+  + runs[0].boundary.inflated.counts.keyframe + ' keyframe / '
+  + runs[0].boundary.inflated.counts.continuation + ' continuation  (of ' + CFG.boundaries + ' each)');
 console.log('');
-console.log('scenario                        p50(ms)  p95(ms)  p99(ms)  max(ms)  spread  BUDGET p95x1.25');
+console.log('scenario                          n/run  p50(ms)  p95(ms)  p99(ms)  max(ms)  spread  BUDGET p95x1.25');
 for (const [name, s] of Object.entries(summary)) {
+  const label = name + (s.gated ? '' : ' [info]');
   console.log(
-    name.padEnd(30) + '  ' + ms(s.p50).padStart(7) + '  ' + ms(s.p95).padStart(7) + '  '
+    label.padEnd(32) + '  ' + String(s.samplesPerRun[0] ?? 0).padStart(5) + '  '
+    + ms(s.p50).padStart(7) + '  ' + ms(s.p95).padStart(7) + '  '
     + ms(s.p99).padStart(7) + '  ' + ms(s.max).padStart(7) + '  '
     + (s.spread == null ? '—' : s.spread.toFixed(2) + 'x').padStart(6) + '  '
-    + ms(s.budget).padStart(8) + (s.noisy ? '   ⚠ NOISY' : ''));
+    + (s.gated ? ms(s.budget).padStart(8) : '     n/a')
+    + (s.noisy ? '   ⚠ NOISY' : ''));
+}
+console.log('\naggregate gate (quantization-proof; p95 of the input rows spans ~3 clock ticks):');
+for (const [name, s] of Object.entries(summary)) {
+  if (s.agg == null) continue;
+  console.log('  ' + name.padEnd(32) + ' worst ' + ms(s.agg) + '  BUDGET ' + ms(s.aggBudget)
+    + '  ' + s.aggUnit);
 }
 console.log('\nper-run p95: ');
 for (const [name, s] of Object.entries(summary)) {
-  console.log('  ' + name.padEnd(30) + ' ' + s.perRunP95.map((v) => ms(v)).join('  '));
+  console.log('  ' + name.padEnd(32) + ' ' + (s.perRunP95.length ? s.perRunP95.map((v) => ms(v)).join('  ') : '—'));
 }
 console.log('\nchannel breakdown (run 1):');
 for (const [label, bt] of [['typing', runs[0].typing.byType], ['mousemove', runs[0].storm.byType]]) {
   for (const [k, s] of Object.entries(bt)) {
-    console.log('  ' + (label + '/' + k).padEnd(28) + ' n=' + String(s.n).padStart(5)
+    console.log('  ' + (label + ' ' + k).padEnd(30) + ' n=' + String(s.n).padStart(5)
       + '  p50 ' + ms(s.p50) + '  p95 ' + ms(s.p95) + '  total ' + ms(s.total));
   }
 }
-console.log('\nboundary split (worst run): startTrial p95 '
-  + ms(Math.max(...runs.map((r) => r.boundary.natural.startTrial.p95))) + ' ms natural / '
-  + ms(Math.max(...runs.map((r) => r.boundary.inflated.startTrial.p95))) + ' ms inflated');
+console.log('\nkeyframe boundary is all startTrial (worst run): startTrial p95 '
+  + ms(Math.max(...runs.map((r) => r.boundary.natural.keyframe.startTrial.p95 ?? 0))) + ' ms natural / '
+  + ms(Math.max(...runs.map((r) => r.boundary.inflated.keyframe.startTrial.p95 ?? 0))) + ' ms inflated;'
+  + ' endTrial p95 ' + ms(Math.max(...runs.map((r) => r.boundary.inflated.keyframe.endTrial.p95 ?? 0))) + ' ms');
 
 const anyNoisy = Object.values(summary).some((s) => s.noisy);
 if (anyNoisy) console.log('\n⚠ run-to-run p95 spread exceeds ' + CFG.noiseMax + 'x — treat as NOISY, do not record as budget.');
+if (problems.length) {
+  console.error('\n✖ COVERAGE FAILURE — these gated scenarios measured nothing:');
+  for (const p of problems) console.error('    ' + p);
+  console.error('  Numbers above are not a baseline. Fix the harness or the recorder first.');
+}
 
 // artifact ------------------------------------------------------------------
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 const outPath = CFG.out || join(repoRoot, 'tools', 'investigate', 'artifacts',
   'capture-perf-baseline-' + stamp + '.json');
 await mkdir(dirname(outPath), { recursive: true });
-await writeFile(outPath, JSON.stringify({ config: CFG, machine, summary, runs }, null, 2));
+await writeFile(outPath, JSON.stringify({ config: CFG, machine, summary, runs, problems }, null, 2));
 console.log('\nartifact: ' + outPath);
+
+if (problems.length) process.exit(1);
