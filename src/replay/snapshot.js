@@ -25,7 +25,9 @@
 // callers; a second opinion about what reaches the file is how a `dom.remove`
 // ends up naming a node the player never received.
 
-import { isRedacted, isInRedactedSubtree } from './redaction.js';
+import {
+  isRedacted, isInRedactedSubtree, markRedacted, isRedactionTainted,
+} from './redaction.js';
 
 var ELEMENT_NODE = 1;
 var TEXT_NODE = 3;
@@ -292,12 +294,18 @@ export function nearestEmittedAncestor(node, root, opts, detachedParent) {
 function emitNode(node, registry, opts, inheritedRedaction) {
   if (!isEmittableNode(node)) return null;
   var type = node.nodeType;
+  // Redaction travels WITH the node, not with its current position: a node
+  // this recording once stripped stays stripped even after it is moved out of
+  // the redacted subtree (redaction.js on the taint set). Every node emitted
+  // under redaction joins the set here, which is the one place that knows.
+  if (!inheritedRedaction && isRedactionTainted(node, opts.taint)) inheritedRedaction = true;
 
   if (type === TEXT_NODE || type === COMMENT_NODE) {
     // Structure survives redaction, content does not: the node keeps its id
     // and position with an empty string, so patches addressing it still land
     // and the reconstruction keeps the same shape. `text` stays present —
     // spec §4 types it as a required string.
+    if (inheritedRedaction) markRedacted(node, opts.taint);
     return {
       id: registry.idFor(node),
       kind: type === TEXT_NODE ? 'text' : 'comment',
@@ -309,6 +317,7 @@ function emitNode(node, registry, opts, inheritedRedaction) {
   if (isExcluded(node, opts)) return { id: id, kind: 'element', tag: tagName.toLowerCase() };
 
   var redacted = inheritedRedaction || isRedacted(node, opts.redactSelector);
+  if (redacted) markRedacted(node, opts.taint);
   var out = {
     id: id,
     kind: 'element',

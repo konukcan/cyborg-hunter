@@ -18,23 +18,44 @@
 //     the sibling at MUTATION time, which mixes two moments of the DOM's
 //     history in one patch — and happy-dom does not populate it at all.)
 //
+// Flush time is not enough on its own, because a record's correct patch also
+// depends on what the OTHER records in the batch did. Three things therefore
+// come from a PRE-SCAN of the whole batch before any patch is emitted:
+//   - the nodes each parent lost, so an exclusion collapse can remove the
+//     children the player actually holds rather than the ones still attached;
+//   - a per-node count of removals still to be processed, so `before` never
+//     names a sibling that is about to move;
+//   - the first `oldValue` per (element, attribute), so an exclusion toggle is
+//     decided against the pre-batch element rather than a half-applied one.
+// Exclusion transitions are then emitted BEFORE the record loop, which leaves
+// every element's exclusion state in the file equal to its flush-time state
+// for the rest of the batch — the property the rest of the mapping assumes.
+//
 // RETIRED from v1 (capture-dom.js:470-507), deliberately:
 //   - the one-childList-patch-per-target intra-batch dedup. It existed because
 //     every v1 childList patch re-serialized the target's FULL resulting
 //     children, so N appends to one container cost O(N²) of the participant's
-//     CPU. A `dom.add` carries only the inserted subtree, so N appends cost
-//     O(total inserted) — the storm guard now costs precision (dropping the
-//     2nd..Nth insertion's position) and buys nothing.
+//     CPU. A `dom.add` carries only the inserted subtree, and `before`
+//     resolution short-circuits the append run (see `noHeldFrom`), so the same
+//     batch costs O(total inserted) — the storm guard now costs precision
+//     (dropping the 2nd..Nth insertion's position) and buys nothing. The
+//     linear cost is test-pinned; a forward sibling walk per insertion is not
+//     free, and an earlier draft of this module reintroduced v1's O(N²) here.
 //   - the characterData→parent-childList fold. It existed because text nodes
 //     had no parser-stable address, so text changes had to be re-expressed as
 //     the parent's children. Node ids ARE that address: `dom.text` names the
 //     text node itself and carries nothing else.
+//
+// Known byte noise, correct but redundant: appending a node and then setting
+// its attributes in one batch emits `dom.attr` patches the freshly serialized
+// subtree already carries, and create-append-move emits add/remove/add where
+// one add would do. Both are idempotent for the player.
 
 import {
   serializeTree, isExcluded, nearestEmittedAncestor, isEmittableNode,
   carriesChildren, emittedAttrs, attrPatchValue, ATTR_WITHHELD,
 } from './snapshot.js';
-import { isInRedactedSubtree } from './redaction.js';
+import { isInRedactedSubtree, markRedacted, isRedactionTainted } from './redaction.js';
 
 var ELEMENT_NODE = 1;
 
@@ -60,15 +81,20 @@ export var MUTATION_OBSERVER_INIT = {
  * Map one observer callback's records to `dom.*` events.
  *
  * @param {Array} records  the batch, in the order the observer reported it
- * @param {object} ctx     {root, registry, t, keepBait?, redactSelector?}
+ * @param {object} ctx     {root, registry, t, keepBait?, redactSelector?, taint?}
  *                         `ctx` doubles as the serializer's options bag — same
  *                         keys, so exclusion and redaction cannot be answered
  *                         one way here and another way in the keyframe.
- * @returns {Array} events, in batch order, all stamped with the same `t`
+ * @returns {Array} events, all stamped with the same `t`
  *
  * One callback = one `t` (spec §7 forbids nothing finer, and the records of a
  * batch are a single task's worth of DOM change). Times are stamped raw; wire
  * rounding belongs to the serializer.
+ *
+ * Order within the batch is the observer's, with one exception: exclusion
+ * transitions lead. They describe the element as the player currently holds
+ * it, so running them first is what lets every later patch be read against the
+ * flush-time DOM.
  */
 export function mapMutations(records, ctx) {
   var out = [];
@@ -89,7 +115,23 @@ export function mapMutations(records, ctx) {
     // need to know.
     added: new Set(),
     removed: new Set(),
+    // Pre-scan results (see the header): parent → nodes it lost this batch,
+    // node → removals not yet processed, element → attribute → first oldValue.
+    removedFrom: new Map(),
+    pending: new Map(),
+    attrs: new Map(),
+    attrOrder: [],
+    // Elements whose exclusion state changed this batch, and the subset that
+    // was revealed: their later records are already accounted for.
+    transitioned: new Set(),
+    restored: new Set(),
+    // parent → the first child of a run that reaches the end of the child list
+    // holding nothing the player has. Makes an append run O(1) per insertion.
+    noHeldFrom: new Map(),
   };
+
+  prescan(records, state);
+  applyExclusionTransitions(state);
 
   for (var i = 0; i < records.length; i++) {
     var record = records[i];
@@ -99,6 +141,116 @@ export function mapMutations(records, ctx) {
     else if (record.type === 'characterData') mapCharacterData(record, state);
   }
   return out;
+}
+
+// One pass over the batch, before anything is emitted. Cheap (O(records) plus
+// the removed-node lists) and it is what makes the mapping batch-coherent.
+function prescan(records, state) {
+  for (var i = 0; i < records.length; i++) {
+    var record = records[i];
+    if (!record) continue;
+    if (record.type === 'childList') {
+      var removed = record.removedNodes || [];
+      if (!removed.length) continue;
+      var lost = state.removedFrom.get(record.target);
+      if (!lost) { lost = []; state.removedFrom.set(record.target, lost); }
+      for (var j = 0; j < removed.length; j++) {
+        lost.push(removed[j]);
+        state.pending.set(removed[j], (state.pending.get(removed[j]) || 0) + 1);
+      }
+    } else if (record.type === 'attributes' && record.target && record.attributeName) {
+      var perEl = state.attrs.get(record.target);
+      if (!perEl) {
+        perEl = new Map();
+        state.attrs.set(record.target, perEl);
+        state.attrOrder.push(record.target);
+      }
+      // Keyed by the name the attribute is SPELLED with on the element, so
+      // the pre-batch view lines up with `node.attributes` for namespaced
+      // attributes too (see qualifiedName).
+      var key = qualifiedName(record.target, record) || record.attributeName;
+      var seen = perEl.get(key);
+      if (seen) seen.count++;
+      else perEl.set(key, { first: record.oldValue, count: 1 });
+    }
+  }
+}
+
+// The value this attribute held before the batch: a string, or null for
+// absent. Unmutated attributes read straight from the DOM.
+//
+// A single record ending in ABSENCE is read as "it was there before", whatever
+// `oldValue` says: removeAttribute queues no record for an attribute that is
+// not there, and engines disagree about the old value of an empty-valued
+// attribute (Chromium says "", happy-dom says null). With TWO OR MORE records
+// that reasoning collapses — add-then-remove in one task ends absent having
+// started absent — so the first record's `oldValue` is used, which is the
+// exact pre-batch value.
+function preBatchValue(el, name, state) {
+  var perEl = state.attrs.get(el);
+  var seen = perEl && perEl.get(name);
+  var live = attrValue(el, name);
+  if (!seen) return live;
+  if (seen.count === 1 && live === null) return seen.first == null ? '' : seen.first;
+  return seen.first == null ? null : seen.first;
+}
+
+function attrValue(el, name) {
+  var attrs = el.attributes || [];
+  for (var i = 0; i < attrs.length; i++) {
+    if (attrs[i].name === name) return attrs[i].value;
+  }
+  return null;
+}
+
+// Was this element excluded before the batch? Answered by running the ONE
+// exclusion predicate over a reconstruction of the pre-batch element; a second
+// implementation of "is this excluded" is the drift the shared predicates
+// exist to prevent. `isExcluded` reads only nodeType, attribute names, and
+// `id`, so the reconstruction is cheap.
+function wasExcluded(el, state) {
+  var attrs = [];
+  var seen = {};
+  var live = el.attributes || [];
+  for (var i = 0; i < live.length; i++) {
+    var name = live[i].name;
+    seen[name] = true;
+    var value = preBatchValue(el, name, state);
+    if (value !== null) attrs.push({ name: name, value: value });
+  }
+  var perEl = state.attrs.get(el);
+  if (perEl) {
+    perEl.forEach(function (unused, name) {
+      if (seen[name]) return;                     // removed during the batch
+      var value = preBatchValue(el, name, state);
+      if (value !== null) attrs.push({ name: name, value: value });
+    });
+  }
+  var id = preBatchValue(el, 'id', state);
+  return isExcluded({
+    nodeType: ELEMENT_NODE, id: id == null ? '' : id, attributes: attrs,
+  }, state.opts);
+}
+
+// Exclusion transitions run BEFORE the record loop, once per element. Two
+// things follow. A placeholder being revealed is provably empty when its
+// children are appended, so nothing has to guess at positions inside it; and
+// an element transitions at most once, so a batch that touches the exclusion
+// attribute twice cannot emit the sequence twice.
+function applyExclusionTransitions(state) {
+  for (var i = 0; i < state.attrOrder.length; i++) {
+    var el = state.attrOrder[i];
+    if (!el || el.nodeType !== ELEMENT_NODE) continue;
+    if (nearestEmittedAncestor(el, state.root, state.opts) !== el) continue;
+    var id = state.registry.peekId(el);
+    if (id == null) continue;
+    var before = wasExcluded(el, state);
+    var now = isExcluded(el, state.opts);
+    if (before === now) continue;
+    if (now) collapseToPlaceholder(el, id, state);
+    else restoreFromPlaceholder(el, id, state);
+    state.transitioned.add(el);
+  }
 }
 
 // Removals before insertions: that is the order the DOM itself performs them
@@ -114,6 +266,17 @@ function mapChildList(record, state) {
 }
 
 function mapRemoved(node, oldParent, state) {
+  // This removal is no longer pending, whatever we decide to emit for it.
+  var left = (state.pending.get(node) || 0) - 1;
+  if (left > 0) state.pending.set(node, left);
+  else state.pending.delete(node);
+
+  // Already gone from the player's DOM and not re-added since.
+  if (state.removed.has(node)) return;
+  // The old parent was revealed earlier in this batch, and the reveal sent
+  // exactly the children it still had. This one was not among them.
+  if (state.restored.has(oldParent) && !state.added.has(node)) return;
+
   var id = state.registry.peekId(node);
   // Never numbered → never in the file. This is the add-and-remove-inside-one-
   // batch case: the insertion was skipped (the node is not attached at flush
@@ -154,76 +317,114 @@ function mapAdded(node, state) {
   });
   state.added.add(node);
   state.removed.delete(node);
+  noteHeld(node, state);
 }
 
 // The id the player should insert before, or null to append. Siblings the
-// player does not currently hold are skipped: a brand-new one (no id yet — its
-// own dom.add comes later in this batch) and one this batch removed (its
-// re-insertion, if any, comes later). Naming either would put a dangling
-// reference in the file, which strict validation cannot catch — it type-checks
-// `node` fields, it does not resolve them.
+// player does not currently hold are skipped, and each skip is a case where
+// naming the sibling would put a reference in the file that the player cannot
+// resolve — strict validation cannot catch that (it type-checks `node` fields,
+// it does not resolve them), and the fork's player turns it into a silently
+// dropped patch:
+//   - no id yet: a brand-new node whose own dom.add comes later in this batch;
+//   - a pending removal: a node this batch will move, still sitting in its old
+//     position at flush time;
+//   - already removed and not re-added.
+//
+// `noHeldFrom` is what keeps a mass append linear. Its invariant: from that
+// node to the end of the parent's children, the player holds nothing.
 function beforeId(node, state) {
-  for (var sib = node.nextSibling; sib; sib = sib.nextSibling) {
+  var start = node.nextSibling;
+  if (!start) return null;
+  var run = state.noHeldFrom.get(node.parentNode);
+  if (run !== undefined && (run === node || run === start)) return null;
+
+  for (var sib = start; sib; sib = sib.nextSibling) {
     if (state.removed.has(sib)) continue;
+    if (state.pending.get(sib) > 0) continue;
     var id = state.registry.peekId(sib);
     if (id == null) continue;
     if (nearestEmittedAncestor(sib, state.root, state.opts) !== sib) continue;
     return id;
   }
+  state.noHeldFrom.set(node.parentNode, start);
   return null;
+}
+
+// An emitted insertion makes `node` held, which can falsify the run recorded
+// for its parent. Two cases keep it: the node IS the run's head (the run now
+// starts one later), or the node sits immediately before the head (the run is
+// untouched, which is every step of an append loop). Anything else — an
+// insertion into the middle, or out of document order — drops the cache rather
+// than reason about positions.
+function noteHeld(node, state) {
+  var parent = node.parentNode;
+  var run = state.noHeldFrom.get(parent);
+  if (run === undefined) return;
+  if (run === node) {
+    if (node.nextSibling) state.noHeldFrom.set(parent, node.nextSibling);
+    else state.noHeldFrom.delete(parent);
+    return;
+  }
+  if (node.nextSibling === run) return;
+  state.noHeldFrom.delete(parent);
 }
 
 function mapAttributes(record, state) {
   var el = record.target;
   var name = record.attributeName;
   if (!el || el.nodeType !== ELEMENT_NODE || !name) return;
+  // The transition sequence already carried this element's complete final
+  // attribute state.
+  if (state.transitioned.has(el)) return;
   if (nearestEmittedAncestor(el, state.root, state.opts) !== el) return;
   var id = state.registry.peekId(el);
   if (id == null) return;
+  // A placeholder carries no attributes at all (spec §4). Reaching here means
+  // it was a placeholder before the batch too, since transitions are handled
+  // above.
+  if (isExcluded(el, state.opts)) return;
 
-  var now = isExcluded(el, state.opts);
-  var before = wasExcluded(el, record, state.opts);
-  // A placeholder carries no attributes at all (spec §4), so an attribute
-  // change on one has nothing to say — the transitions are the only exception.
-  if (before && now) return;
-  if (!before && now) { collapseToPlaceholder(el, id, state); return; }
-  if (before && !now) { restoreFromPlaceholder(el, id, state); return; }
+  // MutationRecord.attributeName is the LOCAL name, while the attribute is
+  // spelled with its prefix in `node.attributes` — so a namespaced attribute
+  // has to be re-qualified from the live element. A namespaced REMOVAL cannot
+  // be: the prefix left with the attribute, and emitting the bare local name
+  // would tell the player to remove a different attribute.
+  var spelled = qualifiedName(el, record);
+  if (spelled === null) return;
 
-  var value = attrPatchValue(
-    el, name, isInRedactedSubtree(el, state.opts.redactSelector));
-  if (value === ATTR_WITHHELD) return;
+  var redacted = isRedactedNow(el, state);
+  var value = attrPatchValue(el, spelled, redacted);
+  if (value === ATTR_WITHHELD) {
+    if (redacted) markRedacted(el, state.opts.taint);
+    return;
+  }
+  // Net effect: an attribute set and put back inside one batch changed
+  // nothing, and neither did a no-op set.
+  if (preBatchValue(el, spelled, state) === attrValue(el, spelled)) return;
+
   state.out.push({
-    type: 'dom.attr', t: state.t, node: id, name: name, value: value,
+    type: 'dom.attr', t: state.t, node: id, name: spelled, value: value,
   });
 }
 
-// Was this element excluded BEFORE the recorded attribute change? Answered by
-// running the one exclusion predicate over a view of the element with the
-// mutated attribute reverted — a second implementation of "is this excluded"
-// is exactly the drift the shared predicates exist to prevent. `isExcluded`
-// reads only nodeType, the attribute names, and `id`, so the view is cheap.
-function wasExcluded(el, record, opts) {
-  var name = record.attributeName;
-  var old = record.oldValue;
-  var attrs = [];
-  var present = false;
-  var live = el.attributes || [];
-  for (var i = 0; i < live.length; i++) {
-    if (live[i].name === name) { present = true; continue; }
-    attrs.push({ name: live[i].name, value: live[i].value });
+function qualifiedName(el, record) {
+  var ns = record.attributeNamespace;
+  if (!ns) return record.attributeName;
+  var attrs = el.attributes || [];
+  for (var i = 0; i < attrs.length; i++) {
+    if (attrs[i].localName === record.attributeName && attrs[i].namespaceURI === ns) {
+      return attrs[i].name;
+    }
   }
-  // An `attributes` record fires only on a real change, so an attribute that
-  // is absent NOW was present before — whatever `oldValue` says. That reading
-  // is what makes the un-exclusion direction robust: an empty-valued
-  // `data-record-exclude` reports `oldValue: ""` in a browser and `null` in
-  // happy-dom, and presence (not value) is what the exclusion predicate reads.
-  if (!present) attrs.push({ name: name, value: old == null ? '' : old });
-  else if (old !== null && old !== undefined) attrs.push({ name: name, value: old });
-  return isExcluded({
-    nodeType: ELEMENT_NODE,
-    id: name === 'id' ? (old == null ? '' : old) : el.id,
-    attributes: attrs,
-  }, opts);
+  return null;
+}
+
+// Redacted by position, or by history: a node whose content this recording has
+// already withheld keeps withholding it after a move (redaction.js).
+function isRedactedNow(node, state) {
+  return isInRedactedSubtree(node, state.opts.redactSelector) ||
+    isRedactionTainted(node, state.opts.taint);
 }
 
 // Exclusion attribute ADDED to a live element (spec §4): its children leave
@@ -236,16 +437,16 @@ function collapseToPlaceholder(el, id, state) {
   // already says otherwise, which is why the flag is passed rather than looked
   // up.
   if (carriesChildren(el, false)) {
+    // The children the PLAYER holds are the pre-batch ones, which is the
+    // flush-time list PLUS whatever the same batch detached. Those detached
+    // children get no patch of their own: by the time their own record is
+    // read, the element reads as excluded and the removal is suppressed.
     var kids = el.childNodes || [];
-    for (var i = 0; i < kids.length; i++) {
-      var kidId = state.registry.peekId(kids[i]);
-      if (kidId == null || !isEmittableNode(kids[i])) continue;
-      state.out.push({ type: 'dom.remove', t: state.t, node: kidId });
-      state.removed.add(kids[i]);
-      state.added.delete(kids[i]);
-    }
+    for (var i = 0; i < kids.length; i++) removeCollapsedChild(kids[i], state);
+    var lost = state.removedFrom.get(el) || [];
+    for (var j = 0; j < lost.length; j++) removeCollapsedChild(lost[j], state);
   }
-  var attrs = emittedAttrs(el, isInRedactedSubtree(el, state.opts.redactSelector));
+  var attrs = emittedAttrs(el, isRedactedNow(el, state));
   for (var name in attrs) {
     if (!Object.prototype.hasOwnProperty.call(attrs, name)) continue;
     state.out.push({ type: 'dom.attr', t: state.t, node: id, name: name, value: null });
@@ -260,27 +461,44 @@ function collapseToPlaceholder(el, id, state) {
 // children were reserved numbers at the keyframe and emitted under none of
 // them. Reusing those reservations keeps the span monotonic and makes a
 // hide/reveal cycle idempotent — nothing is renumbered, no id is spent twice.
+function removeCollapsedChild(child, state) {
+  if (state.removed.has(child)) return;
+  var id = state.registry.peekId(child);
+  if (id == null || !isEmittableNode(child)) return;
+  state.out.push({ type: 'dom.remove', t: state.t, node: id });
+  state.removed.add(child);
+  state.added.delete(child);
+}
+
 function restoreFromPlaceholder(el, id, state) {
-  var attrs = emittedAttrs(el, isInRedactedSubtree(el, state.opts.redactSelector));
+  var attrs = emittedAttrs(el, isRedactedNow(el, state));
   for (var name in attrs) {
     if (!Object.prototype.hasOwnProperty.call(attrs, name)) continue;
     state.out.push({
       type: 'dom.attr', t: state.t, node: id, name: name, value: attrs[name],
     });
   }
+  state.restored.add(el);
   if (!carriesChildren(el, false)) return;
   var kids = el.childNodes || [];
   for (var i = 0; i < kids.length; i++) {
-    var tree = serializeTree(kids[i], state.registry, state.opts);
+    var kid = kids[i];
+    // Emittability first: serializing a script here would number it on the way
+    // to discarding it, which the insertion path deliberately avoids.
+    if (!isEmittableNode(kid) || state.added.has(kid)) continue;
+    var tree = serializeTree(kid, state.registry, state.opts);
     if (!tree) continue;
-    // Appended in document order, so `before: null` reproduces that order in
-    // an element the player currently holds as empty.
+    // The player holds this placeholder EMPTY — transitions run before any
+    // insertion is mapped — so appending in document order reproduces it.
     state.out.push({
       type: 'dom.add', t: state.t, parent: id, before: null, node: tree,
     });
-    state.added.add(kids[i]);
-    state.removed.delete(kids[i]);
+    state.added.add(kid);
+    state.removed.delete(kid);
   }
+  // The children just became held; nothing may reuse a run recorded for this
+  // parent (none can exist yet, but the cache and its invariant stay in sync).
+  state.noHeldFrom.delete(el);
 }
 
 function mapCharacterData(record, state) {
@@ -291,7 +509,8 @@ function mapCharacterData(record, state) {
   // Spec §8: a redacted subtree's content must not appear anywhere in the
   // file. The keyframe already wrote this node as an empty string, so
   // suppressing the patch leaves the player exactly where the snapshot put it.
-  if (isInRedactedSubtree(node, state.opts.redactSelector)) return;
+  // Marking it keeps that true after the node is moved somewhere unredacted.
+  if (isRedactedNow(node, state)) { markRedacted(node, state.opts.taint); return; }
 
   state.out.push({
     type: 'dom.text', t: state.t, node: id,

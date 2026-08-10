@@ -23,6 +23,40 @@
 
 var ELEMENT_NODE = 1;
 
+// Nodes whose content this recording has ever withheld. Redaction is a
+// property of the FILE (spec §8), and the DOM only knows the present: a node
+// that spent the trial inside a redacted container and is then moved OUT of
+// it would serialize its accumulated content into the very next `dom.add`,
+// putting in the file exactly the text the keyframe refused. Membership is
+// therefore permanent for the life of the page, not scoped to a keyframe
+// span: a whole-file leak scan reads every segment.
+//
+// A module-level WeakSet, so the protection is on by default and no wiring
+// step can forget it. It holds no node alive, and it is keyed by node
+// IDENTITY, so two recorders on one page (or two tests in one process) can
+// only ever over-redact each other's nodes, never under-redact. Callers that
+// want their own scope may pass one in.
+var defaultTaint = new WeakSet();
+
+function taintSet(taint) {
+  return taint && typeof taint.has === 'function' ? taint : defaultTaint;
+}
+
+/**
+ * Record that this node's content was withheld, so every later channel keeps
+ * withholding it. Called wherever the withholding happens: the snapshot walk
+ * stripping a subtree, a suppressed `dom.text`, a withheld `value` patch.
+ */
+export function markRedacted(node, taint) {
+  if (node) taintSet(taint).add(node);
+  return node;
+}
+
+/** True when this node's content has ever been withheld (see markRedacted). */
+export function isRedactionTainted(node, taint) {
+  return !!node && taintSet(taint).has(node);
+}
+
 function hasTypePasswordAttr(el) {
   var attrs = el.attributes || [];
   for (var i = 0; i < attrs.length; i++) {
