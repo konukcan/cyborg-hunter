@@ -20,16 +20,17 @@
 // "whenever any of that state is non-default"): default is the state a player
 // reaches by rebuilding the tree and touching nothing.
 //
-// **A seed may only name nodes the file contains.** Every entry is a node id,
-// and an id the player never received is worse than a missing seed — it either
-// does nothing or lands on the wrong node. Membership is decided by
-// `nearestEmittedAncestor` (snapshot.js), the same predicate the snapshot walk
-// and the mutation mapper branch on, rather than by a second opinion: a node
-// is seedable when the nearest ancestor the file holds IS the node itself.
-// `registry.peekId` answers a different question ("was it numbered"), and
-// numbered-but-never-emitted is a whole population here — scrollers behind an
-// exclusion placeholder, controls inside an iframe, anything outside the
-// observed root.
+// **A seed may only name nodes the file contains, and never a placeholder.**
+// Every entry is a node id, and an id the player never received is worse than a
+// missing seed: it either does nothing or lands on the wrong node. The span's
+// delivery model (delivery.js) is the file's own record of what went into it,
+// so it answers this directly — no re-derivation from a live DOM that may have
+// moved since the keyframe walk. Re-deriving was the first version of this
+// rule ("is the nearest emitted ancestor this node"), and it broke twice: it
+// admitted a node whose exclusion attribute came off after the walk but before
+// the observer flush, and it admitted the EXCLUSION PLACEHOLDER ITSELF, whose
+// state is precisely what spec §4 withholds. Hence two conditions, delivered
+// and not excluded, and `registry.peekId` only for the id.
 //
 // Redaction (spec §8) subtracts from all four fields rather than emitting
 // redacted variants: §3's interface has no room for a redacted entry, and the
@@ -40,7 +41,7 @@
 import {
   isInRedactedSubtree, isRedactionTainted, markRedacted,
 } from './redaction.js';
-import { nearestEmittedAncestor } from './snapshot.js';
+import { isExcluded } from './snapshot.js';
 
 var MEDIA_SELECTOR = 'video, audio';
 var FORM_SELECTOR = 'input, textarea, select';
@@ -56,12 +57,14 @@ function round(v) { return Math.round(v); }
 // keeps a 17-digit float out of the wire.
 function r3(v) { return Math.round(v * 1000) / 1000; }
 
-function hasAttr(el, name) {
-  if (typeof el.hasAttribute === 'function') return el.hasAttribute(name);
+function attrOf(el, name) {
+  if (typeof el.getAttribute === 'function') return el.getAttribute(name);
   var attrs = el.attributes || [];
-  for (var i = 0; i < attrs.length; i++) if (attrs[i].name === name) return true;
-  return false;
+  for (var i = 0; i < attrs.length; i++) if (attrs[i].name === name) return attrs[i].value;
+  return null;
 }
+
+function hasAttr(el, name) { return attrOf(el, name) !== null; }
 
 // Elements of interest under the observed root, in document order. The root
 // itself counts: a recording whose observed root IS the scrollable pane or the
@@ -77,12 +80,23 @@ function collect(root, selector) {
   return out;
 }
 
-// The id to seed this node under, or null when the file does not contain it.
-// Both halves are load-bearing: nearestEmittedAncestor rejects nodes the
-// serializer skipped or placeheld, peekId rejects nodes never numbered at all
-// (and is the id itself).
-function seedableId(node, root, span, opts) {
-  if (nearestEmittedAncestor(node, root, opts) !== node) return null;
+// The id to seed this node under, or null when the seed may not name it.
+//
+// `holds` is what the file contains, from the file's own record: it rejects
+// nodes outside the observed root, scripts, iframe and shadow content,
+// everything behind a placeholder, and anything numbered but never emitted —
+// all in one lookup, and without asking the live DOM, which can have moved
+// since the walk that produced the file.
+//
+// `isExcluded` is the second condition rather than a consequence of the first,
+// because a placeholder IS delivered: spec §4 puts its `id`, `kind` and `tag`
+// in the tree and withholds everything else. Its scroll offsets, media
+// position and IDL value are that everything else. CH ships this exact shape
+// (extension-guard-honeypot.js stamps the marker on the bait INPUT), and
+// `keepBait` still turns the legacy markers off here, as everywhere.
+function seedableId(node, span, opts) {
+  if (!span.delivery.holds(node)) return null;
+  if (isExcluded(node, opts)) return null;
   return span.registry.peekId(node);
 }
 
@@ -107,15 +121,16 @@ function elementScroll(root, span, opts) {
   var scrolled = opts.scrolled;
   if (!scrolled || typeof scrolled.forEach !== 'function') return out;
   scrolled.forEach(function (el) {
-    // No connectedness check: an element removed from the document is no
-    // longer a descendant of the observed root, so the seedable-ness rule
-    // below already drops it — and asking twice would ALSO drop the case where
-    // the observed root itself is detached, whose tree the keyframe did
-    // serialize and whose scroll offsets therefore do belong in the seed.
-    // Keeping the Set from growing is the tracker's job (capture-trace.js).
+    // No connectedness check: what belongs in the seed is what the FILE holds,
+    // which `seedableId` reads off the span's own record. A node the keyframe
+    // emitted stays addressable in the player after the page drops it, and the
+    // removal reaches the player as the `dom.remove` the observer is about to
+    // emit. Keeping the Set from growing is the tracker's job
+    // (capture-trace.js), and its prune of detached elements is why one rarely
+    // reaches this loop at all.
     if (!el) return;
     if (isWithheld(el, opts)) return;
-    var id = seedableId(el, root, span, opts);
+    var id = seedableId(el, span, opts);
     if (id === null) return;
     var x = round(el.scrollLeft || 0);
     var y = round(el.scrollTop || 0);
@@ -131,7 +146,7 @@ function media(root, span, opts) {
   for (var i = 0; i < els.length; i++) {
     var el = els[i];
     if (isWithheld(el, opts)) continue;
-    var id = seedableId(el, root, span, opts);
+    var id = seedableId(el, span, opts);
     if (id === null) continue;
     var time = typeof el.currentTime === 'number' && isFinite(el.currentTime)
       ? r3(el.currentTime) : 0;
@@ -156,10 +171,23 @@ function optionValue(option) {
   return String(option.textContent || '');
 }
 
+// Display size, which decides whether the browser auto-selects anything: HTML's
+// "ask for a reset" algorithm picks the first non-disabled option only for a
+// single-select showing one row. Browsers return the attribute value from
+// `el.size`, or 0 when the attribute is absent; happy-dom leaves it undefined
+// even with the attribute present, hence the attribute fallback.
+function displaySize(el) {
+  if (typeof el.size === 'number' && el.size > 0) return el.size;
+  var parsed = parseInt(attrOf(el, 'size'), 10);
+  return parsed > 0 ? parsed : 1;
+}
+
 // Selected option values, and the selection the reconstruction would show on
-// its own: options carrying the `selected` ATTRIBUTE, or — for a single-select
-// where none does — the first non-disabled option, which is what the browser
-// selects for an untouched dropdown.
+// its own: options carrying the `selected` ATTRIBUTE, or, for a one-row
+// single-select where none does, the first non-disabled option. A list box
+// (`size` above 1) and a `multiple` select both start with nothing selected, so
+// inventing a default for them would report divergence on an untouched page —
+// and one junk entry defeats the whole-object omission.
 function selectDivergence(el) {
   var options = el.options ? Array.prototype.slice.call(el.options) : [];
   var current = [];
@@ -171,7 +199,9 @@ function selectDivergence(el) {
     if (hasAttr(option, 'selected')) dflt.push(optionValue(option));
     if (firstEnabled === null && !option.disabled) firstEnabled = option;
   }
-  if (!el.multiple && dflt.length === 0 && firstEnabled) dflt.push(optionValue(firstEnabled));
+  if (!el.multiple && displaySize(el) === 1 && dflt.length === 0 && firstEnabled) {
+    dflt.push(optionValue(firstEnabled));
+  }
   if (current.length === dflt.length && current.every(function (v, i2) { return v === dflt[i2]; })) {
     return null;
   }
@@ -204,7 +234,7 @@ function form(root, span, opts) {
     // walk reaches through isInRedactedSubtree(el) — the element itself is the
     // first link of that ancestor chain.
     if (isWithheld(el, opts)) continue;
-    var id = seedableId(el, root, span, opts);
+    var id = seedableId(el, span, opts);
     if (id === null) continue;
     var state = formDivergence(el);
     if (!state) continue;
@@ -219,7 +249,9 @@ function form(root, span, opts) {
  *
  * CALL ORDER: after the keyframe's `serializeTree` on the SAME span. The seed
  * names nodes by the ids that walk assigned, and asks the span what the file
- * contains; taken before the walk it would seed nothing at all.
+ * contains. Taken before the walk it returns null, enforced below rather than
+ * left to the docblock: without the guard the window scroll still reads, so a
+ * wiring slip produces a plausible-looking seed carrying no state at all.
  *
  * @param {object} root   the observed root, as serialized
  * @param {object} span   the capture span (span.js) the keyframe was taken on
@@ -240,6 +272,9 @@ function form(root, span, opts) {
 export function buildInitialState(root, span, opts) {
   opts = opts || {};
   if (!root || !span) return null;
+  // Numbered nothing means walked nothing: there are no ids to name, so there
+  // is no seed to give. (A walked span always numbers at least the root.)
+  if (span.registry.count === 0) return null;
   var win = opts.win !== undefined
     ? opts.win : (typeof window !== 'undefined' ? window : null);
   var scroll = {

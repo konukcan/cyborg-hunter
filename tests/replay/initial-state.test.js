@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 
 import { buildInitialState } from '../../src/replay/initial-state.js';
-import { serializeTree } from '../../src/replay/snapshot.js';
+import { serializeTree, isExcluded } from '../../src/replay/snapshot.js';
 import { createSpan } from '../../src/replay/span.js';
 import { markRedacted } from '../../src/replay/redaction.js';
 import { createRecorder } from '../../src/replay/recorder.js';
@@ -161,18 +161,17 @@ describe('buildInitialState — element_scroll', () => {
     assert.deepStrictEqual(state.element_scroll, []);
   });
 
-  it('skips an element that has left the document', () => {
-    // Handled by the same seedable-ness rule as the cases below: a removed
-    // element is no longer a descendant of the observed root, so the file does
-    // not contain it. (Keeping the tracker's Set from growing is a separate
-    // job, pinned in the tracker tests.)
+  it('skips an element that was already gone when the keyframe was taken', () => {
+    // Never walked, so never delivered: the file does not contain it, and an
+    // id for it would name nothing in the player. (Keeping the tracker's Set
+    // from growing is a separate job, pinned in the tracker tests.)
     const { root, doc } = build(
       '<div id="stage"><div id="list">a</div><div id="pane">b</div></div>');
     const list = doc.getElementById('list');
     const pane = doc.getElementById('pane');
     list.scrollTop = 40; pane.scrollTop = 12;
-    const { span } = keyframe(root);
     list.remove();
+    const { span } = keyframe(root);
 
     const state = buildInitialState(root, span, {
       win: { scrollX: 0, scrollY: 0 }, scrolled: new Set([list, pane]),
@@ -180,6 +179,26 @@ describe('buildInitialState — element_scroll', () => {
 
     assert.deepStrictEqual(state.element_scroll,
       [{ node: span.registry.peekId(pane), x: 0, y: 12 }]);
+  });
+
+  it('still seeds an element the keyframe contained but the page has since dropped', () => {
+    // The file, not the live DOM, decides. The player receives this node in
+    // initial_dom, so the seed can address it; the removal reaches the player
+    // as the dom.remove the observer is about to emit. (A real browser reports
+    // 0/0 for a detached element's offsets, so in practice this seeds nothing
+    // — the test pins the PREDICATE, with offsets happy-dom keeps.)
+    const { root, doc } = build('<div id="stage"><div id="list">a</div></div>');
+    const list = doc.getElementById('list');
+    list.scrollTop = 40;
+    const { span } = keyframe(root);
+    list.remove();
+
+    const state = buildInitialState(root, span, {
+      win: { scrollX: 0, scrollY: 0 }, scrolled: new Set([list]),
+    });
+
+    assert.deepStrictEqual(state.element_scroll,
+      [{ node: span.registry.peekId(list), x: 0, y: 40 }]);
   });
 
   it('skips an element outside the observed root', () => {
@@ -235,14 +254,18 @@ describe('buildInitialState — element_scroll', () => {
     assert.deepStrictEqual(state.element_scroll, []);
   });
 
-  it('agrees with the span delivery model about what the file holds', () => {
-    // Two independent answers to "is this node in the file" would eventually
-    // disagree; this pins them together across the interesting shapes.
+  it('seeds exactly the delivered, non-placeholder nodes', () => {
+    // The seed's rule, stated as an oracle over the span's own record: the
+    // file holds it AND it is not a placeholder. `holds` alone is the wrong
+    // oracle — a placeholder IS in the file, and its state is what spec §4
+    // withholds — which is why an earlier version of this test agreed with a
+    // leaking implementation.
     const { root, doc } = build(
       '<div id="stage"><div id="ok">a</div><script>x()</script>' +
       '<div data-record-exclude><div id="hidden">b</div></div>' +
-      '<iframe><div id="framed">c</div></iframe></div>');
-    const nodes = ['ok', 'hidden', 'framed'].map(id => doc.getElementById(id))
+      '<div id="self" data-record-exclude>c</div>' +
+      '<iframe><div id="framed">d</div></iframe></div>');
+    const nodes = ['ok', 'hidden', 'self', 'framed'].map(id => doc.getElementById(id))
       .filter(Boolean);
     nodes.forEach((n) => { n.scrollTop = 15; });
     const { span } = keyframe(root);
@@ -254,8 +277,111 @@ describe('buildInitialState — element_scroll', () => {
     const seeded = new Set(state ? state.element_scroll.map(e => e.node) : []);
     for (const node of nodes) {
       assert.strictEqual(seeded.has(span.registry.peekId(node)),
-        span.delivery.holds(node), 'disagreement for ' + node.id);
+        span.delivery.holds(node) && !isExcluded(node, {}),
+        'disagreement for ' + node.id);
     }
+    assert.deepStrictEqual([...seeded], [span.registry.peekId(nodes[0])]);
+  });
+});
+
+describe('buildInitialState — exclusion floor (spec §4)', () => {
+  // The marker sits ON the control here, not on an ancestor. That is the shape
+  // CH ships (extension-guard-honeypot.js stamps data-ch-role on the bait
+  // INPUT itself) and the shape a researcher writes for a sensitive field, and
+  // it is the one an "is the nearest emitted ancestor this node" rule admits:
+  // the placeholder IS the emitted node. Spec §4 says its attributes, children
+  // and content do not appear, so its IDL state must not either.
+
+  it('never seeds a control carrying the exclusion attribute itself', () => {
+    const { root, doc } = build(
+      '<div id="stage"><input id="bait" data-record-exclude type="text"></div>');
+    doc.getElementById('bait').value = SENTINEL;
+    const { span, tree } = keyframe(root);
+
+    const state = buildInitialState(root, span, { win: { scrollX: 0, scrollY: 0 } });
+
+    assert.deepStrictEqual(tree.children[0], { id: 2, kind: 'element', tag: 'input' });
+    assert.strictEqual(state, null);
+  });
+
+  it('never seeds the shipped honeypot bait input (legacy marker, on the control)', () => {
+    const { root, doc } = build(
+      '<div id="stage"><input id="fg-ai-bait-input" data-ch-role="honeypot" type="text"></div>');
+    doc.getElementById('fg-ai-bait-input').value = SENTINEL;
+    const { span } = keyframe(root);
+
+    const state = buildInitialState(root, span, { win: { scrollX: 0, scrollY: 0 } });
+
+    assert.strictEqual(state, null);
+  });
+
+  it('seeds the bait input again under keepBait, which turns the marker off', () => {
+    // keepBait is the v1 analysis override, and it makes the bait an ordinary
+    // element: the snapshot emits its attrs and children, so the seed follows.
+    const { root, doc } = build(
+      '<div id="stage"><input id="bait" data-ch-role="honeypot" type="text"></div>');
+    doc.getElementById('bait').value = 'typed-by-an-agent';
+    const { span } = keyframe(root, { keepBait: true });
+
+    const state = buildInitialState(root, span, {
+      win: { scrollX: 0, scrollY: 0 }, keepBait: true,
+    });
+
+    assert.deepStrictEqual(state.form, [{ node: 2, value: 'typed-by-an-agent' }]);
+  });
+
+  it('never seeds an excluded select, media element, or scroller', () => {
+    const { root, doc } = build(
+      '<div id="stage">' +
+      '<select id="sel" data-record-exclude><option value="one">1</option>' +
+      '<option value="SECRET">2</option></select>' +
+      '<video id="vid" data-record-exclude src="a.mp4"></video>' +
+      '<div id="pane" data-record-exclude>deep</div>' +
+      '</div>');
+    doc.getElementById('sel').options[1].selected = true;
+    doc.getElementById('vid').currentTime = 42.5;
+    const pane = doc.getElementById('pane');
+    pane.scrollTop = 250;
+    const { span } = keyframe(root);
+
+    const state = buildInitialState(root, span, {
+      win: { scrollX: 0, scrollY: 0 }, scrolled: new Set([pane]),
+    });
+
+    assert.strictEqual(state, null);
+  });
+
+  it('seeds nothing for a node the file never received (reveal before the observer flush)', () => {
+    // Task 6/8 may seed outside a keyframe. The live DOM then says this input
+    // is an ordinary child of an ordinary div, while the file still holds the
+    // placeholder and has never carried the input at all.
+    const { root, doc } = build(
+      '<div id="stage"><div id="ex" data-record-exclude>' +
+      '<input id="in" type="text"></div></div>');
+    doc.getElementById('in').value = SENTINEL;
+    const { span } = keyframe(root);
+
+    doc.getElementById('ex').removeAttribute('data-record-exclude');
+    const state = buildInitialState(root, span, { win: { scrollX: 0, scrollY: 0 } });
+
+    assert.notStrictEqual(span.registry.peekId(doc.getElementById('in')), null,
+      'numbered by the unconditional walk');
+    assert.strictEqual(state, null);
+  });
+});
+
+describe('buildInitialState — call order', () => {
+  it('returns null when the span was never walked', () => {
+    // A Task 6 wiring slip (seed before serializeTree) must not produce a
+    // plausible-looking, state-less seed: the ids it would name do not exist
+    // yet, so the only honest answer is no seed at all.
+    const { root, doc } = build('<div id="stage"><input id="a" type="text"></div>');
+    doc.getElementById('a').value = 'typed';
+    const span = createSpan();
+
+    const state = buildInitialState(root, span, { win: { scrollX: 0, scrollY: 220 } });
+
+    assert.strictEqual(state, null);
   });
 });
 
@@ -357,6 +483,35 @@ describe('buildInitialState — form', () => {
     ]);
   });
 
+  it('leaves an untouched list-box select alone (display size > 1 selects nothing)', () => {
+    // HTML auto-selects the first non-disabled option only when the display
+    // size is 1. A size="3" select starts with nothing selected, so inventing
+    // a first-option default reports divergence for an untouched page — and
+    // one junk entry defeats the whole-object omission.
+    const { root } = build(
+      '<div id="stage">' +
+      '<select id="sized" size="3"><option value="a">a</option><option value="b">b</option></select>' +
+      '<select id="multi" multiple><option value="p">p</option><option value="q">q</option></select>' +
+      '</div>');
+    const { span } = keyframe(root);
+
+    const state = buildInitialState(root, span, { win: { scrollX: 0, scrollY: 0 } });
+
+    assert.strictEqual(state, null);
+  });
+
+  it('seeds a list-box select the participant did choose in', () => {
+    const { root, doc } = build(
+      '<div id="stage"><select id="sized" size="3">' +
+      '<option value="a">a</option><option value="b">b</option></select></div>');
+    doc.getElementById('sized').options[1].selected = true;
+    const { span } = keyframe(root);
+
+    const state = buildInitialState(root, span, { win: { scrollX: 0, scrollY: 0 } });
+
+    assert.deepStrictEqual(state.form, [{ node: 2, selected: ['b'] }]);
+  });
+
   it('never records a password value, with or without a redaction selector', () => {
     const { root, doc } = build(
       '<div id="stage"><input id="pw" type="password"></div>');
@@ -434,10 +589,11 @@ describe('buildInitialState — redaction leak scan (spec §8)', () => {
       '<input id="pw" type="password">' +
       '<div data-ch-redact><textarea id="notes"></textarea><input id="inner" type="text"></div>' +
       '<div data-record-exclude><input id="bait" type="text"></div>' +
+      '<input id="selfbait" data-record-exclude type="text">' +
       '<input id="tainted" type="text">' +
       '<input id="open" type="text">' +
       '</div>');
-    for (const id of ['pw', 'notes', 'inner', 'bait', 'tainted']) {
+    for (const id of ['pw', 'notes', 'inner', 'bait', 'selfbait', 'tainted']) {
       doc.getElementById(id).value = SENTINEL + '-' + id;
     }
     doc.getElementById('open').value = 'kept';
