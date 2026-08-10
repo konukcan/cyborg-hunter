@@ -17,6 +17,13 @@
 // In every case the registry still NUMBERS what is not emitted (assignTree is
 // unconditional), so ids stay stable and a later lookup of a hidden node
 // resolves — see node-registry.js on "numbered but never emitted".
+//
+// Which is why the emission rules are not private to the walk: `emitNode`
+// branches on `isEmittableNode` / `carriesChildren`, and both — plus
+// `nearestEmittedAncestor`, which composes them — are exported for the
+// mutation mapper and, later, event-target resolution. One predicate, three
+// callers; a second opinion about what reaches the file is how a `dom.remove`
+// ends up naming a node the player never received.
 
 import { isRedacted, isInRedactedSubtree } from './redaction.js';
 
@@ -118,44 +125,172 @@ function mediaSrc(node) {
   return typeof src === 'string' && src ? src : null;
 }
 
+// Does a snapshot of this element carry this attribute at all? Split out of
+// buildAttrs so the mutation mapper (Task 3) reaches the same verdict for a
+// `dom.attr` patch: a patch carrying what the keyframe refuses would leak the
+// same content one mutation later.
+function isEmittedAttr(tagName, name, redacted) {
+  if (!isSerializableAttr(name)) return false;
+  // `srcdoc` is a whole HTML document inlined in an attribute, scripts
+  // included. Frame content never replays (spec §13), so it buys nothing,
+  // and carrying it would make the recording a transport for markup v1 never
+  // shipped (v1 swapped the iframe for a bare styled span). Same principle
+  // as the on* strip above: a recording gets opened by other tools too.
+  if (name === 'srcdoc' && tagName === 'IFRAME') return false;
+  // `value` is the one attribute that routinely carries participant-ENTERED
+  // content, which is what spec §8 redacts; the rest are author-written page
+  // content the recording exists to reconstruct, and stripping them all
+  // would leave an unrenderable box where the field was. Known residual
+  // (test-pinned in snapshot.test.js and mutations.test.js): a page that
+  // mirrors typed content into some other attribute — a data-* attribute,
+  // title, aria-label — leaks it here. Widening the strip is a spec question,
+  // not a silent fix.
+  if (name === 'value' && redacted) return false;
+  return true;
+}
+
+// The value a snapshot carries for an attribute it does emit. Images prefer
+// the resolved `src` PROPERTY: reconstruction happens in a document with a
+// different base URL, where the relative stimulus path a page author wrote
+// resolves to nothing.
+function emittedAttrValue(node, tagName, name, raw) {
+  if (name === 'src' && tagName === 'IMG' &&
+      typeof node.src === 'string' && node.src) return node.src;
+  return String(raw);
+}
+
 function buildAttrs(node, tagName, redacted) {
   var out = {};
-  // Images: prefer the resolved `src` property. Reconstruction happens in a
-  // document with a different base URL, where the relative stimulus path a
-  // page author wrote resolves to nothing.
-  var srcOverride = (tagName === 'IMG' && typeof node.src === 'string' && node.src)
-    ? node.src : null;
   var wroteSrc = false;
 
   var attrs = node.attributes || [];
   for (var i = 0; i < attrs.length; i++) {
     var name = attrs[i].name;
-    var value = attrs[i].value;
-    if (!isSerializableAttr(name)) continue;
-    // `srcdoc` is a whole HTML document inlined in an attribute, scripts
-    // included. Frame content never replays (spec §13), so it buys nothing,
-    // and carrying it would make the recording a transport for markup v1 never
-    // shipped (v1 swapped the iframe for a bare styled span). Same principle
-    // as the on* strip above: a recording gets opened by other tools too.
-    if (name === 'srcdoc' && tagName === 'IFRAME') continue;
-    // `value` is the one attribute that routinely carries participant-ENTERED
-    // content, which is what spec §8 redacts; the rest are author-written page
-    // content the recording exists to reconstruct, and stripping them all
-    // would leave an unrenderable box where the field was. Known residual
-    // (test-pinned in snapshot.test.js): a page that mirrors typed content
-    // into some other attribute — a data-* attribute, title, aria-label —
-    // leaks it here. Widening the strip is a spec question, not a silent fix.
-    if (name === 'value' && redacted) continue;
-    if (name === 'src' && srcOverride) { value = srcOverride; wroteSrc = true; }
-    out[name] = String(value);
+    if (!isEmittedAttr(tagName, name, redacted)) continue;
+    out[name] = emittedAttrValue(node, tagName, name, attrs[i].value);
+    if (name === 'src') wroteSrc = true;
   }
-  if (srcOverride && !wroteSrc) out.src = srcOverride;
+  if (!wroteSrc && tagName === 'IMG' && typeof node.src === 'string' && node.src) {
+    out.src = node.src;
+  }
   if (node.shadowRoot) out[SHADOW_FLAG_ATTR] = '';
   return out;
 }
 
+/**
+ * Sentinel: this attribute never reaches the file, so there is no patch to
+ * emit for it — distinct from a `null` VALUE, which is spec §5.1's encoding
+ * for "the attribute was removed".
+ */
+export var ATTR_WITHHELD = { withheld: true };
+
+/**
+ * The `value` a `dom.attr` patch should carry for this attribute right now,
+ * or ATTR_WITHHELD when a snapshot would not carry the attribute at all.
+ *
+ * @param {object} node      the mutated element
+ * @param {string} name      the mutated attribute
+ * @param {boolean} redacted whether the element sits in a redacted subtree
+ */
+export function attrPatchValue(node, name, redacted) {
+  var tagName = node.tagName || '';
+  if (!isEmittedAttr(tagName, name, redacted)) return ATTR_WITHHELD;
+  var raw = attrValue(node, name);
+  if (raw === null) return null;               // removed (spec §5.1)
+  return emittedAttrValue(node, tagName, name, raw);
+}
+
+/**
+ * Every attribute a snapshot of this element would carry, with its values —
+ * the set an exclusion transition has to clear or restore wholesale.
+ */
+export function emittedAttrs(node, redacted) {
+  return buildAttrs(node, node.tagName || '', redacted);
+}
+
+/**
+ * Can this node appear in the file at all, wherever it sits? Elements the
+ * serializer skips outright (script/noscript) and node kinds spec §4 gives no
+ * `kind` to (doctype, processing instruction, fragment) cannot.
+ *
+ * Half of the emission rule; `carriesChildren` is the other half. Both are
+ * exported and both are what `emitNode` itself branches on, so "would this
+ * node be in the file" has exactly one answer in this codebase.
+ */
+export function isEmittableNode(node) {
+  if (!node) return false;
+  var type = node.nodeType;
+  if (type === TEXT_NODE || type === COMMENT_NODE) return true;
+  if (type !== ELEMENT_NODE) return false;
+  return !SKIP_TAGS[node.tagName || ''];
+}
+
+/**
+ * Does an emitted element carry its children into the file? Exclusion
+ * placeholders and iframes do not.
+ *
+ * `excluded` is a PARAMETER rather than a lookup because the mutation mapper
+ * has to ask about the state one mutation ago: when `data-record-exclude`
+ * lands on a live element, the DOM already reads "placeholder" while the file
+ * still holds the children the mapper must now remove.
+ */
+export function carriesChildren(el, excluded) {
+  if (!el || el.nodeType !== ELEMENT_NODE) return false;
+  if (excluded) return false;
+  // Frames are the element only (spec §13): the child document is a separate
+  // browsing context this recorder never observes, and any parser fallback
+  // content inside the element was never rendered.
+  return (el.tagName || '') !== 'IFRAME';
+}
+
+/**
+ * The nearest ancestor-or-self of `node` that the file actually contains, or
+ * null when nothing on the path to `root` does (including `node` being outside
+ * the observed root entirely).
+ *
+ * Two callers, two readings of the same answer:
+ *   - event targets and anchors (Task 5) take the returned node as their
+ *     reference — a target inside an excluded subtree resolves to the
+ *     placeholder, exactly as spec §7 requires;
+ *   - `dom.remove` (mutations.js) emits only when the answer IS the node,
+ *     because removing something the player never received is at best a
+ *     no-op and at worst (resolved to a placeholder) deletes the wrong node.
+ *
+ * `registry.peekId` answers "was it numbered", which is not the same question:
+ * assignTree numbers unconditionally, so scripts and hidden subtrees peek
+ * non-null. This function is the missing half, and it is built from the same
+ * predicates `emitNode` branches on rather than re-deriving them.
+ *
+ * @param {object} node
+ * @param {object} root             the observed root
+ * @param {object} [opts]           {keepBait} — exclusion depends on it
+ * @param {object} [detachedParent] the parent a just-REMOVED node had, since
+ *                                  its own `parentNode` is already null
+ */
+export function nearestEmittedAncestor(node, root, opts, detachedParent) {
+  if (!node || !root) return null;
+  opts = opts || {};
+  var chain = [];
+  var cur = node;
+  while (cur && cur !== root) {
+    chain.push(cur);
+    var parent = cur.parentNode;
+    if (!parent && chain.length === 1 && detachedParent) parent = detachedParent;
+    cur = parent;
+  }
+  if (cur !== root || !isEmittableNode(root)) return null;
+
+  var emitted = root;
+  for (var i = chain.length - 1; i >= 0; i--) {
+    if (!carriesChildren(emitted, isExcluded(emitted, opts))) return emitted;
+    if (!isEmittableNode(chain[i])) return emitted;
+    emitted = chain[i];
+  }
+  return emitted;
+}
+
 function emitNode(node, registry, opts, inheritedRedaction) {
-  if (!node) return null;
+  if (!isEmittableNode(node)) return null;
   var type = node.nodeType;
 
   if (type === TEXT_NODE || type === COMMENT_NODE) {
@@ -169,11 +304,7 @@ function emitNode(node, registry, opts, inheritedRedaction) {
       text: inheritedRedaction ? '' : String(node.textContent || ''),
     };
   }
-  if (type !== ELEMENT_NODE) return null;   // doctype, PI, fragment: no §4 kind
-
   var tagName = node.tagName || '';
-  if (SKIP_TAGS[tagName]) return null;
-
   var id = registry.idFor(node);
   if (isExcluded(node, opts)) return { id: id, kind: 'element', tag: tagName.toLowerCase() };
 
@@ -195,10 +326,8 @@ function emitNode(node, registry, opts, inheritedRedaction) {
   var src = MEDIA_TAGS[tagName] && !redacted ? mediaSrc(node) : null;
   if (src) out.media_src = src;
 
-  // Frames are the element only (spec §13): the child document is a separate
-  // browsing context this recorder never observes, and any parser fallback
-  // content inside the element was never rendered.
-  if (tagName === 'IFRAME') return out;
+  // Not excluded here (that returned above), so this is the iframe rule.
+  if (!carriesChildren(node, false)) return out;
 
   var kids = node.childNodes || [];
   for (var i = 0; i < kids.length; i++) {

@@ -147,7 +147,8 @@ describe('serializeTree — registry integration', () => {
 
     assert.ok(countAfterNumbering > 0);
     assert.strictEqual(inner.count, countAfterNumbering);
-    // ...on a tree that really does exercise all four never-emitted classes.
+    // ...on a tree that really does exercise the three never-emitted classes
+    // (script/noscript, exclusion-placeholder descendants, iframe children).
     assert.ok(flatten(tree).length < countAfterNumbering);
   });
 
