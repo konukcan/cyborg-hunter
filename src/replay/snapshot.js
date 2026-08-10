@@ -40,9 +40,12 @@ var EXCLUDE_ATTR = 'data-record-exclude';
 var LEGACY_EXCLUDE_ATTRS = { 'data-ch-role': true, 'data-ch-decoy': true };
 var LEGACY_EXCLUDE_ID = 'ch-decoy';
 
-// Shadow hosts are recorded as a box with no contents (spec §13 lists shadow
-// DOM as a capture limit), flagged so a player can label the gap instead of
-// presenting a hollow reconstruction as complete.
+// Shadow hosts keep their LIGHT-DOM children, which are ordinary capturable
+// nodes; what the format cannot carry is the shadow ROOT's content (spec §13).
+// The flag marks that gap so a player can label it rather than present a
+// partial reconstruction as complete. Caveat a player should know: children
+// that the shadow tree slots elsewhere are recorded in their light-DOM
+// position, because the slot assignment lives in the tree we cannot see.
 var SHADOW_FLAG_ATTR = 'data-ch-shadow';
 
 // Valid attribute-name token; also refuses event-handler attributes (on*).
@@ -89,9 +92,11 @@ export function isExcluded(node, opts) {
 }
 
 // Canvas bitmap size (spec §4). The width/height IDL properties are the
-// browser's authoritative numbers; the attributes are the fallback for
-// duck-typed fixture nodes. Neither available = no annotation, rather than the
-// invented 300x150 spec default, which would claim a size nobody measured.
+// browser's authoritative numbers and are always present there — a bare
+// <canvas> reports the spec default 300x150, which is its real bitmap size, so
+// every canvas in a real capture carries the annotation. The attribute
+// fallback and the null return exist for duck-typed fixture nodes, where
+// guessing 300x150 would claim a size nobody measured.
 function canvasSize(node) {
   var w = intOr(node.width, attrValue(node, 'width'));
   var h = intOr(node.height, attrValue(node, 'height'));
@@ -127,6 +132,12 @@ function buildAttrs(node, tagName, redacted) {
     var name = attrs[i].name;
     var value = attrs[i].value;
     if (!isSerializableAttr(name)) continue;
+    // `srcdoc` is a whole HTML document inlined in an attribute, scripts
+    // included. Frame content never replays (spec §13), so it buys nothing,
+    // and carrying it would make the recording a transport for markup v1 never
+    // shipped (v1 swapped the iframe for a bare styled span). Same principle
+    // as the on* strip above: a recording gets opened by other tools too.
+    if (name === 'srcdoc' && tagName === 'IFRAME') continue;
     // `value` is the one attribute that routinely carries participant-ENTERED
     // content, which is what spec §8 redacts; the rest are author-written page
     // content the recording exists to reconstruct, and stripping them all

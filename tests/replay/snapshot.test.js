@@ -119,6 +119,38 @@ describe('serializeTree — registry integration', () => {
     assert.strictEqual(reg.count, 3);
   });
 
+  it('mints no ids during emission — every id comes from the numbering pass', () => {
+    // The load-bearing half of the two-pass design, and what Task 8's span
+    // continuity rests on: if emission could allocate, the id space would
+    // depend on serialization decisions and a continuation segment's numbering
+    // would drift from the keyframe's. Instrumented rather than inferred —
+    // the registry is wrapped so the count at the end of assignTree is
+    // captured and compared with the count after the whole walk.
+    const { root } = build(
+      '<section><script>x()</script><div data-record-exclude><b>hidden</b></div>' +
+      '<iframe>fallback</iframe><!--c-->text<span>kept</span></section>');
+    const inner = createRegistry();
+    let countAfterNumbering = null;
+    const spy = {
+      assignTree(node) {
+        const id = inner.assignTree(node);
+        countAfterNumbering = inner.count;
+        return id;
+      },
+      idFor: (n) => inner.idFor(n),
+      peekId: (n) => inner.peekId(n),
+      resetSpan: () => inner.resetSpan(),
+      get count() { return inner.count; },
+    };
+
+    const tree = serializeTree(root, spy, {});
+
+    assert.ok(countAfterNumbering > 0);
+    assert.strictEqual(inner.count, countAfterNumbering);
+    // ...on a tree that really does exercise all four never-emitted classes.
+    assert.ok(flatten(tree).length < countAfterNumbering);
+  });
+
   it('is the first allocation after resetSpan, so the keyframe root is id 1', () => {
     const reg = createRegistry();
     const a = build('<div><span></span></div>');
@@ -193,6 +225,22 @@ describe('serializeTree — iframe', () => {
 
     assert.strictEqual(reg.count, 3);                     // div, iframe, "fallback"
   });
+
+  it('drops srcdoc, which would inline a whole document (scripts included)', () => {
+    // Frame content never replays (spec §13), so srcdoc buys no replay value,
+    // and carrying it would make the recording a transport for markup v1 never
+    // shipped. Same principle as the on* strip.
+    const { root } = build(
+      '<div><iframe src="survey.html" width="200" ' +
+      'srcdoc="&lt;script&gt;alert(1)&lt;/script&gt;&lt;b&gt;hi&lt;/b&gt;"></iframe></div>');
+
+    const tree = serializeTree(root, createRegistry(), {});
+    const frame = tree.children[0];
+
+    assert.ok(!('srcdoc' in frame.attrs));
+    assert.deepStrictEqual(frame.attrs, { src: 'survey.html', width: '200' });
+    assert.ok(!JSON.stringify(tree).includes('alert(1)'));
+  });
 });
 
 describe('serializeTree — exclusion (spec §4 placeholders)', () => {
@@ -252,6 +300,37 @@ describe('serializeTree — exclusion (spec §4 placeholders)', () => {
     assert.ok(json.includes('decoy'));
     assert.ok(!json.includes('consent'));
     assert.deepStrictEqual(tree.children[2], { id: 8, kind: 'element', tag: 'div' });
+  });
+
+  it('an excluded element inside a redacted subtree stays a bare placeholder', () => {
+    // The two mechanisms compose in one direction here: exclusion wins on the
+    // marked element (nothing below it ships at all) while its redacted
+    // siblings keep their structure with content emptied.
+    const { root } = build(
+      '<div class="private"><div data-record-exclude><b>hidden</b></div><p>typed</p></div>');
+
+    const tree = serializeTree(root, createRegistry(), { redactSelector: '.private' });
+
+    assert.deepStrictEqual(tree.children[0], { id: 2, kind: 'element', tag: 'div' });
+    assert.deepStrictEqual(tree.children[1].children, [{ id: 6, kind: 'text', text: '' }]);
+    assert.ok(!JSON.stringify(tree).includes('hidden'));
+    assert.ok(!JSON.stringify(tree).includes('typed'));
+  });
+
+  it('a redacted field inside an excluded subtree never reaches the walk', () => {
+    // The other direction: exclusion short-circuits before redaction is ever
+    // consulted, so a password or a selector match below a placeholder is
+    // covered by the placeholder itself.
+    const { root } = build(
+      '<section><div data-record-exclude>' +
+      '<input class="private" value="ZQX-SEL-9"><input type="password" value="ZQX-PW-9">' +
+      '</div></section>');
+
+    const tree = serializeTree(root, createRegistry(), { redactSelector: '.private' });
+
+    assert.deepStrictEqual(tree.children[0], { id: 2, kind: 'element', tag: 'div' });
+    assert.ok(!JSON.stringify(tree).includes('ZQX-SEL-9'));
+    assert.ok(!JSON.stringify(tree).includes('ZQX-PW-9'));
   });
 
   it('isExcluded reports the same decision to the mutation mapper', () => {
@@ -323,25 +402,44 @@ describe('serializeTree — redaction (spec §8)', () => {
     assert.ok(JSON.stringify(tree).includes('visible'));
   });
 
-  it('keeps non-value attributes inside a redacted subtree (known boundary)', () => {
+  it('keeps non-value attributes inside a redacted subtree (documented boundary)', () => {
     // Redaction's threat model is participant-ENTERED content: the `value`
     // attribute, text, and (in the event streams) key identities, input values,
     // clipboard payloads, anchor identity. Author-written attributes are page
     // content the recording exists to reconstruct, and stripping them all would
     // leave an unrenderable box where the field was.
     //
-    // The residual, pinned here so it stays visible: a page that mirrors typed
-    // content into some OTHER attribute (a data-* attribute, title, aria-label)
-    // leaks it through the snapshot. Widening the strip is a spec question
-    // (§8 says "attributes", unqualified), not something to decide silently.
+    // THIS TEST ASSERTS THE LEAK, not the fix: everything below is the residual
+    // a page could smuggle typed content through, named here so the boundary is
+    // visible rather than implied by a comment. Widening the strip is a spec
+    // question (§8 says "attributes", unqualified), not a silent local change.
+    //
+    // The §8 FLOOR is the line that must not move, and the last two assertions
+    // are where it falls: a password element's `value` goes, in both the
+    // attribute and (never read here) the IDL property, while its author-written
+    // attributes ride along like any other element's.
+    const S = 'zqx-boundary-42';
     const { root } = build(
-      '<div class="private"><img src="diagram.png" title="a title"></div>');
+      '<div class="private">' +
+      `<img src="diagram.png" title="a title" alt="${S}-alt" data-note="${S}" ` +
+      `style="background:url(${S}.png)" ${S}="1">` +
+      `<input id="pw" type="password" value="${S}-typed" title="${S}-title" ` +
+      `placeholder="${S}-ph">` +
+      '</div>');
 
-    const img = serializeTree(root, createRegistry(),
-      { redactSelector: '.private' }).children[0];
+    const [img, pw] = serializeTree(root, createRegistry(),
+      { redactSelector: '.private' }).children;
 
     assert.strictEqual(img.attrs.src, 'https://example.org/exp/diagram.png');
     assert.strictEqual(img.attrs.title, 'a title');
+    assert.strictEqual(img.attrs.alt, `${S}-alt`);            // author text
+    assert.strictEqual(img.attrs['data-note'], S);            // data-* VALUE
+    assert.ok(img.attrs.style.includes(S));                   // inline style payload
+    assert.ok(S in img.attrs);                                // the attribute NAME
+
+    assert.ok(!('value' in pw.attrs));                        // the §8 floor holds
+    assert.strictEqual(pw.attrs.title, `${S}-title`);
+    assert.strictEqual(pw.attrs.placeholder, `${S}-ph`);
   });
 });
 
@@ -350,6 +448,16 @@ describe('serializeTree — annotations (spec §4)', () => {
     const { root } = build('<div><canvas width="120" height="80"></canvas></div>');
     const canvasNode = serializeTree(root, createRegistry(), {}).children[0];
     assert.deepStrictEqual(canvasNode.canvas_size, { w: 120, h: 80 });
+  });
+
+  it('reports the spec default bitmap size for a bare canvas', () => {
+    // 300x150 is the canvas's real bitmap size, not a guess: the width/height
+    // IDL properties carry it in any real DOM, so every captured canvas gets
+    // the annotation. Only a duck-typed node with neither property nor
+    // attribute falls through to no annotation.
+    const { root } = build('<div><canvas></canvas></div>');
+    const canvasNode = serializeTree(root, createRegistry(), {}).children[0];
+    assert.deepStrictEqual(canvasNode.canvas_size, { w: 300, h: 150 });
   });
 
   it('annotates media elements with a resolved media_src', () => {
@@ -376,18 +484,36 @@ describe('serializeTree — annotations (spec §4)', () => {
 });
 
 describe('serializeTree — shadow hosts', () => {
-  it('flags a shadow host, whose internals the format cannot carry (spec §13)', () => {
-    const { root, doc } = build('<div><span id="host"></span></div>');
+  it('flags the host, keeps its light DOM, and drops the shadow root (spec §13)', () => {
+    // The capture limit is the shadow ROOT's content, not the host's light-DOM
+    // children: those are ordinary nodes the walk can see and the player can
+    // rebuild. A host with no light children would pass this test either way,
+    // so the fixture gives it one.
+    const { root, doc } = build('<div><span id="host"><b>light child</b></span></div>');
     const host = doc.getElementById('host');
     host.attachShadow({ mode: 'open' });
-    host.shadowRoot.innerHTML = '<b>shadow content</b>';
+    host.shadowRoot.innerHTML = '<i>ZQX-SHADOW-7</i>';
 
     const tree = serializeTree(root, createRegistry(), {});
     const hostNode = tree.children[0];
 
     assert.strictEqual(hostNode.attrs['data-ch-shadow'], '');
-    assert.deepStrictEqual(hostNode.children, []);
-    assert.ok(!JSON.stringify(tree).includes('shadow content'));
+    assert.strictEqual(hostNode.children.length, 1);
+    assert.strictEqual(hostNode.children[0].tag, 'b');
+    assert.deepStrictEqual(hostNode.children[0].children,
+      [{ id: 4, kind: 'text', text: 'light child' }]);
+    assert.ok(!JSON.stringify(tree).includes('ZQX-SHADOW-7'));
+  });
+
+  it('does not number the shadow root either', () => {
+    const { root, doc } = build('<div><span id="host"><b>light child</b></span></div>');
+    doc.getElementById('host').attachShadow({ mode: 'open' });
+    doc.getElementById('host').shadowRoot.innerHTML = '<i>hidden</i>';
+    const reg = createRegistry();
+
+    serializeTree(root, reg, {});
+
+    assert.strictEqual(reg.count, 4);          // div, span, b, "light child"
   });
 });
 
