@@ -12,5 +12,11 @@
     { "path": "segments.2.events.2.value_len", "equals": 1 }
   ],
   "invariants": [ "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe", "no_redaction_leak" ],
-  "checkpoints": []
+  "checkpoints": [
+    { "t": 500,  "segment": 0, "assert": [ { "node": 5, "prop": "text", "equals": "Clicked!" } ] },
+    { "t": 2250, "segment": 1, "assert": [ { "node": 6, "prop": "exists", "equals": true },
+                                           { "node": 7, "prop": "text", "equals": "saved" } ] },
+    { "t": 2350, "segment": 1, "assert": [ { "node": 6, "prop": "exists", "equals": false } ] },
+    { "t": 4100, "segment": 2, "assert": [ { "node": 3, "prop": "value", "equals": "abc" } ] }
+  ]
 }
