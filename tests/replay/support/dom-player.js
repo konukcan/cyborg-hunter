@@ -74,19 +74,7 @@ export function createPlayer(keyframe) {
   // The player's DOM in the file's own vocabulary, so it can be compared with
   // a fresh serialization of the captured DOM.
   function tree(el) {
-    const node = el || root;
-    const id = idOf.get(node);
-    if (id === undefined) throw new Error('player holds a node with no id');
-    if (node.nodeType === TEXT_NODE) return { id, kind: 'text', text: node.data };
-    if (node.nodeType === COMMENT_NODE) return { id, kind: 'comment', text: node.data };
-    if (node.nodeType !== ELEMENT_NODE) throw new Error('unexpected node kind');
-    const attrs = {};
-    const live = node.attributes || [];
-    for (let i = 0; i < live.length; i++) attrs[live[i].name] = live[i].value;
-    const children = [];
-    const kids = node.childNodes || [];
-    for (let i = 0; i < kids.length; i++) children.push(tree(kids[i]));
-    return { id, kind: 'element', tag: node.tagName.toLowerCase(), attrs, children };
+    return readTree(el || root, idOf);
   }
 
   return {
@@ -116,6 +104,34 @@ export function createPlayer(keyframe) {
       }
     },
   };
+}
+
+/**
+ * A live DOM subtree in the FILE's vocabulary (spec §4), given the node → id
+ * binding whoever built it holds.
+ *
+ * Extracted from `createPlayer`'s `tree()` — which now delegates here,
+ * unchanged — so the viewer's own instantiation (`src/replay/dom-instantiate.js`,
+ * T5 Task 2) is read back by the SAME reader the capture-side suites judge the
+ * mutation mapper with. A second reader would let a capture suite and a viewer
+ * suite be green about incompatible trees.
+ *
+ * @param {Node} node  the subtree root
+ * @param {Map<Node, number>} idOf  node → id, for every node in the subtree
+ */
+export function readTree(node, idOf) {
+  const id = idOf.get(node);
+  if (id === undefined) throw new Error('player holds a node with no id');
+  if (node.nodeType === TEXT_NODE) return { id, kind: 'text', text: node.data };
+  if (node.nodeType === COMMENT_NODE) return { id, kind: 'comment', text: node.data };
+  if (node.nodeType !== ELEMENT_NODE) throw new Error('unexpected node kind');
+  const attrs = {};
+  const live = node.attributes || [];
+  for (let i = 0; i < live.length; i++) attrs[live[i].name] = live[i].value;
+  const children = [];
+  const kids = node.childNodes || [];
+  for (let i = 0; i < kids.length; i++) children.push(readTree(kids[i], idOf));
+  return { id, kind: 'element', tag: node.tagName.toLowerCase(), attrs, children };
 }
 
 /**
