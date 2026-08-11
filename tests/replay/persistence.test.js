@@ -64,8 +64,11 @@ function pair(scenario) {
       participant_id: s.participantId,
       recording_started_at: startedAt,
       end_reason: s.endReason,
-      // Spec §5.7's standard mirror. The serializer writes both this and the
-      // vendor flag from one recorder field, so an equivalent session sets both.
+      // Spec §5.7's top-level truncation flag, which mirrors the
+      // `recording.capture_stopped` EVENT. The vendor boolean below is a
+      // different thing: CH's own v1 diagnostic, carried under §9. Both come
+      // off one recorder field at serializer.js:175 and :210, so an equivalent
+      // session sets both.
       truncated: s.captureStopped,
       segments: [],
       extensions: {
@@ -191,14 +194,23 @@ describe('buildReplayMeta — the OUTPUT contract (byte-stable across the v2 mov
     });
   }
 
-  it('reads schema_version and bytes_uncompressed off the recording itself', () => {
-    // The two values the differential blanks. They are not part of the moved
-    // read paths, but they are part of the pointer, so their derivation is
-    // pinned here instead.
+  it('measures bytes_uncompressed over the whole recording', () => {
+    // One of the two values the differential blanks. Not part of the moved read
+    // paths, but part of the pointer, so its derivation is pinned here instead.
     const rec = recording({ segments: [{ index: 0, events: [] }] });
-    const meta = buildReplayMeta(rec, 'none');
-    assert.strictEqual(meta.schema_version, 2);
-    assert.strictEqual(meta.bytes_uncompressed, JSON.stringify(rec).length);
+    assert.strictEqual(buildReplayMeta(rec, 'none').bytes_uncompressed,
+      JSON.stringify(rec).length);
+  });
+
+  it("passes the recording's own schema_version through, rather than assuming 2", () => {
+    // The other blanked value, and the one whose first pin did not bite: every
+    // fixture in this file is schema_version 2, so `=== 2` is satisfied by a
+    // hard-coded 2 in the builder (Task 7 review I-1 injected exactly that and
+    // all 417 tests passed). A sentinel is the only version of this assertion
+    // that can fail. The pointer states the version of the file it points AT,
+    // which is what makes it useful next to a v1 artifact.
+    const sentinel = recording({ schema_version: 7 });
+    assert.strictEqual(buildReplayMeta(sentinel, 'none').schema_version, 7);
   });
 
   it('reads capture_stopped from the standard top-level flag, not the vendor mirror', () => {

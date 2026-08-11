@@ -207,6 +207,21 @@ describe('jsPsych replay adapter', () => {
     assert.strictEqual(ext.getLastRecording().host, null);
   });
 
+  it('a version() that returns nothing usable also yields host null', async () => {
+    // The accessor exists but hands back undefined (a bundler that failed to
+    // inline package.json, a fork). Without this case the string guard is
+    // unreachable — the `typeof jp.version !== 'function'` check above it
+    // already covers the absent-accessor mock — and the guard is what actually
+    // enforces §2's required-string typing, so it has to stay driven.
+    const { jsPsych } = mockJsPsych(true, () => undefined);
+    const ext = new CyborgHunterReplayExtension(jsPsych);
+    ext.initialize({ participantId: 'P2', tier: 'trace', autoSave: { mode: 'none' } });
+    ext.on_load({});
+    ext.on_finish({});
+    await ext.finalize();
+    assert.strictEqual(ext.getLastRecording().host, null);
+  });
+
   it('a throwing version() costs the host record, not the save', async () => {
     // finalize()'s outer try/catch would turn any throw here into
     // replayFinalizeError — i.e. no autosave at all. Host identity is the

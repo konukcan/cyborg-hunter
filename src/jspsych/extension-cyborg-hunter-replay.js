@@ -71,9 +71,13 @@ class CyborgHunterReplayExtension {
   //
   // §2 types host as `{name, version} | null` with version a required STRING,
   // so a runtime that reports no version gets no host record rather than a
-  // half-record a conforming consumer would trip over. That is the defensive
-  // branch: jsPsych's own `version()` accessor covers 7.x and 8.x, and the
-  // plain-string form covers a runtime that exports it as a field.
+  // half-record a conforming consumer would trip over.
+  //
+  // `version()` is the only shape checked for, because it is the only shape
+  // jsPsych has: 7.3.1 defines `version() { return version; }` on the JsPsych
+  // class and 8.x keeps the same core-API accessor. An earlier draft also
+  // accepted a plain string field; nothing produces one, so it was speculative
+  // dead code and went.
   //
   // Never throws: finalize()'s outer catch turns any throw into
   // replayFinalizeError with NO autosave, and the least important field in
@@ -81,8 +85,8 @@ class CyborgHunterReplayExtension {
   _detectHost() {
     try {
       var jp = this.jsPsych;
-      if (!jp) return null;
-      var v = typeof jp.version === 'function' ? jp.version() : jp.version;
+      if (!jp || typeof jp.version !== 'function') return null;
+      var v = jp.version();
       if (typeof v !== 'string' || !v) return null;
       return { name: 'jspsych', version: v };
     } catch (e) {
