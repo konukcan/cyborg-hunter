@@ -99,15 +99,20 @@ export function buildViewerModel(recording) {
 
   // ── segments ────────────────────────────────────────────────────────────
   const rawSegments = rec.segments;
-  // A recording with no keyframe ANYWHERE is trace-only, which spec §3 states
-  // explicitly ("null before any keyframe = the recording (so far) is
-  // trace-only") and which is NOT the continuation-before-keyframe defect. The
-  // two are told apart by whether a keyframe exists at all.
-  const anyKeyframe = rawSegments.some((s) => s && s.initial_dom);
+  // A keyframe is a DomNode OBJECT. A primitive (a v1 HTML string, say) or an
+  // array carries none of a DomNode's fields, so treating it as a keyframe
+  // would hand `mountTree` something it cannot instantiate and would license
+  // later `dom.*` patches against a snapshot that does not exist. Same test as
+  // the strict profile's `isKeyframe` (validator.js:203-204).
+  const isKeyframe = (s) => s.initial_dom != null && typeof s.initial_dom === 'object'
+    && !Array.isArray(s.initial_dom);
+  // Only for the TIER inference: "does this recording carry a reconstruction
+  // anywhere", which is a different question from segment legality below.
+  const anyKeyframe = rawSegments.some((s) => s && isKeyframe(s));
 
   let spanStart = null;      // index of the keyframe the current span opens at
   const segments = rawSegments.map((s, i) => {
-    const keyframe = !!s.initial_dom;
+    const keyframe = isKeyframe(s);
     if (keyframe) spanStart = i;
 
     const tStart = num(s.t_start);
@@ -159,19 +164,46 @@ export function buildViewerModel(recording) {
       keyframe,
       // The nearest earlier segment with a non-null initial_dom (itself if it
       // is a keyframe): the segment a restore mounts before walking forward.
-      spanStart: anyKeyframe ? spanStart : null,
-      defect: anyKeyframe && spanStart === null ? 'continuation-before-keyframe' : null,
+      // Null until the first keyframe arrives.
+      spanStart,
+      // Spec §3's pre-keyframe rule, in the strict profile's reading
+      // (validator.js:209): a segment with no keyframe before it is illegal
+      // IFF it carries `dom.*` events, tracked with a RUNNING keyframe flag.
+      // Deliberately the same predicate as the machine check rather than a
+      // second reading of the same sentence — the reason the §11 rejection
+      // strings above are mirrored verbatim applies here too. Two shapes turn
+      // on it: a trace prologue before a later keyframe is LEGAL (it
+      // reconstructs nothing, so it loses nothing), and `dom.*` before any
+      // keyframe is a DEFECT even when no keyframe ever arrives (the viewer
+      // would otherwise show a clean grey trace stage while dropping patches
+      // §12 requires it to flag).
+      defect: spanStart === null && events.some(
+        (e) => typeof e.type === 'string' && e.type.indexOf('dom.') === 0)
+        ? 'continuation-before-keyframe' : null,
       // v2's keyframe is a DomNode TREE, never an HTML string: the
       // reconstruction is instantiated node by node and is never parsed from
       // markup (design §4).
-      initialDom: s.initial_dom || null,
+      initialDom: keyframe ? s.initial_dom : null,
       initialState: s.initial_state || null,
       camera: null,          // filled below, once every span start is known
       // Segment-relative times, as v1's were trial-relative. A pure
       // subtraction, NOT clamped at zero: an event recorded before its
-      // segment's origin keeps a negative relative time so that
-      // `origin + t === the wire t` holds in both directions, which is what
-      // the checkpoint executor converts through (plan Task 7).
+      // segment's origin keeps a negative relative time rather than being
+      // reported as happening at the segment start.
+      //
+      // THE CONVERSION CONTRACT (read this before writing Task 7's checkpoint
+      // executor). Rebasing rounds, so the two directions are not equally
+      // exact and only one of them is a rule:
+      //   FORWARD (session → segment) is `round1(t − origin)`, and any
+      //     consumer that needs a segment-relative time MUST compute it the
+      //     same way. Do that and the comparison is exact by construction.
+      //   REVERSE (`origin + tRel === t`) is NOT exact: `round1` re-rounds the
+      //     difference and adding it back to a decimal origin does not
+      //     reproduce the wire float (2000.1 + 14621.4 → 16621.500000000002).
+      //     Measured over the corpus: 735 of jspsych-full's 909 events miss
+      //     it, worst error 1.9e-7 ms. The stated bound is 5e-7 ms, pinned
+      //     fixture-wide in tests/replay/viewer-model.test.js. Never compare
+      //     reconstructed absolute times with ===.
       events: events.map((e) => {
         const out = Object.assign({}, e);
         out.t = round1((num(e.t) || 0) - origin);
@@ -181,7 +213,7 @@ export function buildViewerModel(recording) {
   });
 
   // ── per-segment camera seed (design §8) ─────────────────────────────────
-  // v1 folded per-trial `view_state` seeds plus in-stream `resize` events. v2
+  // v1 folded per-trial view-state seeds plus in-stream resize events. v2
   // has neither: `resize` is not an event type and viewport history is
   // session-level. So the seed is `viewport_changes` folded up to the
   // segment's origin, over the top-level viewport, with window scroll taken
