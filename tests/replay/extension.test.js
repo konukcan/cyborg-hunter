@@ -119,6 +119,30 @@ describe('jsPsych replay adapter', () => {
       'CH session report merged via the stashed monitor reference');
   });
 
+  it('drives DOM capture at tier "dom": every segment gets a keyframe', async () => {
+    // The plan's DECIDED item — the jsPsych host path calls buildInitialState
+    // like every other path — holds by construction, because the adapter goes
+    // through the same attach() and the same attachDomCapture. Nothing pinned
+    // it, and every other adapter test runs at trace tier, where there is no
+    // DOM capture to get wrong.
+    const { jsPsych } = mockJsPsych(true);
+    const ext = new CyborgHunterReplayExtension(jsPsych);
+    ext.initialize({ participantId: 'P4', tier: 'dom', autoSave: { mode: 'none' } });
+    ext.on_load({});
+    ext.on_finish({});
+    await ext.finalize();
+
+    const rec = ext.getLastRecording();
+    const segment = rec.segments.find(s => s.label === 'trial-7');
+    assert.ok(segment.initial_dom, 'the adapter path takes keyframes');
+    assert.strictEqual(segment.initial_dom.kind, 'element');
+    assert.strictEqual(segment.initial_dom.tag, 'body');
+    // A wiped display starts every trial at defaults, which is the spec's own
+    // omit case — the call happens, and returns null honestly.
+    assert.strictEqual(segment.initial_state, null);
+    assert.strictEqual(rec.extensions['cyborg-hunter'].tier, 'dom');
+  });
+
   it('works without the cyborg-hunter extension (standalone recording)', async () => {
     const { jsPsych, store } = mockJsPsych(false);
     const ext = new CyborgHunterReplayExtension(jsPsych);

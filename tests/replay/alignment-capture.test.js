@@ -73,7 +73,6 @@ function harness(configOverrides, opts) {
     flushRaf: () => { const q = rafQueue.splice(0); q.forEach(f => f()); },
     span: opts && opts.span,
   };
-  if (opts && opts.markers) rec.setMarkers(opts.markers);
   rec.startSession();
   attachTraceCapture(rec, env);
   const events = () => rec.getState().trials.flatMap(tr => tr.events);

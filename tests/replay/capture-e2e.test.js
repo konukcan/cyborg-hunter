@@ -23,12 +23,38 @@ import { Window } from 'happy-dom';
 import * as CHReplay from '../../src/replay/index.js';
 import { validateStrict } from './schema-v2/validator.js';
 
-// Deliberately different LENGTHS as well as different content: a `value_len`
-// is the one thing a redacted event may carry, so the excluded field's silence
-// is only checkable if its length cannot be confused with the redacted one's.
-const REDACTED_SENTINEL = 'ZQREDACTEDSECRET42';
-const EXCLUDED_SENTINEL = 'ZQBAITTYPEDVALUE9999999999';
+// ONE SENTINEL PER CHANNEL. Spec §8 names the channels it closes — initial_dom
+// attributes, initial_state.form, dom.text/dom.attr, key identity, clipboard,
+// anchor identity — and a scan is only a scan of the channels the scripted
+// session actually drives. The first version of this file typed exclusively
+// through the `.value` IDL property, so no `value` ATTRIBUTE ever existed
+// inside a withheld subtree and two of the three channels §8 names by name
+// were never live: removing their guards changed nothing observable here.
+//
+// Distinct strings rather than one, so a failure says WHICH channel leaked.
+// Distinct LENGTHS where a length is itself permitted: `value_len` is the one
+// thing a redacted event may carry, so the excluded field's silence is only
+// checkable if its length cannot be confused with the redacted one's.
+const REDACTED_SENTINEL = 'ZQREDACTEDSECRET42';            // password IDL value
+const REDACTED_ATTR_SENTINEL = 'ZQREDACTEDATTRIBUTE7';     // value ATTRIBUTE, redacted subtree
+const REDACTED_FORM_SENTINEL = 'ZQREDACTEDFORMSTATE55';    // IDL value → initial_state.form
+const EXCLUDED_SENTINEL = 'ZQBAITTYPEDVALUE9999999999';    // bait IDL value
+const EXCLUDED_ATTR_SENTINEL = 'ZQBAITATTRIBUTE31';        // bait value ATTRIBUTE
 
+const ALL_SENTINELS = [
+  ['password IDL value', REDACTED_SENTINEL],
+  ['value attribute in a redacted subtree', REDACTED_ATTR_SENTINEL],
+  ['redacted form state (initial_state.form)', REDACTED_FORM_SENTINEL],
+  ['excluded IDL value', EXCLUDED_SENTINEL],
+  ['excluded value attribute', EXCLUDED_ATTR_SENTINEL],
+];
+
+// The bait marker sits on the INPUT ITSELF, not on a wrapper: that is the shape
+// CH's own honeypot ships (extension-guard-honeypot.js stamps the marker on the
+// bait input), and it is the only shape in which the exclusion guard in
+// initial-state.js is reachable — a control merely INSIDE an excluded container
+// is never delivered, so the delivery check stops the seed before exclusion is
+// consulted, and removing the exclusion check changes nothing.
 const PAGE = `
   <div id="stage">
     <p id="msg">Which card wins?</p>
@@ -36,7 +62,12 @@ const PAGE = `
     <div id="pane" style="overflow:auto;height:40px">scrollable</div>
     <input id="answer" type="text">
     <input id="secret" type="password">
-    <div data-record-exclude id="bait"><input id="bait-field" type="text"></div>
+    <div data-ch-redact id="private">
+      <input id="private-text" type="text" value="${REDACTED_ATTR_SENTINEL}">
+    </div>
+    <div id="bait">
+      <input id="bait-field" data-record-exclude type="text" value="${EXCLUDED_ATTR_SENTINEL}">
+    </div>
   </div>
 `;
 
@@ -110,6 +141,19 @@ async function record() {
   bait.value = EXCLUDED_SENTINEL;
   key(bait, 'keydown', 'Z');
   fire(bait, 'input');
+
+  // Two more channels §8 names, which typing alone does not reach.
+  // The ATTRIBUTE channel: a page that mirrors input into a `value` attribute
+  // drives both the keyframe's `attrs` and a `dom.attr` patch.
+  const privateText = doc.getElementById('private-text');
+  privateText.setAttribute('value', REDACTED_ATTR_SENTINEL + 'X');
+  // The IDL channel that outlives the segment: this diverges from the
+  // attribute, so trial 2's keyframe seed would carry it (spec §3
+  // initial_state.form) if the withholding guard were not there. A password
+  // cannot serve here — it is skipped by type before redaction is consulted.
+  privateText.value = REDACTED_FORM_SENTINEL;
+  key(privateText, 'keydown', 'Z');
+  fire(privateText, 'input');
 
   // A DOM mutation the observer must turn into dom.* patches.
   const feedback = doc.createElement('div');
@@ -196,10 +240,9 @@ describe('end-to-end capture → v2 recording', () => {
 
   it('LEAK SENTINEL: redacted and excluded content appear nowhere in the file', () => {
     const json = JSON.stringify(recording);
-    assert.ok(!json.includes(REDACTED_SENTINEL),
-      'a password value reached the file (spec §8 floor)');
-    assert.ok(!json.includes(EXCLUDED_SENTINEL),
-      'an excluded element\'s state reached the file (spec §4)');
+    for (const [channel, sentinel] of ALL_SENTINELS) {
+      assert.ok(!json.includes(sentinel), `leaked through the ${channel} channel`);
+    }
     // …and not one character of it, either: the redacted variants say that
     // something was typed without saying what.
     const events = recording.segments.flatMap(s => s.events);
@@ -216,9 +259,32 @@ describe('end-to-end capture → v2 recording', () => {
 
   it('the excluded subtree is a placeholder, not content', () => {
     const stage = recording.segments[0].initial_dom;
-    const bait = stage.children.find(c => c.tag === 'div' && c.attrs === undefined);
-    assert.ok(bait, 'an excluded element is {id, kind, tag} and nothing else');
-    assert.equal(bait.children, undefined);
+    const wrapper = stage.children.find(c => c.attrs && c.attrs.id === 'bait');
+    const bait = wrapper.children.find(c => c.tag === 'input');
+    assert.ok(bait, 'the excluded input is still in the tree, in its position');
+    assert.deepEqual(Object.keys(bait), ['id', 'kind', 'tag'],
+      'an excluded element is {id, kind, tag} and nothing else');
+  });
+
+  it('the two channels the first sentinel could not see are LIVE', () => {
+    // A scan proves nothing about a channel the session never drives. These
+    // assert the channels exist and carry data, so the absence of the
+    // sentinels above is withholding rather than emptiness.
+    const seed = recording.segments[1].initial_state;
+    assert.ok(seed.form.some(f => f.value === 'ace of spades'),
+      'initial_state.form is a live channel: the plain field is seeded');
+    assert.equal(seed.form.length, 1,
+      'and the redacted and excluded controls are the ones missing from it');
+
+    const attrPatches = recording.segments[0].events.filter(e => e.type === 'dom.attr');
+    assert.ok(attrPatches.some(e => e.name === 'class'),
+      'the dom.attr channel is live: a non-redacted attribute change is carried');
+    assert.ok(!attrPatches.some(e => e.name === 'value'),
+      'and the redacted value attribute produced no patch at all');
+
+    const keyframeJson = JSON.stringify(recording.segments[0].initial_dom);
+    assert.ok(keyframeJson.includes('"data-ch-redact"'),
+      'the redacted element is in the tree with its non-value attributes');
   });
 
   it('the vendor namespace carries CH data and no marker attribute', () => {
@@ -275,6 +341,66 @@ describe('assembly wiring (index.js)', () => {
         'the taint did not survive the move: the two halves are not sharing a set');
       assert.equal(validateStrict(recording).ok, true);
     });
+  });
+
+  it('a SECOND recording on the same page inherits the first\'s withholding', () => {
+    // The accepted cost of the choice above, pinned so it is a decision rather
+    // than an accident. `redaction.js`'s taint set is module-level and lives
+    // for the PAGE, so a node recording 1 withheld stays withheld in recording
+    // 2 even with no redaction configured at all. That is over-redaction: it
+    // can only withhold, never leak, which is the side to fail on.
+    //
+    // Do NOT "fix" this by resetting the taint at attach(). The set exists to
+    // close spec §8's move-out hole (content withheld at the keyframe, then
+    // moved out of its container and re-serialized), and a per-recording reset
+    // re-opens it across the boundary while making the can-only-over-redact
+    // property conditional on where that boundary falls. The realistic case is
+    // a researcher restarting a recording, or an SPA running several blocks in
+    // one page load; attach() destroys any active instance, so the two
+    // recorders are always sequential, never concurrent.
+    const doc = win.document;
+    const stage = doc.getElementById('stage');
+    const box = doc.createElement('div');
+    box.setAttribute('data-ch-redact', '');
+    const field = doc.createElement('p');
+    field.textContent = REDACTED_SENTINEL;
+    box.appendChild(field);
+    stage.appendChild(box);
+
+    const first = CHReplay.attach({
+      participantId: 'P1', tier: 'dom', root: '#stage',
+      redactSelector: '[data-ch-redact]', autoSave: { mode: 'none' },
+    });
+    first.startSession();
+    first.startTrial({ trialId: 't1' });
+    first.stopSession('finished');
+    first.destroy();
+
+    // The page drops the marker entirely, and the second recording configures
+    // no redaction whatsoever.
+    box.removeAttribute('data-ch-redact');
+    const second = CHReplay.attach({
+      participantId: 'P2', tier: 'dom', root: '#stage',
+      redactSelector: null, autoSave: { mode: 'none' },
+    });
+    second.startSession();
+    second.startTrial({ trialId: 't1' });
+    second.stopSession('finished');
+    const recording = second.getRecording();
+    second.destroy();
+
+    assert.equal(validateStrict(recording).ok, true);
+    const texts = [];
+    (function walk(n) {
+      if (n.kind === 'text') texts.push(n.text);
+      (n.children || []).forEach(walk);
+    })(recording.segments[0].initial_dom);
+    assert.ok(!texts.includes(REDACTED_SENTINEL),
+      'the second recording emitted content the first withheld');
+    assert.ok(texts.includes(''),
+      'it is present-but-empty: the node keeps its id and position (spec §4)');
+    assert.deepEqual(recording.extensions['cyborg-hunter'].capture_failures, [],
+      'and nothing marks it — the silence is the documented cost, not a bug');
   });
 
   it('a trace-tier recording is honestly node-free', () => {

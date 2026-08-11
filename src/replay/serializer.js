@@ -29,6 +29,15 @@
 
 import { VERSION } from '../shared/constants.js';
 
+/**
+ * The wire format this module emits. Exported because it is not only the
+ * serializer's business: the meta pointer that rides in the host's data
+ * (persistence.js, and index.js's no-session degradation) states the schema
+ * version of the recording it points at, and a hard-coded literal there is how
+ * a v1 pointer survived into a v2 recorder.
+ */
+export var SCHEMA_VERSION = 2;
+
 // Convert an absolute performance.now() value to wire time (ms since
 // recording start), rounded to 1 decimal to keep JSON compact (spec §7 permits
 // producer rounding and names CH's 0.1 ms).
@@ -167,7 +176,7 @@ export function serialize(state, opts) {
   };
 
   return {
-    schema_version: 2,
+    schema_version: SCHEMA_VERSION,
     recorder: { name: 'cyborg-hunter-replay', version: VERSION },
     host: opts.host || null,
     participant_id: state.participantId != null ? state.participantId : null,

@@ -106,6 +106,42 @@ describe('observed root (spec §2)', () => {
     assert.equal(h.rec.getState().observedRoot, '#stage');
   });
 
+  it('reports what was OBSERVED when the selector matched nothing', () => {
+    // The root is resolved once and held (see the module), so a selector that
+    // matches nothing at startSession falls back to the body for the whole
+    // recording. Reporting the configured selector anyway puts a lie on the
+    // wire: a conforming player honouring §2's `observed_root` would mount a
+    // body-rooted tree into `#stage`. The file must say what it observed.
+    const h = harness('<div id="other">x</div>', { root: '#stage' });
+    h.rec.startTrial({ trialId: 't1' });
+    assert.equal(h.rec.getState().observedRoot, null,
+      'null is §2\'s spelling for "the document body", which is what was observed');
+    assert.equal(h.trial(0).initialDom.tag, 'body');
+  });
+
+  it('records a capture failure when a configured selector misses', () => {
+    // The other half: `null` alone reads as "the researcher configured
+    // nothing". The failure is what makes a misconfigured study diagnosable
+    // instead of quietly producing a body-rooted recording.
+    const h = harness('<div id="other">x</div>', { root: '#stage' });
+    const failure = h.rec.getState().captureFailures.find(f => f.channel === 'observed_root');
+    assert.ok(failure, 'a missed root selector must be recorded');
+    assert.match(failure.message, /#stage/);
+    assert.match(failure.message, /document\.body/);
+  });
+
+  it('treats an invalid selector the same way', () => {
+    const h = harness('<div id="other">x</div>', { root: ':::not a selector' });
+    assert.equal(h.rec.getState().observedRoot, null);
+    assert.ok(h.rec.getState().captureFailures.some(f => f.channel === 'observed_root'));
+  });
+
+  it('a selector that DID resolve records no failure', () => {
+    const h = harness('<div id="stage">x</div>', { root: '#stage' });
+    assert.equal(h.rec.getState().observedRoot, '#stage');
+    assert.deepEqual(h.rec.getState().captureFailures, []);
+  });
+
   it('reports an element root by its id, and the body as null', () => {
     const win = new Window({ url: 'https://example.org/' });
     win.document.body.innerHTML = '<div id="stage"></div>';
@@ -194,6 +230,26 @@ describe('keyframes at trial start (spec §3/§4)', () => {
     assert.equal(seen.length, 1, 'measured once per keyframe');
     assert.equal(seen[0], JSON.stringify(h.trial(0).initialDom).length,
       'the exact JSON length of the payload, not an estimate off a string');
+  });
+
+  it('the measurement counts the initial_state seed too, not just the tree', () => {
+    // The seed is stored on the trial exactly like the tree, so the recorder
+    // cannot see it either. Dropping the seed term from the sum is invisible
+    // to any fixture whose seed is null, which is what the first version of
+    // the test above used.
+    const h = harness('<div id="stage"><input id="answer"></div>', { root: '#stage' });
+    h.doc.getElementById('answer').value = 'typed';
+    const seen = [];
+    const realNote = h.rec.noteSnapshotChars;
+    h.rec.noteSnapshotChars = (trial, chars) => { seen.push(chars); realNote(trial, chars); };
+    h.rec.startTrial({ trialId: 't1' });
+
+    const trial = h.trial(0);
+    assert.ok(trial.initialState, 'the fixture has to produce a seed for this to test anything');
+    const treeChars = JSON.stringify(trial.initialDom).length;
+    const seedChars = JSON.stringify(trial.initialState).length;
+    assert.equal(seen[0], treeChars + seedChars);
+    assert.ok(seen[0] > treeChars, 'the seed term is part of the sum');
   });
 
   it('drops an oversized keyframe and stops addressing nodes the file lacks', () => {
@@ -317,11 +373,18 @@ describe('mutation batches → dom.* patches (spec §5.1)', () => {
 });
 
 describe('guard-friction cooperation', () => {
-  function withFriction(html, config) {
+  function withFriction(html, config, opts) {
+    opts = opts || {};
     let onViolation = null;
+    const stateReads = [];
     const friction = {
       onViolation: (fn) => { onViolation = fn; },
-      getCurrentState: () => ({ in_violation: false }),
+      // `ongoing` models a violation that STARTED BEFORE replay attached, whose
+      // phase:'start' emission is long gone by subscription time. The call is
+      // counted because the pre-session gate is only observable that way: the
+      // recorder refuses the push too, so the OUTCOME is the same either way
+      // and a test asserting it alone cannot see the gate.
+      getCurrentState: () => { stateReads.push(1); return opts.ongoing || { in_violation: false }; },
     };
     const win = new Window({ url: 'https://example.org/' });
     win.document.body.innerHTML = html;
@@ -333,7 +396,7 @@ describe('guard-friction cooperation', () => {
     let now = 100;
     let observerCb = null;
     const real = new win.MutationObserver(() => {});
-    rec.startSession();
+    if (!opts.beforeSession) rec.startSession();
     attachDomCapture(rec, {
       doc: win.document, win, now: () => now, span,
       MutationObserver: function (cb) {
@@ -342,7 +405,7 @@ describe('guard-friction cooperation', () => {
       },
     });
     return {
-      rec, win, span,
+      rec, win, span, stateReads,
       doc: win.document,
       root: () => win.document.querySelector('#stage'),
       violate: (v) => onViolation(v),
@@ -393,6 +456,56 @@ describe('guard-friction cooperation', () => {
     h.violate({ phase: 'start', reason: 'not_fullscreen' });
     assert.equal(h.rec.getState().guardViolations[0].pre_scramble_dom, null);
     assert.ok(h.rec.getState().captureFailures.some(f => f.channel === 'guard_violation'));
+  });
+
+  it('synthesizes an entry for a violation already in progress at subscribe', () => {
+    // Friction may start before replay attaches (standalone wiring order, or a
+    // participant out of fullscreen from the very first frame). Its
+    // phase:'start' emission is gone by then, so the recording would silently
+    // miss an ongoing violation.
+    const h = withFriction('<div id="stage"><p>clean</p></div>', {},
+      { ongoing: { in_violation: true, current_reason: 'not_fullscreen' } });
+    const entry = h.rec.getState().guardViolations[0];
+    assert.ok(entry, 'an in-progress violation must be synthesized at subscribe');
+    assert.equal(entry.reason, 'not_fullscreen');
+    assert.equal(entry.phase, 'start');
+    assert.equal(entry.synthesized_at_subscribe, true);
+    assert.deepEqual(h.events(), [], 'still not an event (spec §5.8)');
+  });
+
+  it('the synthesized snapshot is NOT called pre_scramble_dom', () => {
+    // The name is the whole point. In enforcement mode the page may already be
+    // scrambled by subscribe time, so this tree is "whatever the DOM looks like
+    // now" — an analyst reading it as what the participant saw before the
+    // violation would be reading scrambled content as evidence.
+    const h = withFriction('<div id="stage"><p>clean</p></div>', {},
+      { ongoing: { in_violation: true, current_reason: 'not_fullscreen' } });
+    const entry = h.rec.getState().guardViolations[0];
+    assert.equal('pre_scramble_dom' in entry, false);
+    assert.equal(entry.dom_at_subscribe.tag, 'div');
+    assert.equal(entry.dom_at_subscribe.children[0].children[0].text, 'clean');
+    assert.equal(entry.dom_at_subscribe.id, 1, 'its own throwaway span, like the live path');
+  });
+
+  it('an unknown ongoing reason still records the violation', () => {
+    const h = withFriction('<div id="stage"></div>', {},
+      { ongoing: { in_violation: true } });
+    assert.equal(h.rec.getState().guardViolations[0].reason, 'unknown');
+  });
+
+  it('does not even ASK friction for its state before the session starts', () => {
+    // attachDomCapture is only ever called after startSession by the assembly;
+    // the gate makes that self-evident here, so no future wiring change can
+    // route a synthesized entry through a pre-session recorder.
+    //
+    // Asserting the empty result would not pin THIS gate: `pushGuardViolation`
+    // refuses outside the recording window too (recorder.test.js pins that
+    // separately), so the outcome holds with either guard alone. The call
+    // counter is what makes the capture-side gate individually observable.
+    const h = withFriction('<div id="stage"><p>clean</p></div>', {},
+      { ongoing: { in_violation: true, current_reason: 'not_fullscreen' }, beforeSession: true });
+    assert.deepEqual(h.stateReads, [], 'the gate short-circuits before the state read');
+    assert.deepEqual(h.rec.getState().guardViolations, []);
   });
 
   it('non-start phases carry duration and no snapshot', () => {

@@ -138,22 +138,41 @@ export function attachDomCapture(rec, env) {
   // held. (Task 4's residual: the seed's "did anything get walked" guard
   // catches a never-walked span, not a walk of a DIFFERENT root. One root
   // identity is what makes that unreachable rather than merely unlikely.)
+  // Did the held root actually come from the configured selector? Resolving
+  // once turns a transient miss into a permanent one, so the answer has to
+  // reach the file rather than being assumed (see rootSelector below).
+  var rootFromSelector = false;
   var root = resolveRoot();
 
   function resolveRoot() {
     var r = rec.config.root;
-    if (typeof r === 'string') {
-      try { return doc.querySelector(r) || doc.body; } catch (e) { return doc.body; }
+    if (typeof r === 'string' && r) {
+      var found = null;
+      try { found = doc.querySelector(r); } catch (e) { found = null; }
+      if (found) { rootFromSelector = true; return found; }
+      // A selector that matches nothing (or does not parse) is a study
+      // misconfiguration, and the fallback is silent everywhere else: the
+      // recording looks complete and simply describes a different subtree.
+      rec.captureFailure('observed_root', new Error(
+        'root selector "' + r + '" matched nothing at startSession(); ' +
+        'observing document.body instead'));
+      return doc.body;
     }
     return r || doc.body;
   }
 
-  // Spec §2 types `observed_root` as a SELECTOR, so an element handed over
-  // directly is reported by its id when it has one and as null otherwise —
-  // null meaning "the document body", which is also the default.
+  // Spec §2 types `observed_root` as a SELECTOR, and it must name what was
+  // OBSERVED, not what was asked for. Returning the configured selector after
+  // the fallback would put a body-rooted tree in a file labelled `#stage`, and
+  // a conforming player honouring the field would mount it there.
+  //
+  // So: the configured selector only when the held root came from it; else the
+  // root's own id; else null, which is §2's spelling for "the document body"
+  // and exactly what the fallback observed. `null` alone would read as "the
+  // researcher configured nothing", which is why the capture failure above is
+  // the other half of this — together they are diagnosable.
   function rootSelector() {
-    var r = rec.config.root;
-    if (typeof r === 'string' && r) return r;
+    if (rootFromSelector) return rec.config.root;
     if (root && root.id) return '#' + root.id;
     return null;
   }
