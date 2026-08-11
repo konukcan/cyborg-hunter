@@ -23,7 +23,7 @@ import { readFileSync } from 'fs';
 import { Window } from 'happy-dom';
 
 import { instantiateTree, mountTree } from '../../src/replay/dom-instantiate.js';
-import { readTree, asPlayerTree } from './support/dom-player.js';
+import { createPlayer, readTree, asPlayerTree } from './support/dom-player.js';
 
 const FIXTURES = new URL('./schema-v2/fixtures/', import.meta.url);
 const fixture = (name) =>
@@ -73,13 +73,21 @@ function withoutAnnotations(node) {
 
 const expected = (dom) => withoutAnnotations(asPlayerTree(dom));
 
-// The one place the viewer and the strict test player legitimately disagree.
-// happy-dom sets any attribute name it is given; a real browser's
-// `setAttribute` throws `InvalidCharacterError` on a name outside the XML Name
-// production, so the player holds an attribute the reconstruction CANNOT. The
-// corpus has exactly one (named below), and the loop that forgives it counts
-// what it forgave — otherwise this helper would quietly bless a filter that had
-// started eating ordinary attributes.
+// The one place the viewer and the strict test player disagree.
+//
+// CORRECTED IN FIX ROUND 1, because the first version of this comment had the
+// mechanism backwards. Measured tri-engine by the reviewer, and reproduced
+// here for happy-dom: chromium, firefox and webkit all ACCEPT
+// `setAttribute('<', 'v')`, and all three mount the real fixture node
+// unfiltered; happy-dom 20.9.0 is the realm that throws. So this filter is not
+// protecting the viewer from a browser abort on `<`. What it does is give one
+// answer in every realm — the reasons are in the module's docblock — and the
+// player therefore drops an attribute `asPlayerTree` keeps, because
+// `asPlayerTree` is a pure JSON transform that never touches a DOM.
+//
+// The corpus has exactly one such attribute (named below), and the loop that
+// forgives it counts what it forgave — otherwise this helper would quietly
+// bless a filter that had started eating ordinary attributes.
 function dropUnnameable(node, tally) {
   if (!node || node.kind !== 'element') return node;
   const attrs = {};
@@ -124,15 +132,21 @@ describe('instantiateTree — tree shapes round-trip', () => {
     assert.deepEqual(forgiven, ['<']);
   });
 
-  it("jspsych-full's free-sort arena carries an attribute setAttribute refuses", () => {
+  it("jspsych-full's free-sort arena carries an attribute outside the XML Name production", () => {
     // A REAL-CORPUS instance of the §12 name filter, not a constructed one:
     // jsPsych 8.2.3's free-sort plugin builds its arena from an HTML string the
     // parser reads as carrying attributes named `<` and `div`. `div` is a legal
-    // name and survives; `<` is outside the XML Name production, so a real
-    // browser's `setAttribute` throws `InvalidCharacterError` on it — one
-    // malformed attribute in one plugin would abort the whole reconstruction.
-    // The strict test player sets it happily, which is why the round-trip loop
-    // above has to forgive exactly this one attribute.
+    // name and survives; `<` is not, and the filter drops it.
+    //
+    // What that costs and does not cost, measured rather than assumed (fix
+    // round 1): chromium, firefox and webkit ACCEPT `setAttribute('<', 'v')`
+    // and mount this exact node unfiltered, so nothing was rescued from a
+    // browser abort here. happy-dom throws on it, so the STRICT TEST PLAYER
+    // cannot instantiate this segment at all — `createPlayer` on segment 10
+    // raises `InvalidCharacterError` today. Dropping is still right (module
+    // docblock: one answer per realm, parity with capture's own predicate, and
+    // the names browsers DO refuse), but the corpus instance is a
+    // realm-divergence case, not a rescue.
     const arena = fixture('jspsych-full').segments[10].initial_dom;
     let node = null;
     (function walk(n) {
@@ -205,6 +219,20 @@ describe('mountTree — the body-root split (design §4)', () => {
     assert.equal(doc.body.querySelectorAll('section').length, 0);
   });
 
+  it('the root id binds to the frame OWN body, which dom.remove must never detach', () => {
+    // Task-3 hazard, pinned where whoever writes `dom.remove` will look. The
+    // body-root split means `idMap.get(rootId)` is the frame's `<body>`, so a
+    // `dom.remove` naming that id and calling `.remove()` blindly detaches the
+    // element every later mount and patch depends on. The tolerant skip is the
+    // answer; this test states the shape that makes the skip necessary.
+    const dom = fixture('jspsych-full').segments[0].initial_dom;
+    const doc = freshDoc();
+    const { idMap } = mountTree(dom, doc.body, doc);
+    same(idMap.get(dom.id), doc.body, 'the root id IS the frame body');
+    same(doc.body.parentNode, doc.documentElement,
+      'and it hangs off the document element, so removing it empties the frame');
+  });
+
   it('a null keyframe clears the body and mounts nothing', () => {
     const doc = freshDoc();
     doc.body.appendChild(doc.createElement('section'));
@@ -254,6 +282,67 @@ describe('spec §12 player filters', () => {
     // merely reads like one is page content, not a vector.
     assert.equal(root.getAttribute('title'), hostile.attrs.title);
     assert.equal(root.getAttribute('data-note'), 'onclick');
+  });
+
+  it('refuses the names the DOM itself refuses, in BOTH realms', () => {
+    // The claim that survives measurement, pinned rather than asserted in
+    // prose. `<` is accepted by chromium/firefox/webkit and rejected by
+    // happy-dom, so it cannot carry this argument. A whitespace-bearing name
+    // is rejected by every engine the reviewer measured AND by the realm this
+    // suite runs in, so a player with no name filter really does abort on a
+    // hostile file — which is one of the three reasons the filter stays.
+    const doc = freshDoc();
+    assert.throws(() => doc.createElement('div').setAttribute('a b', 'v'),
+      'the DOM in THIS realm accepts a whitespace-bearing attribute name');
+
+    const { root } = instantiateTree({
+      id: 1, kind: 'element', tag: 'div', attrs: { 'a b': 'v', ok: '1' }, children: [],
+    }, doc);
+    assert.equal(root.getAttribute('a b'), null);
+    assert.equal(root.getAttribute('ok'), '1');
+  });
+
+  it('happy-dom, not the browser, is the realm that refuses the corpus attribute', () => {
+    // The inverse of the claim this task originally made. Pinned because the
+    // ledger sends Task 3 (the `dom.attr` name filter) and Task 8 (the browser
+    // battery) here: name validity bites in the NODE suite, not in Playwright.
+    const arena = fixture('jspsych-full').segments[10].initial_dom;
+    assert.throws(() => createPlayer(arena), /InvalidCharacterError|character/i,
+      'the strict test player can now instantiate the free-sort segment');
+  });
+
+  it('an iframe placeholder never receives a src through media_src', () => {
+    // The annotation route bypassed `IFRAME_SKIP` until fix round 1, and the
+    // reviewer measured chromium ISSUING the request when the CSP was absent.
+    // §12's network policy is supposed to hold STRUCTURALLY here — nothing to
+    // request — with `frame-src 'none'` as the belt; the belt lives in the
+    // client file Task 4 rewrites, and three consumers build their own frames.
+    const { root } = instantiateTree({
+      id: 1, kind: 'element', tag: 'iframe',
+      attrs: { width: '300', height: '150' },
+      media_src: 'https://tracker.example.net/beacon?p=PID',
+      children: [],
+    }, freshDoc());
+    assert.equal(root.getAttribute('src'), null);
+    assert.equal(root.getAttribute('srcdoc'), null);
+    assert.equal(root.getAttribute('data-ch-placeholder'), 'iframe');
+    assert.equal(root.getAttribute('width'), '300');
+  });
+
+  it('media elements do not carry autoplay into the reconstruction', () => {
+    // Design §7 renders media as a state badge and a lane marker, with no
+    // playback, and honours `media_src` only so the element has its shape.
+    // `autoplay` is the one recorded attribute that starts playback without
+    // the analyst asking, and the shell CSP allows `media-src *`.
+    const { root } = instantiateTree({
+      id: 1, kind: 'element', tag: 'video',
+      attrs: { autoplay: '', controls: '', loop: '', width: '320' },
+      media_src: 'https://example.org/exp/clip.mp4',
+      children: [],
+    }, freshDoc());
+    assert.equal(root.getAttribute('autoplay'), null);
+    assert.equal(root.getAttribute('controls'), '');
+    assert.equal(root.getAttribute('src'), 'https://example.org/exp/clip.mp4');
   });
 
   it('keeps ordinary URLs in the same attributes it filters', () => {
@@ -377,6 +466,138 @@ describe('spec §4 annotations', () => {
       media_src: 'javascript:alert(1)', children: [],
     }, freshDoc());
     assert.equal(root.getAttribute('src'), null);
+  });
+});
+
+describe('foreign content — SVG and MathML namespaces', () => {
+  // v1 built the reconstruction from an HTML string, so the PARSER applied
+  // foreign-content rules and SVG stimuli rendered. `createElement` does not:
+  // the reviewer measured a `createElement`-built `svg > circle` in chromium at
+  // namespace `…/1999/xhtml` and a bounding rect of 0×0, against `…/2000/svg`
+  // and 100×100 for the same markup parsed. Nothing rendered, no chip, no
+  // counter — the failure §12's placeholder duty exists to prevent. The
+  // round-trip oracle could not see it either, because `dom-player.js` shared
+  // the same `createElement` call, so BOTH files carry the inference now.
+  const svgTree = {
+    id: 1, kind: 'element', tag: 'div', attrs: {}, children: [
+      { id: 2, kind: 'element', tag: 'svg',
+        attrs: { width: '100', height: '100', viewBox: '0 0 100 100' },
+        children: [
+          { id: 3, kind: 'element', tag: 'circle',
+            attrs: { cx: '50', cy: '50', r: '40' }, children: [] },
+          { id: 4, kind: 'element', tag: 'foreignobject',
+            attrs: { width: '50', height: '50' }, children: [
+              { id: 5, kind: 'element', tag: 'div', attrs: {}, children: [] },
+            ] },
+        ] },
+      { id: 6, kind: 'element', tag: 'p', attrs: {}, children: [] },
+    ],
+  };
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const XHTML_NS = 'http://www.w3.org/1999/xhtml';
+
+  it('an svg subtree is created in the SVG namespace, descendants included', () => {
+    const { idMap } = instantiateTree(svgTree, freshDoc());
+    assert.equal(idMap.get(2).namespaceURI, SVG_NS);
+    assert.equal(idMap.get(3).namespaceURI, SVG_NS);
+    // The size class the reviewer measured in chromium follows from the
+    // namespace: an XHTML-namespace <svg> lays out at 0×0 whatever its
+    // width/height say, an SVG-namespace one at its viewport. happy-dom does
+    // not lay out, so the namespace IS the assertion here, and Task 8's
+    // battery is where the rendered size becomes checkable.
+    assert.equal(idMap.get(2).getAttribute('viewBox'), '0 0 100 100');
+  });
+
+  it('foreignObject switches its descendants back to XHTML', () => {
+    const { idMap } = instantiateTree(svgTree, freshDoc());
+    assert.equal(idMap.get(4).namespaceURI, SVG_NS, 'foreignObject is itself SVG');
+    assert.equal(idMap.get(5).namespaceURI, XHTML_NS, 'its children are not');
+  });
+
+  it('an svg sibling does not leak the namespace to the rest of the tree', () => {
+    const { root, idMap } = instantiateTree(svgTree, freshDoc());
+    assert.equal(root.namespaceURI, XHTML_NS);
+    assert.equal(idMap.get(6).namespaceURI, XHTML_NS);
+  });
+
+  it('the strict test player infers the same namespaces, so the oracle can see them', () => {
+    // Sharing `createElement` is what made the round-trip blind: both sides
+    // agreed on a tree neither could render. The oracle has to carry the rule
+    // too, or a regression in one file passes because the other matches it.
+    const player = createPlayer(svgTree);
+    assert.equal(player.node(2).namespaceURI, SVG_NS);
+    assert.equal(player.node(3).namespaceURI, SVG_NS);
+    assert.equal(player.node(5).namespaceURI, XHTML_NS);
+    assert.deepEqual(roundTrip(svgTree), expected(svgTree));
+  });
+});
+
+describe('tolerant instantiation — a malformed node must not abort a mount', () => {
+  // `createElement` throws on a malformed tag name in every browser (measured
+  // tri-engine: '', '<div', 'a b', '1abc'), and happy-dom throws on '' alone —
+  // so an unguarded walk aborts the whole keyframe mount in a browser and
+  // silently builds a broken element in node. That divergence is the same
+  // realm-determinism argument the attribute-name filter rests on, so the tag
+  // guard is the same predicate, applied at the instantiation boundary.
+  // Skipped nodes are COUNTED, which is design §4's tolerant posture; Task 3
+  // folds the count into the `counters.patchFailures` surface that already
+  // drives the "recorded change(s) could not be reapplied" chip.
+  it('skips and counts a child whose tag no DOM would accept', () => {
+    const { root, idMap, skipped } = instantiateTree({
+      id: 1, kind: 'element', tag: 'div', attrs: {}, children: [
+        { id: 2, kind: 'element', tag: '<div', attrs: {}, children: [] },
+        { id: 3, kind: 'element', tag: 'p', attrs: {}, children: [] },
+        { id: 4, kind: 'element', tag: '', attrs: {}, children: [] },
+        { id: 5, kind: 'element', attrs: {}, children: [] },
+      ],
+    }, freshDoc());
+    assert.equal(skipped, 3);
+    assert.equal(root.childNodes.length, 1);
+    same(root.childNodes[0], idMap.get(3), 'the well-formed sibling survives');
+    // Skipped nodes are not in the map, so a later patch naming one resolves to
+    // nothing and is counted rather than applied to the wrong node.
+    assert.equal(idMap.has(2), false);
+    assert.equal(idMap.has(4), false);
+    assert.equal(idMap.has(5), false);
+    assert.equal(idMap.size, 2);
+  });
+
+  it('skips and counts a null entry in children', () => {
+    const { root, skipped } = instantiateTree({
+      id: 1, kind: 'element', tag: 'div', attrs: {},
+      children: [null, { id: 2, kind: 'text', text: 'kept' }, undefined],
+    }, freshDoc());
+    assert.equal(skipped, 2);
+    assert.equal(root.childNodes.length, 1);
+    assert.equal(root.textContent, 'kept');
+  });
+
+  it('a null or malformed root yields no root rather than a throw', () => {
+    for (const bad of [null, undefined, 'a string', { id: 1, kind: 'element', tag: 'a b' }]) {
+      const out = instantiateTree(bad, freshDoc());
+      same(out.root, null, 'root for ' + JSON.stringify(bad));
+      assert.equal(out.skipped, 1);
+      assert.equal(out.idMap.size, 0);
+    }
+  });
+
+  it('mountTree survives a malformed keyframe and leaves the body clean', () => {
+    const doc = freshDoc();
+    doc.body.appendChild(doc.createElement('section'));
+    const { root, skipped } = mountTree({ id: 1, kind: 'element', tag: '<body' }, doc.body, doc);
+    same(root, null, 'nothing mounts');
+    assert.equal(skipped, 1);
+    assert.equal(doc.body.childNodes.length, 0);
+  });
+
+  it('a well-formed tree reports zero skips', () => {
+    for (const name of ['canonical-core', 'jspsych-full']) {
+      for (const seg of fixture(name).segments) {
+        if (!seg.initial_dom) continue;
+        assert.equal(instantiateTree(seg.initial_dom, freshDoc()).skipped, 0,
+          name + ' segment ' + seg.index);
+      }
+    }
   });
 });
 

@@ -29,6 +29,28 @@ const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
 const COMMENT_NODE = 8;
 
+// Foreign-content namespaces, MIRRORED from `src/replay/dom-instantiate.js`
+// (which cannot be imported here: it must survive concatenation into the
+// report's viewer script as plain script text, so it has no imports and this
+// file must not become one). The rule has to live in both places for a reason
+// the T5 Task-2 review found: while both players called `createElement`, an
+// `svg > circle` landed in the XHTML namespace on BOTH sides, so the round-trip
+// oracle agreed about a tree neither could render. An oracle that shares the
+// implementation's blindness is not an oracle. Re-sync both when either moves.
+const XHTML_NS = 'http://www.w3.org/1999/xhtml';
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const MATHML_NS = 'http://www.w3.org/1998/Math/MathML';
+const FOREIGN_ROOTS = { svg: SVG_NS, math: MATHML_NS };
+const SVG_HTML_INTEGRATION = { foreignobject: true, desc: true, title: true };
+
+function namespaceFor(tag, parentNs) {
+  return FOREIGN_ROOTS[tag] || parentNs || XHTML_NS;
+}
+
+function childNamespaceOf(tag, ns) {
+  return ns === SVG_NS && SVG_HTML_INTEGRATION[tag] === true ? XHTML_NS : ns;
+}
+
 /**
  * @param {object} keyframe  a DomNode tree (spec §4), as serializeTree emits it
  * @returns {{root, node, apply, tree}}
@@ -39,15 +61,20 @@ export function createPlayer(keyframe) {
   const byId = new Map();      // id → node
   const idOf = new Map();      // node → id
 
-  function instantiate(domNode) {
+  function instantiate(domNode, parentNs) {
     let el;
     if (domNode.kind === 'text') el = doc.createTextNode(domNode.text);
     else if (domNode.kind === 'comment') el = doc.createComment(domNode.text);
     else {
-      el = doc.createElement(domNode.tag);
+      const tag = String(domNode.tag == null ? '' : domNode.tag).toLowerCase();
+      const ns = namespaceFor(tag, parentNs);
+      el = ns === XHTML_NS
+        ? doc.createElement(domNode.tag)
+        : doc.createElementNS(ns, domNode.tag);
       const attrs = domNode.attrs || {};
       for (const name of Object.keys(attrs)) el.setAttribute(name, attrs[name]);
-      for (const child of domNode.children || []) el.appendChild(instantiate(child));
+      const childNs = childNamespaceOf(tag, ns);
+      for (const child of domNode.children || []) el.appendChild(instantiate(child, childNs));
     }
     byId.set(domNode.id, el);
     idOf.set(el, domNode.id);
@@ -87,7 +114,10 @@ export function createPlayer(keyframe) {
           const parent = held(e.parent, 'dom.add parent');
           const ref = e.before === null || e.before === undefined
             ? null : held(e.before, 'dom.add before');
-          parent.insertBefore(instantiate(e.node), ref);
+          // The inserted subtree inherits the LIVE parent's namespace, so a
+          // `dom.add` into an SVG subtree does not silently produce XHTML
+          // children. Task 3's applier owes the same rule.
+          parent.insertBefore(instantiate(e.node, parent.namespaceURI), ref);
         } else if (e.type === 'dom.remove') {
           const el = held(e.node, 'dom.remove');
           el.remove();
