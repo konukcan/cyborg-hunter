@@ -213,11 +213,11 @@
   // Written ONCE per mount. It carries no recorded content at all: the
   // stylesheets are inserted by resetSheets() so that one function owns sheet
   // state, and the body is filled by mountTree().
-  function buildShell(allowExternalCss) {
+  function buildShell(allowExternalCss, gen) {
     return '<!DOCTYPE html><html><head><meta charset="utf-8">' +
       '<meta http-equiv="Content-Security-Policy" content="' + srcdocCsp(allowExternalCss) + '">' +
       '<meta name="referrer" content="no-referrer">' +
-      '<meta name="' + SHELL_META + '" content="1">' +
+      '<meta name="' + SHELL_META + '" content="' + gen + '">' +
       '<style data-ch-shell-rules>' + shellRules() + '</style>' +
       '</head><body></body></html>';
   }
@@ -250,6 +250,7 @@
     var autoAdvance = true;
 
     var shellReady = false;
+    var shellGen = 0;          // stamped into each shell; see shellPresent()
     var span = null;           // mountTree's live state for the mounted span
     var spanStart = -1;        // index of the keyframe the mounted span opens at
     var spanEnd = -1;
@@ -460,21 +461,38 @@
       return iframe && shellReady ? iframe.contentDocument : null;
     }
 
+    // The sentinel carries the GENERATION of the write that produced it, and
+    // that is what makes the boot document-scoped rather than merely
+    // idempotent. Existence alone is not enough: every shell carries an
+    // identical sentinel, so on a SECOND write the immediate probe below finds
+    // the PREVIOUS document (browsers navigate `srcdoc` asynchronously, so
+    // `contentDocument` still holds the old one) and would boot into a
+    // document the browser is about to discard. That blanks the
+    // reconstruction, leaves every id in the span map pointing into a detached
+    // tree, and leaves `frameReady()` reporting true over an empty frame —
+    // measured in chromium, and the reason v1 carried a generation counter at
+    // all. The counter left with the per-seek rebuild; the external-CSS
+    // rewrite that still needs one stayed.
     function shellPresent() {
       var doc = iframe && iframe.contentDocument;
       try {
-        return !!(doc && doc.querySelector('meta[name="' + SHELL_META + '"]'));
+        var meta = doc && doc.querySelector('meta[name="' + SHELL_META + '"]');
+        return !!meta && meta.getAttribute('content') === String(shellGen);
       } catch (e) { return false; }
     }
 
     // Browsers navigate the frame asynchronously and fire `load`; happy-dom
     // parses `srcdoc` synchronously and fires `load` afterwards, twice. One
     // idempotent boot covers all of it: try immediately, and again on load.
+    // The immediate try is what keeps the node suite synchronous; the `onload`
+    // install is what carries every real browser, and only the generation
+    // check above keeps the two from disagreeing about which document is live.
     function writeShell() {
       shellReady = false;
       stats.shellWrites++;
+      shellGen++;
       iframe.onload = onShellLoad;
-      iframe.srcdoc = buildShell(allowExternalCss);
+      iframe.srcdoc = buildShell(allowExternalCss, shellGen);
       bootShell();
     }
 
@@ -512,10 +530,23 @@
 
     // Sheets go BEFORE the viewer's own rules so a recording's CSS can never
     // override the gutter fix or the placeholder outline.
+    //
+    // EVERY SHEET QUERY IN THIS SECTION IS HEAD-SCOPED, and that scoping is
+    // load-bearing rather than tidiness. `data-ch-sheet` is a name the viewer
+    // stamps and then reads back, which puts it in the same class as the two
+    // the §12 predicate protects — but a recording can carry it too, and a
+    // document-wide read cannot tell the viewer's sheet from a page element.
+    // Measured consequence of the unscoped version: `deriveSheets`'s reset loop
+    // DELETED a keyframe element carrying the attribute, on every restore, with
+    // both counters at zero, so the reconstruction diverged silently while
+    // `resolveNode` still resolved the id. Recorded content only ever mounts
+    // into <body> and sheets only ever live in <head>, so scoping the read is
+    // what closes it — and unlike widening the attribute ban, it deletes
+    // nothing the page really had.
     function insertSheet(doc, sheet) {
       var node = sheetNode(doc, sheet);
       if (!node) return;
-      var anchor = doc.querySelector('style[data-ch-shell-rules]');
+      var anchor = doc.head.querySelector('style[data-ch-shell-rules]');
       doc.head.insertBefore(node, anchor || null);
     }
 
@@ -528,19 +559,19 @@
       } else if (ev.type === 'stylesheet.remove') {
         removeSheet(doc, ev.id);
       } else if (ev.type === 'stylesheet.update') {
-        var node = doc.querySelector('[data-ch-sheet="' + ev.id + '"]');
+        var node = doc.head.querySelector('[data-ch-sheet="' + ev.id + '"]');
         if (node && node.tagName.toLowerCase() === 'style') node.textContent = ev.css == null ? '' : ev.css;
         else insertSheet(doc, { id: ev.id, kind: 'inline', css: ev.css, media: null });
       }
     }
 
     function removeSheet(doc, id) {
-      var node = doc.querySelector('[data-ch-sheet="' + id + '"]');
+      var node = doc.head.querySelector('[data-ch-sheet="' + id + '"]');
       if (node && node.parentNode) node.parentNode.removeChild(node);
     }
 
     function deriveSheets(doc, originT) {
-      var live = doc.querySelectorAll('[data-ch-sheet]');
+      var live = doc.head.querySelectorAll('[data-ch-sheet]');
       for (var i = live.length - 1; i >= 0; i--) {
         if (live[i].parentNode) live[i].parentNode.removeChild(live[i]);
       }
@@ -839,7 +870,7 @@
           'it records DOM changes but no keyframe precedes it (' + s.defect + ').';
         defectChip.style.display = '';
         span = null; walk = []; appliedIdx = 0; spanStart = -1; spanEnd = -1;
-        if (doc) mountTree(null, doc.body, doc);
+        if (doc) { mountTree(null, doc.body, doc); stats.mounts++; }
         seedCamera(targetSeg);
         pendingCamSize = true;
         flushCamSize();
@@ -858,6 +889,18 @@
       spanEnd = start >= 0 ? spanEndOf(start) : targetSeg;
       var walkStart = start >= 0 ? start : targetSeg;
       var walkEnd = start >= 0 ? spanEnd : targetSeg;
+
+      // The check memo belongs to the SPAN, not to the current segment.
+      // `evaluateCheck` caches on the event object and the walk replays every
+      // segment from the keyframe forward, so clearing only the selected
+      // segment (which is where `loadSegment` used to do it) left the earlier
+      // segments of the same span holding checks computed against a stage
+      // transform and a reconstruction this restore is about to replace. The
+      // clear goes where the state it describes is rebuilt.
+      for (var c = walkStart; c <= walkEnd; c++) {
+        var evs = segments[c].events;
+        for (var d = 0; d < evs.length; d++) if (evs[d].__chk) delete evs[d].__chk;
+      }
 
       // 1. mount the span keyframe, fresh id map
       if (doc) {
@@ -1299,6 +1342,10 @@
 
     function updateStatusChips() {
       var s = checkSummary();
+      // Reset the class every time, not only the text: without this the chip
+      // keeps `replay-warn` from whichever segment last held an uncertain
+      // check, so a clean segment renders an empty chip styled as a warning.
+      alignChip.className = 'replay-note';
       if (model.tier !== 'dom') {
         alignChip.textContent = '';
       } else if (s.uncertain > 0) {
@@ -1413,8 +1460,7 @@
       playhead = 0;
       segHadIframe = false;
       segHadShadow = false;
-      // Check caches are recomputed deterministically during the span walk.
-      seg().events.forEach(function (e) { if (e.__chk) delete e.__chk; });
+      // Check caches are cleared by `restore()`, span-wide — see there.
       seedCamera(seg().spanStart != null ? seg().spanStart : i);
       sizeStage();
       // DPR advisory: resolution-conditional CSS cannot be reproduced in an

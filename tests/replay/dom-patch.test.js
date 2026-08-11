@@ -676,6 +676,25 @@ describe('carried duties from Task 2', () => {
       'a composite for a node nothing can resolve is a leak');
   });
 
+  it('re-binding an id to a node with no canvas_size clears the stale entry', () => {
+    // T5.4 review M-8. `dom.add` OVERWRITES an id binding (a move, T3 pin M5),
+    // and `canvases` is keyed by the same ids — so a re-bind whose new node
+    // carries no `canvas_size` left the PREVIOUS node's bitmap size behind, and
+    // Task 5 would size an offscreen canvas for a node that is not one.
+    const { mount } = stage();
+    applyPatches([
+      { type: 'dom.add', t: 1, parent: 1, before: null,
+        node: Object.assign(el(9, 'canvas', {}, []), { canvas_size: { w: 400, h: 300 } }) },
+    ], mount);
+    assert.deepEqual(mount.canvases.get(9), { w: 400, h: 300 });
+
+    applyPatches([
+      { type: 'dom.add', t: 2, parent: 1, before: null, node: el(9, 'div', {}, []) },
+    ], mount);
+    assert.equal(mount.idMap.get(9).tagName.toLowerCase(), 'div', 'the id moved');
+    assert.equal(mount.canvases.has(9), false, 'and took its stale bitmap size with it');
+  });
+
   it('a dom.remove naming the body-root id is skipped and counted (M-7)', () => {
     // `mountTree` binds a `body` root to the frame's OWN <body>, so a blind
     // `.remove()` here detaches the element every later mount and patch depends

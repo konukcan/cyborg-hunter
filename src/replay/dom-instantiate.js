@@ -384,6 +384,13 @@ function instantiateElement(domNode, ctx, tag, parentNs) {
   // snapshots composite into (design §3.1) and what the used-size-0 sizing
   // repair pins from (design §3.3). Both are Task 5's; recording it is this
   // walk's, because this walk is the only place the annotation is in hand.
+  //
+  // The delete is not redundant with the set. `dom.add` OVERWRITES an id
+  // binding, because a remove+add pair carrying one id is a MOVE (pin M5), and
+  // this map is keyed by the same ids — so an id re-bound to a node with NO
+  // `canvas_size` would keep the previous node's bitmap size, and Task 5 would
+  // size an offscreen canvas for an element that is not a canvas.
+  ctx.canvases.delete(domNode.id);
   var size = domNode.canvas_size;
   if (size && typeof size === 'object'
       && typeof size.w === 'number' && typeof size.h === 'number') {

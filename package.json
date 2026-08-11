@@ -21,6 +21,7 @@
     "test:schema": "node --test tests/replay/schema-v2/*.test.js",
     "test:browser:replay": "node tests/browser/replay/run-replay-tests.mjs",
     "test:browser:alignment": "node tests/browser/replay/cursor-alignment.battery.mjs",
+    "test:browser:boot": "node tests/browser/replay/viewer-boot.battery.mjs",
     "test:browser:capture": "node tests/browser/replay/capture-chromium.battery.mjs",
     "test:browser:fork": "node tests/browser/replay/capture-fork-smoke.mjs",
     "test:e2e": "playwright test"

@@ -457,6 +457,75 @@ describe('T5.4 — the data-ch-* family is viewer-owned, both verbs', () => {
     assert.notEqual(v.chip('data-ch-iframe-warn').style.display, 'none');
   });
 
+  // `data-ch-sheet` is the THIRD name the viewer stamps onto live nodes, and
+  // the first Task-4 draft missed it: the scoping argument counted the names
+  // the viewer stamps as two. The set that needs protecting is the names the
+  // viewer stamps AND READS BACK, and the read-backs were document-wide.
+  // Recorded content mounts into <body> and sheets live in <head>, so scoping
+  // the four sheet queries to the head closes it without deleting an attribute
+  // the page really had.
+  it('does not delete a keyframe element that carries data-ch-sheet', () => {
+    const v = boot(baseRecording({
+      stylesheets: [{ id: 1, kind: 'inline', css: '#p{color:red}', media: null }],
+      segments: [segment({
+        initial_dom: bodyKeyframe([
+          {
+            id: 2, kind: 'element', tag: 'div', attrs: { id: 'keepme', 'data-ch-sheet': '7' },
+            children: [{ id: 3, kind: 'text', text: 'PAGE CONTENT' }],
+          },
+        ]),
+      })],
+    }));
+    // The sheet-reset loop runs on every restore; a document-wide query took
+    // this element with it, with BOTH counters at 0 — a silent divergence,
+    // which is the failure the counters exist to prevent.
+    assert.equal(v.doc().body.textContent, 'PAGE CONTENT');
+    assert.ok(v.doc().contains(v.dbg.getNode(2)), 'the element is still in the document');
+    assert.equal(v.dbg.getNode(2).getAttribute('data-ch-sheet'), '7',
+      'and keeps the attribute the page really had');
+    assert.deepEqual(v.dbg.getCounters(), { patchFailures: 0, skipped: 0 });
+  });
+
+  it('a stylesheet.update cannot hijack a page-authored data-ch-sheet node', () => {
+    const v = boot(baseRecording({
+      stylesheets: [],
+      stylesheet_events: [{ type: 'stylesheet.update', t: 50, id: 7, css: 'HIJACKED' }],
+      segments: [segment({
+        t_end: 300,
+        initial_dom: bodyKeyframe([
+          {
+            id: 2, kind: 'element', tag: 'style', attrs: { 'data-ch-sheet': '7' },
+            children: [{ id: 3, kind: 'text', text: 'PAGE CSS' }],
+          },
+        ]),
+      })],
+    }));
+    v.dbg.seek(200);
+    assert.equal(v.dbg.getNode(2).textContent, 'PAGE CSS', 'the page\'s own style survived');
+    const headSheet = v.doc().head.querySelector('[data-ch-sheet="7"]');
+    assert.ok(headSheet && headSheet.textContent === 'HIJACKED',
+      'the update created its own sheet in the head instead');
+  });
+
+  it('inserts sheets against the head anchor, not a page-authored one', () => {
+    // A page-authored <style data-ch-shell-rules> in the BODY became
+    // insertSheet's anchor, and `head.insertBefore(node, bodyChild)` raises
+    // NotFoundError in a browser — an uncaught throw inside restore().
+    const v = boot(baseRecording({
+      stylesheets: [{ id: 1, kind: 'inline', css: '#p{color:red}', media: null }],
+      segments: [segment({
+        initial_dom: bodyKeyframe([
+          { id: 2, kind: 'element', tag: 'style', attrs: { 'data-ch-shell-rules': '' }, children: [] },
+        ]),
+      })],
+    }));
+    const anchor = v.doc().head.querySelector('style[data-ch-shell-rules]');
+    const sheet = v.doc().head.querySelector('[data-ch-sheet="1"]');
+    assert.ok(anchor && sheet, 'both the viewer rules and the recorded sheet are in the head');
+    assert.ok(sheet.compareDocumentPosition(anchor) & 4,
+      'the recorded sheet precedes the viewer rules, so page CSS cannot override them');
+  });
+
   it('leaves page-authored data-ch-* attributes alone', () => {
     // `data-ch-redact` is the RESEARCHER's marker on their own page and is
     // serialised into the keyframe (capture-e2e pins that). The predicate is
@@ -545,6 +614,71 @@ describe('T5.4 — the alignment check is wired to §6, not dead', () => {
     // The two key events in the same segment carry neither camera nor anchor
     // (§6 MAY-omit): absence is not failure.
     assert.equal(checks.filter((c) => c.type.indexOf('key.') === 0).length, 0);
+  });
+
+  it('buckets an event-level redacted event as redacted, not as uncertain', () => {
+    // Design §8: the `redacted` bucket narrows to events carrying
+    // `redacted: true` at the EVENT level. canonical-core segment 2 holds a
+    // redacted key.down, which under §5.2 carries no other fields at all, so
+    // there is nothing to verify and nothing to report as misaligned. It must
+    // stay distinguishable from `no-anchor`, which means something else: an
+    // event that HAD a target and reported none applicable.
+    const v = boot(fixture('canonical-core'));
+    v.dbg.selectSegment(2);
+    v.dbg.seek(1000);
+    const checks = v.dbg.getChecks();
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].type, 'key.down');
+    assert.equal(checks[0].status, 'redacted');
+    assert.equal(v.chip('data-ch-align').textContent,
+      'alignment unverified (redacted interactions)');
+  });
+
+  it('clears the alignment chip class when a segment has nothing to warn about', () => {
+    // The chip keeps `replay-warn` from the previous segment otherwise, so a
+    // clean segment renders an empty chip that is still styled as a warning.
+    const v = boot(fixture('canonical-core'));
+    v.dbg.seek(1000);                       // segment 0: one uncertain check
+    assert.match(v.chip('data-ch-align').className, /replay-warn/);
+    v.dbg.selectSegment(1);                 // no anchored events at all
+    assert.equal(v.chip('data-ch-align').textContent, '');
+    assert.equal(v.chip('data-ch-align').className, 'replay-note');
+  });
+
+  it('recomputes memoised checks across the WHOLE span on a restore', () => {
+    // `evaluateCheck` memoises on the event object. `loadSegment` clears only
+    // the current segment's caches, so an earlier segment of the same span
+    // kept checks computed under a different stage transform and a restore
+    // replayed them unexamined. The clear belongs to the restore, which is
+    // what rebuilds the state the checks are about.
+    const v = boot(fixture('canonical-core'));
+    v.dbg.selectSegment(1);                 // span 0: replays segment 0's click
+    const click = v.model.segments[0].events[1];
+    assert.ok(click.__chk, 'the earlier segment\'s check was computed by the span walk');
+    click.__chk.reasons.push('STALE-MARKER');
+    v.dbg.seek(900);
+    v.dbg.seek(100);                        // backward: restore
+    assert.ok(click.__chk, 'and recomputed');
+    assert.equal(click.__chk.reasons.indexOf('STALE-MARKER'), -1,
+      'the memo did not survive the restore');
+  });
+
+  it('counts the defect path\'s mount, so getStats stays honest', () => {
+    const v = boot(baseRecording({
+      segments: [
+        segment({ index: 0, t_start: 0, t_end: 100, events: [{ type: 'dom.attr', t: 10, node: 1, name: 'x', value: 'y' }] }),
+        segment({ index: 1, t_start: 100, t_end: 200, initial_dom: bodyKeyframe([]) }),
+      ],
+    }));
+    // The defect path clears the body through mountTree, which is a real
+    // remount; a counter that skips it under-reports. Asserted as a DELTA,
+    // because the absolute number differs by one between realms: happy-dom's
+    // synchronous srcdoc parse lets the boot restore run before
+    // `selectSegment(0)` does its own, where a browser defers the first one to
+    // `onload`. Task 8 should read deltas for the same reason.
+    const before = v.dbg.getStats().mounts;
+    v.dbg.selectSegment(0);
+    assert.equal(v.dbg.getStats().mounts, before + 1);
   });
 
   it('resolves the anchor through the span id map, not a marker or a path', () => {
