@@ -1,0 +1,218 @@
+{
+  "schema_version": 2,
+  "recorder": {
+    "name": "jspsych",
+    "version": "8.2.1"
+  },
+  "host": {
+    "name": "jspsych",
+    "version": "8.2.1"
+  },
+  "participant_id": null,
+  "recording_started_at": "2026-08-10T09:00:00.000Z",
+  "recording_started_at_perf": 1234.5,
+  "user_agent": "jspsych-v1-minimal-sample",
+  "viewport": {
+    "w": 1280,
+    "h": 800,
+    "dpr": 2,
+    "scale": 1,
+    "offset_x": 0,
+    "offset_y": 0
+  },
+  "observed_root": "#jspsych-display-element",
+  "stylesheets": [
+    {
+      "id": 1,
+      "kind": "inline",
+      "css": "#jspsych-display-element{font-family:sans-serif}",
+      "media": null
+    }
+  ],
+  "stylesheet_events": [
+    {
+      "type": "stylesheet.update",
+      "t": 10,
+      "id": 1,
+      "css": "#jspsych-display-element{font-family:serif}"
+    }
+  ],
+  "viewport_changes": [
+    {
+      "t": 900,
+      "w": 1280,
+      "h": 760,
+      "dpr": 2,
+      "scale": 1,
+      "offset_x": 0,
+      "offset_y": 0
+    }
+  ],
+  "rng": {
+    "seed": "jspsych-v1-minimal",
+    "math_random_patched": true
+  },
+  "rng_calls": [
+    {
+      "t": 5,
+      "fn": "Math.random",
+      "args": [],
+      "result": 0.4287
+    }
+  ],
+  "ended_at_perf": 4200,
+  "end_reason": "finished",
+  "truncated": false,
+  "extensions": {
+    "converter": {
+      "tool": "jspsych-v1-to-v2",
+      "version": "1.0.0",
+      "source_sha256": "82f0e641014a501ed281b665d1a4520b27a25df263ba06e7ab305f011480adc8"
+    }
+  },
+  "segments": [
+    {
+      "index": 0,
+      "label": "0",
+      "plugin": "html-keyboard-response",
+      "t_start": 0,
+      "t_dom_ready": 12.5,
+      "t_load": null,
+      "t_end": 1500,
+      "initial_dom": {
+        "id": 1,
+        "kind": "element",
+        "tag": "div",
+        "attrs": {
+          "id": "jspsych-content"
+        },
+        "children": [
+          {
+            "id": 2,
+            "kind": "element",
+            "tag": "p",
+            "attrs": {},
+            "children": [
+              {
+                "id": 3,
+                "kind": "text",
+                "text": "Press f or j"
+              }
+            ]
+          },
+          {
+            "id": 4,
+            "kind": "comment",
+            "text": "trial 0"
+          }
+        ]
+      },
+      "initial_state": null,
+      "events": [
+        {
+          "type": "mouse.move",
+          "t": 120,
+          "x": 640,
+          "y": 400
+        },
+        {
+          "type": "key.down",
+          "t": 800,
+          "key": "f",
+          "code": "KeyF",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": null
+        },
+        {
+          "type": "key.up",
+          "t": 880,
+          "key": "f",
+          "code": "KeyF",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": null
+        }
+      ],
+      "host_data": {
+        "rt": 800,
+        "response": "f",
+        "correct": true
+      },
+      "extensions": null
+    },
+    {
+      "index": 1,
+      "label": "1",
+      "plugin": "canvas-keyboard-response",
+      "t_start": 1500,
+      "t_dom_ready": 1512,
+      "t_load": null,
+      "t_end": null,
+      "initial_dom": {
+        "id": 1,
+        "kind": "element",
+        "tag": "div",
+        "attrs": {
+          "id": "jspsych-content"
+        },
+        "children": [
+          {
+            "id": 2,
+            "kind": "element",
+            "tag": "canvas",
+            "attrs": {
+              "id": "stimulus"
+            },
+            "children": [],
+            "canvas_size": {
+              "w": 400,
+              "h": 300
+            }
+          }
+        ]
+      },
+      "initial_state": null,
+      "events": [
+        {
+          "type": "canvas.snapshot",
+          "t": 1600,
+          "node": 2,
+          "data_url": "data:image/png;base64,BASELINE"
+        },
+        {
+          "type": "canvas.snapshot",
+          "t": 2400,
+          "node": 2,
+          "data_url": "data:image/png;base64,PATCH",
+          "region": {
+            "x": 100,
+            "y": 80,
+            "w": 40,
+            "h": 30
+          }
+        },
+        {
+          "type": "mouse.click",
+          "t": 3900,
+          "x": 700,
+          "y": 420,
+          "button": 0,
+          "target": 2
+        }
+      ],
+      "host_data": null,
+      "extensions": null
+    }
+  ]
+}
