@@ -497,6 +497,41 @@ describe('redaction — the spec §5.2 variants, both directions', () => {
     }], 'spec §5.2 defines a redacted variant for input.value only');
   });
 
+  it('keeps a de-selected field withheld: this module marks the redaction taint', () => {
+    // The §8 withholding has to survive the page CHANGING ITS MIND. Here the
+    // selector is a class, so redaction begins and ends with an attribute
+    // write: the participant types while the field matches, then the page
+    // drops the class and the participant types again. `isInRedactedSubtree`
+    // answers "no" the second time, and the only thing still withholding the
+    // value is the taint mark this module makes on the way out.
+    //
+    // Nothing else can mark it in this scenario: the field was OUTSIDE any
+    // redacted subtree when the keyframe walked (serializeTree marks every node
+    // it finds inside one), and no mutation mapper runs in this harness. Found
+    // unbitten while fusing the three floor walks (T3.9 fix round) — deleting
+    // the mark passed all 451 replay tests, because every shipped test redacted
+    // by container and the keyframe had already marked those.
+    const { root, doc: p } = page('<div id="stage"><input id="toggling"></div>');
+    const span = keyframe(root, { redactSelector: '.secret' });
+    const field = p.getElementById('toggling');
+    const { doc, env, events } = harness({ redactSelector: '.secret' }, { span });
+
+    field.className = 'secret';                 // the page redacts it
+    field.value = SENTINEL;
+    doc.fire('input', { target: field });
+    env.flushRaf();
+
+    field.className = '';                       // and un-redacts it
+    field.value = SENTINEL + '-after';
+    doc.fire('input', { target: field });
+    env.flushRaf();
+
+    assert.strictEqual(events().length, 2, 'both keystrokes produced an event');
+    assert.ok(events().every(e => e.redacted === true),
+      'the post-toggle event is still redacted: ' + JSON.stringify(events()));
+    assert.strictEqual(scan(events()).includes(SENTINEL), false);
+  });
+
   it('says nothing at all about a file input, not even a length (spec §13)', () => {
     // A browser reports `C:\fakepath\<the participant's own filename>` as the
     // value of a file input. That is PII from outside the page, so this channel

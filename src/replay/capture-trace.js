@@ -64,9 +64,14 @@
 // capture channel logs one captureFailure and the experiment continues.
 
 import {
-  isInRedactedSubtree, isRedactionTainted, markRedacted,
+  isRedacted, isRedactionTainted, markRedacted,
 } from './redaction.js';
-import { isInExcludedSubtree } from './snapshot.js';
+import { isExcluded } from './snapshot.js';
+
+// The per-node predicates, not the per-subtree ones: this module walks the
+// parent chain ONCE for all three floors (see `floorsFor`), so it asks each
+// predicate the question it can answer about a single node.
+var ELEMENT_NODE = 1;
 
 // Wrap a handler so an exception can never propagate into the host page.
 function guard(rec, channel, fn) {
@@ -127,26 +132,24 @@ export function attachTraceCapture(rec, env) {
   };
 
   // ── The three floors ──
-
-  // Content withheld by redaction (spec §8). Marking on the way out is what
-  // keeps it withheld after the page moves the element out of the redacted
-  // container: the taint set outlives any keyframe (redaction.js).
-  function isRedactedTarget(el) {
-    if (!el) return false;
-    if (isInRedactedSubtree(el, opts.redactSelector) || isRedactionTainted(el, opts.taint)) {
-      markRedacted(el, opts.taint);
-      return true;
-    }
-    return false;
-  }
-
-  // State withheld by exclusion (spec §4). Not a special case of redaction: an
-  // excluded element keeps its content out of the file entirely, so even the
-  // length of what was typed into it, and the offset it was scrolled to, stay
-  // out. `keepBait` still turns the LEGACY markers off, as everywhere.
-  function isExcludedTarget(el) {
-    return !!el && isInExcludedSubtree(el, opts);
-  }
+  //
+  // 1. REDACTION (spec §8) withholds CONTENT: a password field always, plus
+  //    anything matching `redactSelector`, plus anything the taint set already
+  //    marked (which is how content stays withheld after the page moves the
+  //    element out of the redacted container — redaction.js).
+  // 2. EXCLUSION (spec §4) withholds an element's whole STATE, not just its
+  //    content: not a typed value, not its length, not a scroll offset.
+  //    `keepBait` still turns the LEGACY markers off, as everywhere.
+  // 3. ADDRESSABILITY: the nearest ancestor-or-self the FILE holds, with its
+  //    node id. Spec §7's three cases fall out of one walk — a normal target
+  //    resolves to itself; a target inside an excluded subtree resolves to the
+  //    PLACEHOLDER, which is the node the file actually has; a target outside
+  //    the observed root resolves to null. Membership comes from the span's
+  //    delivery model rather than from re-deriving it off the live DOM, for the
+  //    reason initial-state.js gives: the DOM can have moved since the walk
+  //    that produced the file, and the file is what the player holds.
+  //
+  // All three are answered by `floorsFor` below, in ONE traversal.
 
   // The REAL target of an event that crossed a shadow boundary, or null.
   //
@@ -167,50 +170,80 @@ export function attachTraceCapture(rec, env) {
     } catch (err) { return null; }  // composedPath unavailable
   }
 
-  // The nearest ancestor-or-self the FILE holds, with its node id.
+  function nodeIdFor(el) { return floorsFor(el, true).node; }
+
+  // ── One walk, three verdicts ──
   //
-  // The walk answers spec §7's three cases in one pass: a normal target
-  // resolves to itself; a target inside an excluded subtree resolves to the
-  // PLACEHOLDER, which is the node the file actually has; a target outside the
-  // observed root resolves to null. Membership comes from the span's delivery
-  // model rather than from re-deriving it off the live DOM, for the reason
-  // initial-state.js gives: the DOM can have moved since the walk that produced
-  // the file, and the file is what the player holds.
-  function heldAncestor(el) {
-    if (!span) return { id: null, el: null };
-    var cur = el;
-    while (cur) {
-      if (span.delivery.holds(cur)) {
+  // `isInRedactedSubtree`, `isInExcludedSubtree` and `heldAncestor` ask three
+  // different questions about THE SAME parent chain, and each used to walk it
+  // itself: five traversals for an aligned key.down, and five again for every
+  // input flush. This fuses the traversal — one `while (cur = cur.parentNode)`
+  // carrying three accumulators.
+  //
+  // It is FUSION, NOT CACHING, and the distinction is the whole point. Every
+  // verdict is still computed fresh from the live chain for every event, so
+  // there is no window in which a stale answer can survive an ancestor gaining
+  // the exclusion attribute, a class change flipping an arbitrary
+  // `redactSelector`, or the page moving the element into a withheld
+  // container. A cross-event `WeakMap<target, verdict>` would be materially
+  // cheaper and was rejected: it fails OPEN on both privacy floors, and a
+  // cached node id is silent misplacement. The per-ancestor work (`matches()`,
+  // the attribute reads, `delivery.holds`) is unchanged; only the repeated
+  // pointer-chasing is gone.
+  //
+  // The loop stops as soon as all three questions are answered, which is why
+  // the held lookup cannot simply return early on its own any more: the floors
+  // may still be undecided above it.
+  function floorsFor(node, wantHeld) {
+    var out = { redacted: false, excluded: false, node: null, heldEl: null };
+    if (!node) return out;
+    // Taint is a property of the NODE, not of its chain (redaction.js): it is
+    // how content stays withheld after the page moves the element out.
+    var redacted = isRedactionTainted(node, opts.taint);
+    var excluded = false;
+    var haveHeld = !wantHeld || !span;
+    var cur = node;
+    while (cur && !(redacted && excluded && haveHeld)) {
+      if (!redacted && cur.nodeType === ELEMENT_NODE
+          && isRedacted(cur, opts.redactSelector)) redacted = true;
+      if (!excluded && isExcluded(cur, opts)) excluded = true;
+      if (!haveHeld && span.delivery.holds(cur)) {
         var id = span.registry.peekId(cur);
-        return { id: id == null ? null : id, el: cur };
+        out.node = id == null ? null : id;
+        out.heldEl = cur;
+        haveHeld = true;
       }
       cur = cur.parentNode;
     }
-    return { id: null, el: null };
+    // Marking on the way out is what keeps redacted content withheld after the
+    // element leaves the redacted container (redaction.js); it belongs to the
+    // node asked about, exactly as the per-predicate version did.
+    if (redacted) markRedacted(node, opts.taint);
+    out.redacted = redacted;
+    out.excluded = excluded;
+    return out;
   }
-
-  function nodeIdFor(el) { return heldAncestor(el).id; }
 
   // Everything a discrete handler needs to know about its target, asked ONCE.
   //
-  // Each question is an ancestor walk, and CH's studies are typing-heavy: an
-  // aligned key.down used to ask both floors in the handler and again inside
-  // anchorFor, then resolve the node a third time, five walks of one chain with
-  // a `matches()` call at every step. The verdicts travel with the event
-  // instead. Both floors are evaluated against the retargeted target AND the
-  // composed one, fail-closed, and both sides are evaluated (no short-circuit)
-  // so each marks its own redaction taint.
+  // Both floors are evaluated against the retargeted target AND the composed
+  // one, fail-closed, and both sides are evaluated (no short-circuit) so each
+  // marks its own redaction taint. Only the retargeted chain resolves the held
+  // node: it is the one the document tree, and therefore the file, contains.
   function targetFacts(e) {
     var el = e && e.target;
     var composed = composedTarget(e);
-    var redacted = isRedactedTarget(el);
-    if (composed && isRedactedTarget(composed)) redacted = true;
-    var excluded = isExcludedTarget(el);
-    if (composed && isExcludedTarget(composed)) excluded = true;
-    var held = heldAncestor(el);
+    var facts = floorsFor(el, true);
+    var redacted = facts.redacted;
+    var excluded = facts.excluded;
+    if (composed) {
+      var c = floorsFor(composed, false);
+      if (c.redacted) redacted = true;
+      if (c.excluded) excluded = true;
+    }
     return {
       el: el, composed: composed, redacted: redacted, excluded: excluded,
-      node: held.id, heldEl: held.el
+      node: facts.node, heldEl: facts.heldEl
     };
   }
 
@@ -356,8 +389,9 @@ export function attachTraceCapture(rec, env) {
         // document-tree node and the floors apply normally. The same fact is
         // why `scrolledElements` can never hold a shadow-internal scroller, so
         // the keyframe seed is consistent with this by construction.
-        if (isExcludedTarget(target)) return;
-        var node = nodeIdFor(target);
+        var f = floorsFor(target, true);
+        if (f.excluded) return;
+        var node = f.node;
         if (node == null) return;   // spec §5.6 requires a node id
         rec.pushRecord({
           type: 'scroll.element', node: node,
@@ -602,18 +636,28 @@ export function attachTraceCapture(rec, env) {
     return out;
   }
 
+  // `<input type="file">`, read the way the password floor reads its own type
+  // (redaction.js): the IDL property first, the attribute as the fallback that
+  // catches duck-typed nodes and unknown-type reads.
+  function isFileInput(el) {
+    if (!el || el.tagName !== 'INPUT') return false;
+    if (String(el.type || '').toLowerCase() === 'file') return true;
+    var attr = typeof el.getAttribute === 'function' ? el.getAttribute('type') : null;
+    return typeof attr === 'string' && attr.toLowerCase() === 'file';
+  }
+
   // `composed` is the shadow-internal target captured at DISPATCH time, since
   // composedPath() is only meaningful during dispatch and this channel reads
   // its value a frame later.
   function inputRecordFor(target, composed) {
     // Spec §4: nothing about an excluded element's state, not even a length.
-    if (isExcludedTarget(target)) return null;
-    if (composed && isExcludedTarget(composed)) return null;
-    var node = nodeIdFor(target);
+    var f = floorsFor(target, true);
+    if (f.excluded) return null;
+    var c = composed ? floorsFor(composed, false) : null;
+    if (c && c.excluded) return null;
+    var node = f.node;
     if (node == null) return null;              // spec §5.2 requires a node id
-    var redacted = isRedactedTarget(target);
-    if (composed && isRedactedTarget(composed)) redacted = true;
-    var type = String(target.type || '').toLowerCase();
+    var redacted = f.redacted || !!(c && c.redacted);
     // FILE INPUTS SAY NOTHING (spec §13 puts file selection outside the format,
     // and initial-state.js's SKIP_INPUT_TYPES already skips them at the seed).
     // A file input's `value` is not participant-typed text, it is
@@ -625,7 +669,15 @@ export function attachTraceCapture(rec, env) {
     // survived unit coverage until the Chromium battery
     // (tests/browser/replay/capture-chromium.battery.mjs, case 14) drove a real
     // setInputFiles.
-    if (target.tagName === 'INPUT' && type === 'file') return null;
+    //
+    // Asked of the COMPOSED target too, like the two floors above it: at a
+    // document-level listener a file input inside an open shadow root arrives
+    // retargeted to its host, and a host that proxies `.value` would otherwise
+    // take the leaky path. Property OR attribute, like the password floor
+    // (redaction.js): the IDL `type` is the browser's answer but is absent on
+    // duck-typed nodes and reads "text" for an unknown type.
+    if (isFileInput(target) || (composed && isFileInput(composed))) return null;
+    var type = String(target.type || '').toLowerCase();
     if (target.tagName === 'SELECT') {
       // No redacted variant exists for input.select or input.checked (spec
       // §5.2 defines one for input.value only), so a withheld control emits

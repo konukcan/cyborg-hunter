@@ -1,4 +1,14 @@
 <!DOCTYPE html>
+<!--
+  PERF NOTE. This page is the default subject of
+  tools/investigate/capture-perf-baseline.mjs, so its DOM is part of every
+  measurement taken through it. Commit 4d6856c (T3.9) added five elements and a
+  900 px filler, which means the absolute numbers recorded by T3 Tasks 0, 4 and
+  8 describe the PRE-4d6856c page and are not comparable to a fresh run against
+  this one. The T3.9 perf gate sidesteps that by measuring both arms against the
+  f38a59f copy of this file (see tools/investigate/perf-pair.mjs); any later
+  re-baseline should either do the same or state that it re-based.
+-->
 <html lang="en">
 <head>
   <meta charset="utf-8">

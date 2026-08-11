@@ -76,6 +76,25 @@ async function withPage(name, fn) {
   results.push({ n: caseCount, name, passed: failures === before });
 }
 
+/**
+ * The recorded id of the keyframe node carrying `attrs.id === wanted`. Throws
+ * rather than returning null: a case that resolves its subject by recorded id
+ * must fail loudly when the subject is not in the file, or the assertion built
+ * on it goes quiet.
+ */
+function idOf(keyframe, wanted) {
+  let found = null;
+  (function walk(n) {
+    if (found !== null || !n || n.kind !== 'element') return;
+    if ((n.attrs || {}).id === wanted) { found = n.id; return; }
+    for (const c of n.children || []) walk(c);
+  })(keyframe);
+  if (found === null) {
+    throw new Error('no node with id="' + wanted + '" in the keyframe tree');
+  }
+  return found;
+}
+
 /** The player's tree in the same compact form the page produces for the DOM. */
 function shapeOfPlayer(player) {
   const walk = (node) => {
@@ -165,10 +184,16 @@ await withPage('exclusion + child removal in one task leaves an empty placeholde
   const { recording } = await finish(page);
   const player = createPlayer(keyframe);
   player.apply(recording.segments.flatMap((s) => s.events).filter((e) => e.type.startsWith('dom.')));
-  const box = player.root.querySelector('#box');
-  check(box === null || box.childNodes.length === 0,
-    'the placeholder holds no children in the player'
-      + (box ? ' (' + box.childNodes.length + ')' : ' (placeholder attrs cleared)'));
+  // Resolve by RECORDED ID, never by selector: the collapse nulls the
+  // placeholder's `id` attribute (case 1 proves it), so a `querySelector('#box')`
+  // returns null on a passing run and any `|| null` fallback beside it makes the
+  // assertion vacuous — it would pass with every child still attached.
+  // `player.node(id)` throws on an id the player never held, so there is no
+  // silent path through this check at all.
+  const boxId = idOf(keyframe, 'box');
+  const box = player.node(boxId);
+  check(box.childNodes.length === 0,
+    'the placeholder holds no children in the player (' + box.childNodes.length + ')');
 });
 
 // 5. Populate-then-reveal: each child added exactly once, in document order.
@@ -354,19 +379,40 @@ await withPage('multiple select with a deselection seeds the survivors', async (
 //     "C:\fakepath\<name>", which happy-dom never synthesizes, so the
 //     SKIP_INPUT_TYPES.file floor has only ever been fault-injection-tested.
 await withPage('file input after setInputFiles leaks neither value nor filename', async (page) => {
-  await start(page, '<input type="file" id="f">', { keyframeEvery: 1 });
+  // The ordinary sibling is the LIVENESS COMPANION. A scan over a channel that
+  // never fired passes forever, so this case would keep passing if the input
+  // listener stopped reaching either field, or if Playwright stopped
+  // dispatching `input` on setInputFiles. The companion is filled in the same
+  // session and its value must be ON the wire for the scan below to mean
+  // anything. (The one case that found a live leak was the one missing this.)
+  await start(page, '<input type="file" id="f"><input type="text" id="ordinary">',
+    { keyframeEvery: 1 });
   await page.setInputFiles('#f', {
     name: 'FILESENTINEL-3XQ.txt',
     mimeType: 'text/plain',
     buffer: Buffer.from('irrelevant'),
   });
+  await page.fill('#ordinary', 'COMPANION-VALUE-42');
   const shown = await page.evaluate(() => document.getElementById('f').value);
   check(/fakepath/i.test(shown), 'the browser really did expose a fakepath value (' + shown + ')');
   const seg = await nextSegment(page, 'seg-2');
-  check(formOf(seg.initial_state).length === 0,
-    'the file input is not seeded (' + JSON.stringify(seg.initial_state) + ')');
+  const form = formOf(seg.initial_state);
+  const fileId = idOf(seg.initial_dom, 'f');
+  const ordinaryId = idOf(seg.initial_dom, 'ordinary');
+  check(!form.some((e) => e.node === fileId),
+    'the file input is not seeded (' + JSON.stringify(form) + ')');
+  // The seed channel needs its own liveness companion for the same reason the
+  // event channel does: "no entry for the file input" is satisfied by an empty
+  // seed, which is also what a broken seeder produces.
+  check(form.some((e) => e.node === ordinaryId && e.value === 'COMPANION-VALUE-42'),
+    'LIVE: the seed did carry the ordinary field (' + JSON.stringify(form) + ')');
   const { recording } = await finish(page);
   const json = JSON.stringify(recording);
+  const inputEvents = recording.segments
+    .flatMap((s) => s.events).filter((e) => e.type === 'input.value');
+  check(inputEvents.some((e) => e.value === 'COMPANION-VALUE-42'),
+    'LIVE: the input channel fired and reached the wire (' + inputEvents.length
+      + ' input.value events)');
   check(!json.includes('FILESENTINEL-3XQ'), 'the filename appears nowhere in the recording');
   check(!/fakepath/i.test(json), 'no fakepath value anywhere in the recording');
 });
