@@ -272,6 +272,9 @@ rec.destroy();
 | `autoSave.mode` | `'none'` | `'datapipe'` (needs `experimentId`), `'download'` (participant's machine — piloting only), `'none'` (call `getRecording()` yourself; warns at startSession). |
 | `maxEventsPerTrial` | `50000` | Hard, per-trial cap on event count. Once a trial crosses it, that trial's capture stops (a `ch:capture_stopped` marker is written, no silent truncation); later trials in the same session record normally. Doesn't bound the size of the whole session. |
 | `maxCharsPerTrial` | `8000000` | Hard, per-trial cap measured in characters (JS string length), seeded by the trial's initial DOM snapshot. Same stop-and-mark behavior as `maxEventsPerTrial`, and the same per-trial scope; whichever cap is crossed first stops that trial. Set `null` to disable. |
+| `keyframeEvery` | `10` | DOM tier only. At most this many segments per full snapshot: one keyframe plus up to `keyframeEvery - 1` segments recorded as deltas against it. A fresh snapshot is also taken sooner whenever the mutations since the last one have grown to rival its size, so this setting is the fallback for a DOM that barely changes, and it bounds how far a viewer must replay forward to reach a given segment. `1` snapshots every segment (the jsPsych adapter forces this, since the display is wiped between trials). `null` leaves only the size trigger. Must be a number; anything else disables the fallback and warns. |
+| `maxGuardViolations` | `40` | Session-wide cap on recorded guard-friction violations. Each `start` entry carries a full DOM snapshot, and the per-trial caps cannot see a session-level array. Past the ceiling later violations are not recorded and a capture failure says so once. Set `null` to disable. |
+| `maxViewportChanges` | `2000` | Session-wide cap on recorded viewport/zoom geometry changes (a drag-resize produces up to two per frame). Same forward-only bound and single capture-failure note. Set `null` to disable. |
 
 ### Privacy model
 

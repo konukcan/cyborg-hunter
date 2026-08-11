@@ -23,6 +23,7 @@ import { Window } from 'happy-dom';
 
 import * as CHReplay from '../../src/replay/index.js';
 import { validateStrict } from './schema-v2/validator.js';
+import { createPlayer } from './support/dom-player.js';
 
 // ONE SENTINEL PER CHANNEL. Spec §8 names the channels it closes — initial_dom
 // attributes, initial_state.form, dom.text/dom.attr, key identity, clipboard,
@@ -415,6 +416,41 @@ describe('end-to-end capture → v2 recording', () => {
       'the redacted element is in the tree with its non-value attributes');
   });
 
+  it('a conforming player resolves every patch, and deletes only what the page deleted', () => {
+    // The assertion class that would have caught C-1 end to end: replay the
+    // whole recording the way §3 says a player must — re-instantiate at a
+    // keyframe, carry on through a continuation — with a player that throws on
+    // any id it was never sent (support/dom-player.js).
+    //
+    // It does not BITE C-1 on this session, because every mutation here is
+    // bracketed inside an explicit trial and no implicit segment forms. It is
+    // the net: any future cadence or wiring change that lets a patch address a
+    // span the file no longer describes fails here rather than in the fork.
+    let player = null;
+    for (const seg of recording.segments) {
+      const patches = seg.events.filter(e => e.type.startsWith('dom.'));
+      if (seg.initial_dom) player = createPlayer(seg.initial_dom);
+      assert.ok(player || patches.length === 0,
+        `segment ${seg.index} carries patches with no keyframe behind it`);
+      if (player) player.apply(patches);
+    }
+
+    const tags = [];
+    const classes = [];
+    (function walk(n) {
+      if (n.kind === 'element') {
+        tags.push(n.tag);
+        if (n.attrs && n.attrs.class) classes.push(n.attrs.class);
+      }
+      (n.children || []).forEach(walk);
+    })(player.tree());
+    assert.ok(!classes.includes('feedback'),
+      'the div added in segment 0 and removed in the continuation is gone');
+    for (const kept of ['p', 'button', 'input']) {
+      assert.ok(tags.includes(kept), `the removal took ${kept} with it`);
+    }
+  });
+
   it('the vendor namespace carries CH data and no marker attribute', () => {
     const ext = recording.extensions['cyborg-hunter'];
     assert.equal(ext.tier, 'dom');
@@ -527,8 +563,62 @@ describe('assembly wiring (index.js)', () => {
       'the second recording emitted content the first withheld');
     assert.ok(texts.includes(''),
       'it is present-but-empty: the node keeps its id and position (spec §4)');
+    assert.equal(recording.extensions['cyborg-hunter'].inherited_redaction_taint, true,
+      'and the file SAYS so: an empty field here is otherwise indistinguishable ' +
+      'from a field the participant left alone');
     assert.deepEqual(recording.extensions['cyborg-hunter'].capture_failures, [],
-      'and nothing marks it — the silence is the documented cost, not a bug');
+      'the inheritance is not a capture failure — that channel means a channel broke');
+  });
+
+  it('an unbracketed CLICK still names the node the player holds (capture-trace)', async () => {
+    // C-1's other exposure, and the one the observer-shaped reproduction hides:
+    // capture-trace resolves `target` and `anchor.node` through the span at
+    // DISPATCH, then pushes. If that push is what opens the segment, a keyframe
+    // taken inside it renumbers everything the record already named — and the
+    // record then contradicts itself, naming an id whose element in its own
+    // keyframe has a different tag than its own `anchor.tag`.
+    const doc = win.document;
+    const stage = doc.getElementById('stage');
+    const api = CHReplay.attach({
+      participantId: 'P', tier: 'dom', root: '#stage',
+      keyframeEvery: 1, autoSave: { mode: 'none' },
+    });
+    api.startSession();
+    api.startTrial({ trialId: 't1' });
+
+    // Insert at the FRONT, mid-span: the new node takes a HIGH id where a fresh
+    // pre-order walk would give it a low one, so the two numberings disagree
+    // for every node after it.
+    const lead = doc.createElement('span');
+    lead.id = 'lead';
+    stage.insertBefore(lead, stage.firstChild);
+    await settle();
+    api.endTrial();
+
+    fire(doc.getElementById('go'), 'click');   // no trial open → implicit segment
+    await settle();
+    api.stopSession('finished');
+    const recording = api.getRecording();
+    api.destroy();
+
+    assert.equal(validateStrict(recording).ok, true);
+    const segIndex = recording.segments.findIndex(
+      s => s.events.some(e => e.type === 'mouse.click'));
+    assert.ok(segIndex >= 0, 'the click has to reach the file for this to test anything');
+    const click = recording.segments[segIndex].events.find(e => e.type === 'mouse.click');
+
+    // Resolve the target against the keyframe that GOVERNS its segment (§3's
+    // player rule: the nearest earlier keyframe).
+    let governing = null;
+    for (let i = segIndex; i >= 0 && !governing; i--) governing = recording.segments[i].initial_dom;
+    let hit = null;
+    (function walk(n) { if (n.id === click.target) hit = n; (n.children || []).forEach(walk); })(governing);
+
+    assert.ok(hit, `target ${click.target} names no node in the governing keyframe`);
+    assert.equal(hit.tag, click.anchor.tag,
+      'the record contradicts itself: its target and its own anchor.tag are different elements');
+    assert.equal(hit.tag, 'button');
+    assert.equal(click.anchor.node, click.target);
   });
 
   it('a trace-tier recording is honestly node-free', () => {

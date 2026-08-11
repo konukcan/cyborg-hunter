@@ -47,7 +47,7 @@ class CyborgHunterReplayExtension {
     this._monitoring = false;
   }
 
-  // Keyframe cadence on a jsPsych host: EVERY segment, always.
+  // Keyframe cadence on a jsPsych host: every TRIAL segment, always.
   //
   // The standalone recorder keyframes adaptively (spec §3's size trigger plus a
   // segment fallback) because a persistent DOM makes a continuation cheap: the
@@ -62,12 +62,20 @@ class CyborgHunterReplayExtension {
   // Forced over researcher config rather than merged under it: the reason is a
   // property of the host, not a tuning preference, so a value passed here is a
   // misunderstanding rather than a choice. It is not discarded silently.
+  //
+  // "Every TRIAL segment" is exact, not loose. A jsPsych recording can also
+  // contain UNBRACKETED segments — the inter-trial interval, where the display
+  // wipe fires mutations between one trial's `on_finish` and the next trial's
+  // `on_load` — and those are recorded as CONTINUATIONS whatever this setting
+  // says (capture-dom's implicit-segment rule). That is correct: an ITI segment
+  // genuinely continues the outgoing trial's DOM as it is torn down, and its
+  // patches were numbered against that span before the segment existed.
   initialize(params) {
     this.params = params || {};
     if (this.params.keyframeEvery != null && this.params.keyframeEvery !== 1) {
       console.warn('[cyborg-hunter-replay] ignoring keyframeEvery: ' +
         this.params.keyframeEvery + ' — jsPsych wipes the display between ' +
-        'trials, so every segment is recorded as a keyframe.');
+        'trials, so every trial segment is recorded as a keyframe.');
     }
     this.api = CHReplay.attach(Object.assign({}, this.params, { keyframeEvery: 1 }));
     this.api.startSession();

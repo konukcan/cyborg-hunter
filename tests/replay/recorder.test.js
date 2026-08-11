@@ -6,6 +6,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { createRecorder } from '../../src/replay/recorder.js';
+import { markRedacted } from '../../src/replay/redaction.js';
 
 // Minimal window stub: startSession reads viewport geometry if available.
 beforeEach(() => {
@@ -54,6 +55,42 @@ describe('recorder lifecycle', () => {
     rec.startSession();
     assert.strictEqual(rec.getState().userAgent, expected);
     assert.strictEqual(typeof rec.getState().userAgent, 'string');
+  });
+
+  // ── inherited redaction taint (spec §9 vendor diagnostic) ────────────────
+  // ORDER MATTERS between these two, and it is why they live here rather than
+  // beside the other redaction tests. redaction.js's shared taint set is
+  // module-level with PAGE lifetime, so its mark counter only ever grows within
+  // a process; node:test runs each FILE in its own process, and this file never
+  // redacts anything, so it is the only place the "clean page" direction can be
+  // asserted at all. The false case must therefore run before the true case.
+
+  it('a page that never withheld anything reports no inherited taint', () => {
+    const rec = freshRecorder();
+    rec.startSession();
+    assert.strictEqual(rec.getState().inheritedRedactionTaint, false);
+  });
+
+  it('reports inherited taint once the page\'s shared set has withheld something', () => {
+    // An empty field in a second recording otherwise means two things the file
+    // cannot distinguish: nothing was typed, or an earlier recording on this
+    // page withheld it.
+    markRedacted({ nodeType: 1, tagName: 'INPUT' });
+    const rec = freshRecorder();
+    rec.startSession();
+    assert.strictEqual(rec.getState().inheritedRedactionTaint, true);
+  });
+
+  it('the flag is read at startSession, not at serialize', () => {
+    // A recording's OWN withholding must not make it look like an inheritor.
+    // (This recorder starts after the mark above, so it reads true; what is
+    // pinned here is that the value is frozen at startSession rather than
+    // recomputed later.)
+    const rec = freshRecorder();
+    rec.startSession();
+    const atStart = rec.getState().inheritedRedactionTaint;
+    markRedacted({ nodeType: 1, tagName: 'INPUT' });
+    assert.strictEqual(rec.getState().inheritedRedactionTaint, atStart);
   });
 
   it('setObservedRoot records the selector of the observed subtree (spec §2)', () => {

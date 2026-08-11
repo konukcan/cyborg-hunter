@@ -110,16 +110,26 @@ function payloadChars(value) {
  *     UTF-8 byte size can exceed for non-ASCII), so it carries that config's
  *     name for that config's reason. Both sides of the comparison use it, so
  *     the ratio the trigger actually tests is unit-free.
- *   - `dom.*` ONLY. The question the trigger asks is whether replaying the
- *     deltas has become as expensive as re-stating the DOM. Trace events
- *     (keystrokes, mouse moves) are in the file either way and reconstruct
- *     nothing, so counting them would keyframe a typing-heavy, DOM-static
- *     segment for no gain.
+ *   - `dom.*` ONLY, on FILE-SIZE grounds — not because trace events carry no
+ *     state. Some of them plainly do: `input.value`, `scroll.*` and `media.*`
+ *     are exactly the state `initial_state` re-states (spec §3 `form`,
+ *     `scroll`, `element_scroll`, `media`), and their keyframe-side cost is
+ *     priced into `lastSnapshotChars` through the seed. What makes them
+ *     uncountable here is that a keyframe does not REMOVE them from the file —
+ *     playback needs every one of them — so §3's "at parity the keyframe is
+ *     free" argument, which is the whole basis of this comparison, does not
+ *     apply. Counting them would keyframe on volume the keyframe cannot
+ *     reclaim. The consequence is real and belongs on the record: on a
+ *     form-heavy or scroll-heavy but DOM-STATIC segment this trigger can never
+ *     fire, and `keyframeEvery` becomes the only bound on seek distance and on
+ *     a corrupt event's blast radius — §3's failure mode from the other side.
  *   - AT EMISSION, before the recorder's per-trial caps can refuse a record, and
  *     off the in-memory event (absolute `t`) rather than the wire event
- *     (session-relative, usually shorter). Both make the count an over-estimate
- *     by a little, which biases toward keyframing sooner — the direction that
- *     shortens seek distance and shrinks the blast radius of a corrupt event.
+ *     (session-relative, usually shorter). Both make the count an over-estimate:
+ *     MEASURED at 1.08x, 5.3 chars per patch over 12 `dom.attr` patches (864
+ *     in-memory against 800 on the wire), all of it the timestamp. It biases
+ *     toward keyframing sooner — the direction that shortens seek distance and
+ *     shrinks the blast radius of a corrupt event.
  *
  * @param {{hasKeyframe: boolean, segments: number, patchChars: number,
  *          lastSnapshotChars: number}} cadence
@@ -129,6 +139,15 @@ export function shouldKeyframe(cadence, keyframeEvery) {
   if (!cadence.hasKeyframe) return true;
   // The fallback: at most `keyframeEvery` segments per span, so segment N of a
   // span (counting the keyframe as 1) is where the next keyframe lands.
+  //
+  // The `typeof` is deliberately strict, and diverges from the sibling caps —
+  // `maxViewportChanges` would coerce a string `"10"` and work. Here a wrong
+  // TYPE must not silently become a different CADENCE: `"10"` from a JSON
+  // config or a URL parameter would compare as a string and disable the
+  // fallback, changing the shape of the researcher's file with no other
+  // symptom. It is refused rather than coerced, and `attachDomCapture` warns
+  // once about it at attach, which is where a misconfiguration is still
+  // fixable.
   if (typeof keyframeEvery === 'number' && keyframeEvery >= 1 &&
       cadence.segments >= keyframeEvery) return true;
   // The size trigger: spec §3's self-tuning rule — take a keyframe once the
@@ -252,7 +271,47 @@ export function attachDomCapture(rec, env) {
     hasKeyframe: false, segments: 0, patchChars: 0, lastSnapshotChars: 0,
   };
 
+  // Said once, at attach, rather than per segment: the fallback is refused for
+  // a non-number (see `shouldKeyframe`), and silently recording a differently
+  // shaped file is exactly what the strictness exists to prevent.
+  var kfEvery = rec.config.keyframeEvery;
+  if (kfEvery != null && typeof kfEvery !== 'number') {
+    console.warn('[cyborg-hunter-replay] keyframeEvery must be a number; got ' +
+      typeof kfEvery + ' (' + JSON.stringify(kfEvery) + '). The segment fallback ' +
+      'is DISABLED for this recording — keyframes will be taken on accumulated ' +
+      'patch size alone.');
+  }
+
   rec.onTrialStart(function (trial) {
+    // An IMPLICIT segment is opened RE-ENTRANTLY from inside `pushRecord`
+    // (recorder.js's storeEvent), and the capture path doing that push has
+    // ALREADY resolved its node ids against the current span — mapMutations for
+    // a whole batch, targetFacts for one event — into records that are about to
+    // be stored. A keyframe here calls `span.reset()`, so those ids name a span
+    // the file no longer describes, and because a fresh pre-order walk reuses
+    // the same small integers they do not dangle harmlessly: the player
+    // resolves them against the new tree. Reproduced as a `dom.remove` that
+    // deletes a node the participant never lost, and a `mouse.click` whose
+    // `target` names a different element than its own `anchor.tag`. Strict
+    // validation passes it — `node` fields are only number-checked.
+    //
+    // So an implicit segment always CONTINUES. The single exception is a span
+    // with no keyframe at all, where §3 still forces one below — and in that
+    // state the span holds nothing, so no id in flight can be stale: a mapped
+    // batch produces no events, and a trace event's target already resolves to
+    // null. (One consequence of that exception is recorded at recorder.js's
+    // implicit-trial branch: the event that opens such a segment loses its
+    // `target` id.)
+    //
+    // This is the only re-entrant path into `span.reset()`: its three call
+    // sites are all in this hook, and `fireTrialStart` reaches it from
+    // `startTrial` (host-driven, never re-entrant) and from `storeEvent`
+    // (implicit only). Closing the implicit branch closes it for every capture
+    // module at once, which a check inside any one module could not do.
+    if (trial.implicit && cadence.hasKeyframe) {
+      cadence.segments++;
+      return;
+    }
     if (!shouldKeyframe(cadence, rec.config.keyframeEvery)) {
       // A CONTINUATION. Nothing to do, and that is the point: the trial's
       // `initialDom`/`initialState` are already null (recorder.js), the span is
@@ -323,14 +382,22 @@ export function attachDomCapture(rec, env) {
   // a continuation carrying dom.* patches before any keyframe is a recording no
   // player can reconstruct, and strict validation rejects it (spec §3).
   //
-  // Everything goes back to the pre-keyframe state, counters included, so that
-  // the retry has exactly ONE cause: `hasKeyframe` is false and §3 forces a
-  // keyframe. Leaving the counters at the values that asked for the keyframe
-  // would ALSO produce a retry — the request stands until a keyframe clears it
-  // — but by coincidence rather than by rule, and the state would describe a
-  // keyframe that is not in the file. Fault-injection consequence, worth
-  // knowing: because that second mechanism exists, deleting this call
-  // altogether is not observable; deleting the `hasKeyframe` line alone is.
+  // ONE of these four assignments has behaviour, and the reader is owed that
+  // plainly. `hasKeyframe = false` is what forces the retry; the other three are
+  // DEAD BY CONSTRUCTION and kept deliberately. Proof, not opinion: rule 1 of
+  // `shouldKeyframe` short-circuits before reading `segments`, `patchChars` or
+  // `lastSnapshotChars`, and the next keyframe that lands rewrites all four —
+  // verified by inversion, since reducing this function to its single live line
+  // passes the whole suite. They stay because they make the cadence state a true
+  // description of the file (this span has no keyframe, so it has no segments,
+  // no accumulated patches and no measured snapshot) and because they make the
+  // retry singly-caused: without them the retry would still happen, from the
+  // stale trigger values that asked for the failed keyframe, which is a
+  // coincidence rather than a rule.
+  //
+  // Fault-injection consequence, so nobody reads the four as jointly guarded:
+  // deleting this call altogether is NOT observable (the stale counters retry
+  // anyway); deleting the `hasKeyframe` line alone IS, and is pinned.
   function keyframeFailed() {
     cadence.hasKeyframe = false;
     cadence.segments = 0;

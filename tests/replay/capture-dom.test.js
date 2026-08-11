@@ -27,6 +27,7 @@ import {
 } from '../../src/replay/capture-dom.js';
 import { createRecorder } from '../../src/replay/recorder.js';
 import { createSpan } from '../../src/replay/span.js';
+import { createPlayer } from './support/dom-player.js';
 
 // A recorder with tier-2 capture attached to a real (happy-dom) document.
 // The MutationObserver is injected so batches flush synchronously: a real
@@ -559,6 +560,27 @@ describe('keyframe cadence — the trigger (spec §3)', () => {
     assert.equal(shouldKeyframe(at({ segments: 1 }), 1), true, 'every segment');
   });
 
+  it('a keyframeEvery of the wrong TYPE is refused, once, out loud', () => {
+    // `"10"` is the shape a config read from JSON or a URL parameter takes, and
+    // coercing it would be the friendlier-looking choice. It is refused instead,
+    // because a wrong type must not silently become a different cadence: the
+    // researcher would get a differently shaped file with no other symptom.
+    const warnings = [];
+    const orig = console.warn;
+    console.warn = (m) => warnings.push(String(m));
+    try {
+      const h = harness('<div id="stage"><p>a</p></div>',
+        { root: '#stage', keyframeEvery: '10' });
+      h.rec.startTrial({ trialId: 't1' });
+      h.rec.endTrial();
+      h.rec.startTrial({ trialId: 't2' });
+      assert.equal(h.trial(1).initialDom, null,
+        'the string disabled the fallback, which is what the warning says happened');
+    } finally { console.warn = orig; }
+    assert.equal(warnings.filter(w => /keyframeEvery/.test(w)).length, 1,
+      'said once, at attach, not once per segment');
+  });
+
   it('a null or nonsensical keyframeEvery leaves only the size trigger', () => {
     assert.equal(shouldKeyframe(at({ segments: 500 }), null), false);
     assert.equal(shouldKeyframe(at({ segments: 500 }), 0), false);
@@ -729,6 +751,70 @@ describe('keyframe cadence — continuations end to end (spec §3)', () => {
     h.rec.startTrial({ trialId: 't4' });
     assert.ok(h.trial(3).initialDom, 'the span still owed the file a keyframe');
     assert.equal(h.trial(3).initialDom.id, 1);
+  });
+
+  it('a batch that arrives with no trial open never lands beside a fresh keyframe', () => {
+    // THE C-1 REPRODUCTION. An implicit segment is opened RE-ENTRANTLY from
+    // inside pushRecord, by a capture path that has ALREADY resolved its ids
+    // against the current span. A keyframe here resets that span, so the
+    // records still in flight name a numbering the file no longer describes —
+    // and because a fresh pre-order walk reuses the same small integers, they
+    // do not dangle harmlessly: they resolve to DIFFERENT nodes.
+    const h = harness('<div id="stage"><p id="msg">a</p></div>',
+      { root: '#stage', keyframeEvery: 1 });
+    h.rec.startTrial({ trialId: 't1' });
+    const spanIds = [];
+    (function walk(n) { spanIds.push(n.id); (n.children || []).forEach(walk); })(
+      h.trial(0).initialDom);
+
+    // A mid-span insertion, so the span's numbering diverges from a fresh walk
+    // of the same tree — without this the collision is benign by coincidence.
+    const extra = h.doc.createElement('b');
+    extra.id = 'extra';
+    h.root().appendChild(extra);
+    h.flush();
+    for (const e of h.trial(0).events) if (e.type === 'dom.add') spanIds.push(e.node.id);
+
+    h.rec.endTrial();                       // no trial open from here
+    h.doc.getElementById('msg').remove();
+    h.doc.getElementById('extra').setAttribute('class', 'lit');
+    h.flush();                              // maps, then pushes → implicit segment
+
+    const implicit = h.trial(1);
+    assert.equal(implicit.implicit, true, 'the fixture must produce an implicit segment');
+    assert.equal(implicit.initialDom, null,
+      'an implicit segment continues the span its in-flight ids came from');
+    const patches = implicit.events.filter(e => e.type.startsWith('dom.'));
+    assert.equal(patches.length, 2);
+    for (const p of patches) {
+      assert.ok(spanIds.includes(p.node),
+        `patch ${p.type} names ${p.node}, which this span never issued`);
+    }
+
+    // …and the player agrees. A conforming player re-instantiates at a keyframe
+    // and carries on through a continuation; either way the element it deletes
+    // must be the element the page removed.
+    let player = null;
+    for (const t of [h.trial(0), h.trial(1)]) {
+      if (t.initialDom) player = createPlayer(t.initialDom);
+      player.apply(t.events.filter(e => e.type.startsWith('dom.')));
+    }
+    assert.deepEqual(
+      Array.from(player.root.childNodes).map(n => n.tagName.toLowerCase()), ['b'],
+      'the player kept #extra and dropped #msg, which is what the page did');
+  });
+
+  it('an implicit FIRST segment still keyframes (spec §3)', () => {
+    // The exception to the rule above, and it is required: a continuation
+    // before any keyframe is a §3 violation the strict validator rejects. It
+    // is also safe — with no keyframe the span holds nothing, so no id in
+    // flight can be stale (a mapped batch produces no events at all, and a
+    // trace event's target already resolves to null).
+    const h = harness('<div id="stage"><p id="msg">a</p></div>',
+      { root: '#stage', keyframeEvery: 10 });
+    h.rec.pushRecord({ type: 'mouse.move', x: 1, y: 2 }, 5000);
+    assert.equal(h.trial(0).implicit, true);
+    assert.ok(h.trial(0).initialDom, 'a recording cannot open on a continuation');
   });
 
   it('a THROWING keyframe forces the next segment to try again', () => {

@@ -38,6 +38,19 @@ var ELEMENT_NODE = 1;
 // want their own scope may pass one in.
 var defaultTaint = new WeakSet();
 
+// How many nodes the SHARED set has ever withheld. A WeakSet has no `size`, so
+// a counter is the only way to answer the one question a later recording needs
+// to ask: did this page withhold anything before I started? Its answer travels
+// as `extensions["cyborg-hunter"].inherited_redaction_taint`, because an empty
+// field in a second recording otherwise means two things the file cannot
+// distinguish — the participant typed nothing, or an earlier recording on this
+// page withheld it.
+//
+// Monotonic on purpose. GC can drop entries from the WeakSet, but a node that
+// became unreachable can never be encountered again, so "has ever withheld" is
+// the question with a stable answer.
+var defaultTaintMarks = 0;
+
 function taintSet(taint) {
   return taint && typeof taint.has === 'function' ? taint : defaultTaint;
 }
@@ -48,8 +61,21 @@ function taintSet(taint) {
  * stripping a subtree, a suppressed `dom.text`, a withheld `value` patch.
  */
 export function markRedacted(node, taint) {
-  if (node) taintSet(taint).add(node);
+  if (node) {
+    var set = taintSet(taint);
+    if (set === defaultTaint) defaultTaintMarks++;
+    set.add(node);
+  }
   return node;
+}
+
+/**
+ * True when the page's shared taint set has withheld something already. Read
+ * once, at `startSession`, so a recording can state whether it inherited
+ * withholding from an earlier one on the same page (see the counter above).
+ */
+export function hasInheritedRedactionTaint() {
+  return defaultTaintMarks > 0;
 }
 
 /** True when this node's content has ever been withheld (see markRedacted). */

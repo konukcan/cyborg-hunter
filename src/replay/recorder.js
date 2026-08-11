@@ -12,6 +12,8 @@
 // the same clock CH core uses, so CH-derived data merges with no conversion;
 // serializer.js converts to ms-since-session-start on the wire.
 
+import { hasInheritedRedactionTaint } from './redaction.js';
+
 export const REPLAY_DEFAULTS = {
   participantId: 'unknown',
   tier: 'trace',               // 'trace' | 'dom'  (canvas reserved for v0.8)
@@ -132,6 +134,11 @@ export function createRecorder(userConfig) {
     // and CH's viewer sizes its reconstruction by. Vendor data (spec §9).
     viewportClient: null,
     observedRoot: null,        // selector of the observed subtree (spec §2); set by capture-dom
+    // Did the page's shared redaction taint already hold nodes when this
+    // recording started (redaction.js)? Read once at startSession, reported in
+    // the vendor namespace, so an empty field in a second recording on one page
+    // is diagnosable rather than ambiguous.
+    inheritedRedactionTaint: false,
     stylesheets: [],           // filled by capture-dom at startSession (tier dom)
     trials: [],
     guardViolations: [],       // filled via GuardFriction.onViolation subscription
@@ -257,6 +264,18 @@ export function createRecorder(userConfig) {
     }
     if (state === 'created' || state === 'stopped') return; // not recording
     if (!currentTrial) {
+      // RE-ENTRANT: the hooks below run while the caller is halfway through
+      // pushing, and one of them is capture-dom's keyframe hook. That is why
+      // capture-dom refuses to keyframe an implicit segment whose span already
+      // has one (see its onTrialStart comment) — the ids in the record being
+      // pushed were resolved against the span a keyframe here would reset.
+      //
+      // KNOWN LOSS, unchanged and deliberate: when this is the FIRST segment of
+      // the recording, the span has no keyframe yet, so capture-dom must take
+      // one — and the event that opened the segment already resolved its
+      // `target` against the empty span, so it carries null. One event's target
+      // id, on an unbracketed recording, at the only moment where the
+      // alternative is a recording with no keyframe at all.
       currentTrial = newTrial(null, true);
       fireTrialStart(currentTrial);
     }
@@ -292,6 +311,8 @@ export function createRecorder(userConfig) {
       transition('session');
       session.sessionStart = performance.now();
       session.sessionStartEpoch = Date.now();
+      // Before any capture of this recording can add to it (see the field).
+      session.inheritedRedactionTaint = hasInheritedRedactionTaint();
       // Viewport geometry, if a window exists (absent in node tests). Spec §2's
       // ViewportState, identical in shape to every `viewport_changes` entry.
       var w = typeof window !== 'undefined' ? window : null;

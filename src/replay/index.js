@@ -34,13 +34,34 @@ var _active = null;
  * redacted stays empty in the second even if the second configures no
  * redaction at all.
  *
- * This is deliberate and it is the safe direction (it can only withhold, never
- * leak). Resetting it here would re-open the hole the set exists to close — a
- * node withheld at a keyframe, then moved out of its redacted container and
- * re-serialized. Worth knowing when reading a recording from an SPA that runs
- * several blocks in one page load: an empty field may mean "the participant
- * typed nothing" OR "an earlier recording on this page withheld it", and the
- * file does not distinguish them. Pinned in capture-e2e.test.js.
+ * This is deliberate. NOT for the reason this comment used to give: it said a
+ * reset here would re-open the §8 move-out hole (a node withheld at a keyframe,
+ * moved out of its container, re-serialized). That argument does not hold, and
+ * an external review was right to say so. §8 scopes redaction PER FILE, and by
+ * the time `attach()` runs the previous recording is serialized and closed —
+ * nothing a second recorder does can put content into it, so a per-recording
+ * reset could not re-expose anything there. The move-out hole lives WITHIN one
+ * recording, where the set already closes it.
+ *
+ * The two reasons it does stand:
+ *
+ *   1. FAIL-CLOSED against FAIL-OPEN. A page-lifetime ratchet can only ever
+ *      over-redact. A per-recording set can under-redact relative to today, and
+ *      this program's invariant is that redaction leaks fail the build.
+ *      Over-redaction is a diagnosable annoyance; under-redaction is a
+ *      participant-privacy failure.
+ *   2. It would re-open the THREADING SEAM this design closed. "One set per
+ *      recorder" means threading an explicit object to four consumers (snapshot,
+ *      mutations, initial-state, capture-trace), and partial threading fails
+ *      OPEN — see the note in `startSession` below. Trading a known
+ *      over-redaction for an unknown under-redaction runs the wrong way.
+ *
+ * The residual cost is real and narrow: a researcher who deliberately turns
+ * redaction OFF for a later block of a same-page-load SPA gets a field that
+ * stays empty with no explanation. The answer to that is to REPORT it, not to
+ * remove the ratchet — `extensions["cyborg-hunter"].inherited_redaction_taint`
+ * is true whenever this recording started on a page that had already withheld
+ * something. Both the inheritance and the flag are pinned in capture-e2e.test.js.
  */
 export function attach(userConfig) {
   if (_active) {

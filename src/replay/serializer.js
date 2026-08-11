@@ -172,7 +172,15 @@ export function serialize(state, opts) {
     // times converted like every other session-scoped CH array.
     guard_violations: convertTimes(state.guardViolations, s0),
     capture_failures: convertTimes(state.captureFailures, s0),
-    capture_stopped: !!state.captureStopped
+    capture_stopped: !!state.captureStopped,
+    // Spec §8 redaction is a property of the file, but the mechanism enforcing
+    // it (redaction.js's taint set) has PAGE lifetime — so a recording that is
+    // not the page's first can inherit withholding it never configured. Without
+    // this flag an empty field means two things the file cannot distinguish:
+    // the participant typed nothing, or an earlier recording withheld it.
+    // Always present, like every other key here, so its absence means an old
+    // file rather than a clean page.
+    inherited_redaction_taint: !!state.inheritedRedactionTaint
   };
 
   return {
