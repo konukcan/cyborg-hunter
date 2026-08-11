@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Capture battery (Chromium-only mutation + form semantics)</title>
+</head>
+<body>
+  <!-- The capture root. Every case rewrites its markup, attaches a fresh
+       recorder over it, and drives mutations one TASK at a time. -->
+  <div id="stage"></div>
+
+  <script src="../../../dist/cyborg-hunter-replay.js"></script>
+  <script>
+    // Driven from capture-chromium.battery.mjs. The point of this page is that
+    // the MutationRecords the recorder sees are made by CHROMIUM, not by
+    // happy-dom: the unit suites cannot express empty-valued attribute
+    // oldValues, `defaultSelected`, composed events, or Chromium's own
+    // batching, and each of those has already produced a real capture bug.
+    window.BAT = (function () {
+      var rec = null;
+      var stage = null;
+      var seen = 0;   // dom.* patches already handed to the driver
+
+      // A compact, comparable description of a subtree. Runs unchanged over
+      // the live DOM here and over the fork-faithful player's DOM in node, so
+      // "the player ended up with the same tree" is one string comparison.
+      function shape(node) {
+        if (node.nodeType === 3) return JSON.stringify(node.data);
+        if (node.nodeType === 8) return '<!--' + node.data + '-->';
+        if (node.nodeType !== 1) return '?';
+        var s = node.tagName.toLowerCase();
+        if (node.id) s += '#' + node.id;
+        var kids = [];
+        var cn = node.childNodes;
+        for (var i = 0; i < cn.length; i++) kids.push(shape(cn[i]));
+        return s + '(' + kids.join(',') + ')';
+      }
+
+      function domPatches() {
+        var out = [];
+        var r = rec.getRecording();
+        for (var i = 0; i < r.segments.length; i++) {
+          var evs = r.segments[i].events;
+          for (var j = 0; j < evs.length; j++) {
+            if (evs[j].type.indexOf('dom.') === 0) out.push(evs[j]);
+          }
+        }
+        return out;
+      }
+
+      // Two frames: the MutationObserver callback is a microtask, but the
+      // recorder coalesces some channels into a rAF flush, so one frame is not
+      // reliably enough to see everything a task produced.
+      function settle() {
+        return new Promise(function (resolve) {
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () { resolve(); });
+          });
+        });
+      }
+
+      return {
+        shape: shape,
+
+        start: function (html, cfg) {
+          stage = document.getElementById('stage');
+          stage.innerHTML = html;
+          var base = {
+            participantId: 'BAT', tier: 'dom',
+            autoSave: { mode: 'none' }, root: stage
+          };
+          for (var k in (cfg || {})) {
+            if (Object.prototype.hasOwnProperty.call(cfg, k)) base[k] = cfg[k];
+          }
+          rec = window.CyborgHunterReplay.attach(base);
+          rec.startSession();
+          rec.startTrial({ trialId: 'seg-1', plugin: 'ch:battery' });
+          seen = 0;
+          return settle().then(function () {
+            seen = domPatches().length;   // the keyframe emits none, but be exact
+            return { keyframe: rec.getRecording().segments[0].initial_dom };
+          });
+        },
+
+        // Run `src` as ONE task (a single MutationObserver batch, unless the
+        // source itself yields) and return the patches it produced.
+        task: function (src) {
+          /* jshint evil:true */
+          (new Function('stage', 'shape', src))(stage, shape);
+          return settle().then(function () {
+            var all = domPatches();
+            var fresh = all.slice(seen);
+            seen = all.length;
+            return fresh;
+          });
+        },
+
+        // Close the current segment and open the next one, so the next
+        // keyframe's initial_state can be inspected (spec §3).
+        nextSegment: function (id) {
+          rec.endTrial();
+          rec.startTrial({ trialId: id, plugin: 'ch:battery' });
+          return settle().then(function () {
+            seen = domPatches().length;
+            var segs = rec.getRecording().segments;
+            var last = segs[segs.length - 1];
+            return { initial_state: last.initial_state, initial_dom: last.initial_dom };
+          });
+        },
+
+        finish: function () {
+          rec.endTrial();
+          rec.stopSession('finished');
+          var r = rec.getRecording();
+          rec.destroy();
+          rec = null;
+          return { recording: r, finalShape: shape(stage) };
+        },
+
+        // Raw MutationRecord probe — no recorder involved. Pins what CHROMIUM
+        // reports, which is the environmental fact the unit suites work
+        // around rather than assert.
+        rawOldValue: function (initial, mutateSrc) {
+          var host = document.getElementById('stage');
+          host.innerHTML = '<div id="probe"></div>';
+          var el = document.getElementById('probe');
+          if (initial !== null) el.setAttribute('data-record-exclude', initial);
+          var seenRecords = [];
+          var mo = new MutationObserver(function (records) {
+            for (var i = 0; i < records.length; i++) {
+              seenRecords.push({
+                name: records[i].attributeName,
+                oldValue: records[i].oldValue,
+                type: records[i].type
+              });
+            }
+          });
+          mo.observe(host, { attributes: true, attributeOldValue: true, subtree: true });
+          (new Function('el', mutateSrc))(el);
+          return Promise.resolve().then(function () {
+            mo.takeRecords().forEach(function (r) {
+              seenRecords.push({ name: r.attributeName, oldValue: r.oldValue, type: r.type });
+            });
+            mo.disconnect();
+            return seenRecords;
+          });
+        }
+      };
+    })();
+  </script>
+</body>
+</html>

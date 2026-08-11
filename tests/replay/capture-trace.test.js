@@ -497,6 +497,40 @@ describe('redaction — the spec §5.2 variants, both directions', () => {
     }], 'spec §5.2 defines a redacted variant for input.value only');
   });
 
+  it('says nothing at all about a file input, not even a length (spec §13)', () => {
+    // A browser reports `C:\fakepath\<the participant's own filename>` as the
+    // value of a file input. That is PII from outside the page, so this channel
+    // must agree with initial-state.js's SKIP_INPUT_TYPES and emit nothing —
+    // not the value, and not the redacted variant's `value_len`, which would
+    // still publish the filename's length.
+    //
+    // happy-dom refuses to set a file input's value ("may only programmatically
+    // set the value to empty string"), so the browser's own string is installed
+    // over the property here. The REAL setInputFiles proof is Chromium-side, in
+    // tests/browser/replay/capture-chromium.battery.mjs case 14 — which is
+    // where this leak was found.
+    const { root, doc: p } = page(
+      '<div id="stage"><input id="pick" type="file"><input id="open"></div>');
+    const span = keyframe(root, {});
+    const file = p.getElementById('pick');
+    const open = p.getElementById('open');
+    Object.defineProperty(file, 'value', {
+      configurable: true, get: () => 'C:\\fakepath\\' + SENTINEL + '.txt',
+    });
+    open.value = 'visible';
+
+    const { doc, env, events } = harness({}, { span });
+    doc.fire('input', { target: file });
+    doc.fire('input', { target: open });
+    env.flushRaf();
+
+    assert.deepStrictEqual(events(), [{
+      type: 'input.value', t: 1000, node: span.registry.peekId(open), value: 'visible',
+    }], 'the file input contributes no event; the ordinary field is unaffected');
+    assert.strictEqual(scan(events()).includes(SENTINEL), false);
+    assert.strictEqual(scan(events()).includes('fakepath'), false);
+  });
+
   it('anchors omit id and keep geometry for redacted targets (spec §6/§8)', () => {
     const { page: p, span } = redactedPage();
     const secret = p.getElementById('secret');

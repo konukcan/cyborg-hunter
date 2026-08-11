@@ -42,6 +42,9 @@
 //   node tools/investigate/capture-perf-baseline.mjs
 //   node tools/investigate/capture-perf-baseline.mjs --runs=5 --keys=200 \
 //        --moves=2000 --boundaries=25 --page=tests/browser/replay/battery-page.html
+//   node tools/investigate/capture-perf-baseline.mjs --inflated-typing
+//        # adds scenario (d): a second typing burst on the inflated DOM, run
+//        # after everything else so it moves no pre-existing row
 //
 // Exit code is 0 unless the browser is missing (skip, also 0) or a scenario
 // blew up (1). Run-to-run p95 spread is reported; > --noise-max (default 3x)
@@ -78,6 +81,10 @@ const CFG = {
   boundaries: Number(opt('boundaries', 25)),
   inflate: Number(opt('inflate', 10)),         // target node-count multiple
   headed: !!opt('headed', false),
+  // Opt-in second typing burst on the inflated DOM (T3 Task-5 review I-5).
+  // Off by default so an invocation without it reproduces the Task 0/4/8
+  // numbers exactly.
+  inflatedTyping: !!opt('inflated-typing', false),
   noiseMax: Number(opt('noise-max', 3)),
   out: String(opt('out', '')),
 };
@@ -495,35 +502,13 @@ function byType(records) {
   return out;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ONE RUN
-// ═══════════════════════════════════════════════════════════════════════════
-async function runOnce(browser, baseUrl, runIdx) {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  const pageErrors = [];
-  page.on('pageerror', (e) => pageErrors.push(String(e.message)));
-  await page.addInitScript(installInstrumentation);
-  await page.goto(baseUrl + '/' + CFG.page, { waitUntil: 'load' });
-
-  const env = await page.evaluate(() => ({
-    isolated: window.__CHPERF.crossOriginIsolated,
-    granularity: window.__CHPERF.clockGranularity(200000),
-    ua: navigator.userAgent,
-  }));
-  // Measuring the clock and then ignoring what it says would be theatre: at
-  // the 100us Spectre clamp these handlers are sub-tick and every row reads 0.
-  if (!env.isolated) {
-    throw new Error('renderer is not crossOriginIsolated — performance.now() is clamped to 100us '
-      + 'and the handler timings would be meaningless. Check the COOP/COEP headers.');
-  }
-  if (!(env.granularity > 0) || env.granularity > 0.01) {
-    throw new Error('clock granularity ' + env.granularity + ' ms is too coarse (need <= 0.01 ms)');
-  }
-  const floor = stats(await page.evaluate(() => window.__CHPERF.instrumentFloor(3000)));
-
-  const dom0 = await page.evaluate(pageSetupRecorder, CFG.tier);
-
-  // ── (a) typing burst ─────────────────────────────────────────────────────
+// One scripted N-keystroke burst into the page's focus target, timed per
+// keystroke. Extracted so the SAME measurement can run twice in a run: once on
+// the page's natural DOM (scenario (a)) and once after the DOM inflation, which
+// is what the T3 Task-5 review's I-5 asks for — an aligned `key.down` walks
+// ancestors and takes a rect, so its cost is DOM-shape sensitive in a way the
+// 62/94-node natural page cannot show.
+async function typingBurst(page) {
   // The focus target must be on the FULL capture path. Both v1 and v2 record
   // redacted fields through a shorter branch (no value, no marker ref), so a
   // selector that lands on one reads low and flatters the recorder.
@@ -555,13 +540,45 @@ async function runOnce(browser, baseUrl, runIdx) {
     check: (n) => n === CFG.keys,
     describe: 'expected exactly ' + CFG.keys,
   });
-  const typing = {
+  return {
     perKeystroke: stats(perKeystroke),
     byType: byType(typeRecords),
     invocations: typeRecords.length,
     keystrokes: perKeystroke.length,
     wallMs: typeWall,
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ONE RUN
+// ═══════════════════════════════════════════════════════════════════════════
+async function runOnce(browser, baseUrl, runIdx) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  const pageErrors = [];
+  page.on('pageerror', (e) => pageErrors.push(String(e.message)));
+  await page.addInitScript(installInstrumentation);
+  await page.goto(baseUrl + '/' + CFG.page, { waitUntil: 'load' });
+
+  const env = await page.evaluate(() => ({
+    isolated: window.__CHPERF.crossOriginIsolated,
+    granularity: window.__CHPERF.clockGranularity(200000),
+    ua: navigator.userAgent,
+  }));
+  // Measuring the clock and then ignoring what it says would be theatre: at
+  // the 100us Spectre clamp these handlers are sub-tick and every row reads 0.
+  if (!env.isolated) {
+    throw new Error('renderer is not crossOriginIsolated — performance.now() is clamped to 100us '
+      + 'and the handler timings would be meaningless. Check the COOP/COEP headers.');
+  }
+  if (!(env.granularity > 0) || env.granularity > 0.01) {
+    throw new Error('clock granularity ' + env.granularity + ' ms is too coarse (need <= 0.01 ms)');
+  }
+  const floor = stats(await page.evaluate(() => window.__CHPERF.instrumentFloor(3000)));
+
+  const dom0 = await page.evaluate(pageSetupRecorder, CFG.tier);
+
+  // ── (a) typing burst ─────────────────────────────────────────────────────
+  const typing = await typingBurst(page);
 
   // ── (b) mousemove storm ──────────────────────────────────────────────────
   // Prime the pointer BEFORE resetting, so the priming move is not counted.
@@ -622,6 +639,12 @@ async function runOnce(browser, baseUrl, runIdx) {
   const bInflated = await page.evaluate(pageBoundaryLoop,
     { n: CFG.boundaries, prefix: 'perf-boundary-inf-' });
 
+  // ── (d) typing burst on the INFLATED DOM (opt-in) ────────────────────────
+  // Runs LAST, after every other scenario has been measured, so enabling it
+  // cannot move a single pre-existing row — the numbers from earlier
+  // invocations stay comparable.
+  const typingInflated = CFG.inflatedTyping ? await typingBurst(page) : null;
+
   const split = (rows) => {
     const kf = rows.filter((r) => r.keyframe === true);
     const cont = rows.filter((r) => r.keyframe === false);
@@ -657,7 +680,7 @@ async function runOnce(browser, baseUrl, runIdx) {
 
   await page.close();
   return {
-    runIdx, env, floor, typing, storm, boundary, pageErrors,
+    runIdx, env, floor, typing, typingInflated, storm, boundary, pageErrors,
     loadavg: os.loadavg().map((v) => +v.toFixed(2)),
   };
 }
@@ -724,6 +747,13 @@ const scenarios = {
     gated: false, perRun: runs.map((r) => r.boundary.inflated.continuation.total),
   },
 };
+if (CFG.inflatedTyping) {
+  scenarios['typing-burst inflated (per keystroke)'] = {
+    gated: true, perRun: runs.map((r) => r.typingInflated.perKeystroke),
+    agg: runs.map((r) => r.typingInflated.perKeystroke.total / r.typingInflated.keystrokes),
+    aggUnit: 'ms/keystroke (' + CFG.keys + '-key burst, ' + CFG.inflate + 'x DOM)',
+  };
+}
 const summary = {};
 const med = (a) => (a.length ? a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)] : null);
 for (const [name, def] of Object.entries(scenarios)) {

@@ -12,6 +12,9 @@
     .card.flipped { background: #1976d2; color: #fff; }
     #feedback { min-height: 28px; font-weight: 600; }
     input, button { font-size: 16px; padding: 6px 10px; margin: 6px 0; }
+    #scrollbox { height: 90px; overflow: auto; border: 1px solid #999; padding: 4px; }
+    #scrollbox .line { height: 22px; }
+    #tail { height: 900px; }
   </style>
 </head>
 <body>
@@ -26,6 +29,33 @@
     <label><input type="checkbox" id="confident"> I am confident</label><br>
     <label>Secret (redaction pin): <input type="password" id="secret"></label><br>
     <button id="next">Next</button>
+
+    <!-- Privacy-floor and seed surfaces, added for the T3 finish-line capture
+         (tests/browser/replay/capture-fork-smoke.mjs). They sit AFTER #answer
+         so the perf harness's focus selector still lands on #answer, which is
+         the only ordinary text field. -->
+    <div data-ch-redact>
+      <label>Redacted note: <input type="text" id="redacted-note" autocomplete="off"></label>
+    </div>
+    <!-- Empty-valued exclusion attribute: the Chromium-only oldValue:"" path
+         (task-3-review Playwright item 1). -->
+    <label>Excluded note: <input type="text" id="excluded-note" data-record-exclude autocomplete="off"></label><br>
+    <label>Suit:
+      <select id="suit">
+        <option value="s">Spades</option>
+        <option value="h">Hearts</option>
+        <option value="d">Diamonds</option>
+      </select>
+    </label><br>
+    <div id="scrollbox">
+      <div class="line">line 1</div><div class="line">line 2</div>
+      <div class="line">line 3</div><div class="line">line 4</div>
+      <div class="line">line 5</div><div class="line">line 6</div>
+      <div class="line">line 7</div><div class="line">line 8</div>
+      <div class="line">line 9</div><div class="line">line 10</div>
+    </div>
+    <!-- Tall filler so the WINDOW can scroll (initial_state.scroll seed). -->
+    <div id="tail"></div>
   </div>
 
   <!-- Library under test: built dist artifacts, exactly what studies load -->
@@ -43,7 +73,10 @@
       var frictionToken = null;
 
       return {
-        start: function () {
+        // `opts` is merged into the recorder config. Callers that pass nothing
+        // get exactly the configuration this page has always used, so the
+        // suites written before the v2 rewrite drive an unchanged session.
+        start: function (opts) {
           monitor = window.CyborgHunter.init({
             participantId: 'E2E-P1',
             preset: 'standard',
@@ -56,12 +89,16 @@
           // entry-trial click) — so violation starts are never missed. The
           // library also synthesizes an in-progress violation at subscribe
           // time as a belt-and-braces for the reverse order.
-          rec = window.CyborgHunterReplay.attach({
+          var cfg = {
             participantId: 'E2E-P1',
             tier: 'dom',
             autoSave: { mode: 'none' },
             root: document.body
-          });
+          };
+          for (var k in (opts || {})) {
+            if (Object.prototype.hasOwnProperty.call(opts, k)) cfg[k] = opts[k];
+          }
+          rec = window.CyborgHunterReplay.attach(cfg);
           rec.startSession();
 
           // Guards: friction in observe-only mode (no fullscreen needed in
@@ -82,14 +119,32 @@
           document.getElementById('card-b').classList.add('flipped');
         },
 
-        nextTrial: function () {
+        // `id` defaults to 'trial-2' so the pre-v2 callers are unchanged; the
+        // finish-line capture passes ids to drive a multi-segment session.
+        nextTrial: function (id) {
+          var tid = id || 'trial-2';
           rec.endTrial();
           monitor.endTrial();
-          monitor.startTrial({ trialId: 'trial-2' });
-          rec.startTrial({ trialId: 'trial-2', plugin: 'ch:standalone-demo' });
+          monitor.startTrial({ trialId: tid });
+          rec.startTrial({ trialId: tid, plugin: 'ch:standalone-demo' });
           document.getElementById('title').textContent = 'Round two: which card wins?';
           document.getElementById('feedback').textContent = '';
           document.getElementById('answer').value = '';
+        },
+
+        // A DOM edit that is neither a keyframe nor a wipe: the patches a
+        // continuation segment is made of.
+        mutate: function (n) {
+          var fb = document.getElementById('feedback');
+          fb.textContent = 'round ' + n + ' scored';
+          var row = document.createElement('div');
+          row.className = 'note';
+          row.id = 'note-' + n;
+          row.textContent = 'note ' + n;
+          document.getElementById('experiment').appendChild(row);
+          var prev = document.getElementById('note-' + (n - 1));
+          if (prev) prev.parentNode.removeChild(prev);
+          document.getElementById('card-a').setAttribute('data-round', String(n));
         },
 
         finish: function () {

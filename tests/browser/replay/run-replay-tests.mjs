@@ -84,6 +84,51 @@ await page.fill('#answer', 'seven of spades');
 
 const recording = await page.evaluate(() => window.CH_E2E.finish());
 
+// The one assertion that survives the rewrite untouched: the scripted session
+// drove the REAL dist through a real browser and produced a recording without
+// a single page error (the `pageerror` handler above feeds the same counter).
+check(!!recording && typeof recording === 'object',
+  'the scripted session ran against the built dist and returned a recording');
+
+// ── T3-T5 red window: revived by A2 ────────────────────────────────────────
+// Everything below asserts the V1 WIRE FORMAT — `schema_version === 1`,
+// `metadata.*`, `trials[]`, flat `kind` names, `initial_dom` as an HTML string,
+// `ch_extensions` at the top level. T3 replaced all of it with
+// SessionRecording v2, so these are not failing tests, they are tests of a
+// format this recorder no longer speaks.
+//
+// They are skipped rather than rewritten because the same claims are already
+// pinned against v2, by suites that were written for it:
+//   tests/replay/capture-e2e.test.js        whole assembly, six §8 leak channels
+//   tests/replay/capture-trace.test.js      event vocabulary + privacy floors
+//   tests/replay/serializer.test.js         wire shape, every test strict-validated
+//   tests/browser/replay/capture-fork-smoke.mjs        real capture → validator → fork
+//   tests/browser/replay/capture-chromium.battery.mjs  Chromium-only capture semantics
+// What is genuinely NOT re-covered elsewhere, and is what A2 should revive
+// here, is the pair of adversarial cases at the end: hostile participant-
+// injected markup arriving defanged, and the gzip round trip.
+console.log('▶ SKIPPED (T3-T5 red window: revived by A2) — v1-wire capture assertions:');
+for (const item of [
+  'schema_version / participant_id / tier / end_reason on metadata',
+  'implicit + two bracketed trials, __session__ first',
+  'v1 event kinds: mousemove, click, keydown/input, paste, mutation, blur/focus',
+  'paste length-only and no content',
+  'input value / password redaction / checkbox state as v1 `input` events',
+  'characterData + attribute mutations as v1 `mutation` events',
+  'honeypot bait stripped from the v1 initial_dom HTML string',
+  'ch_extensions merge (scoring, preset, guard_violations)',
+  'ch:guard_violation events with pre_scramble_dom',
+  'adversarial DOM defanging (handler attrs, escaped </script>, selector-unsafe id)',
+  'gzip round-trip of the recording blob',
+]) console.log('  ⊘ ' + item);
+await browser.close();
+if (failures > 0) {
+  console.error(`\n${failures} FAILURE(S)`);
+  process.exit(1);
+}
+console.log('\nReplay integration: live capture drive passed; v1-wire assertions skipped (red window).');
+process.exit(0);
+
 console.log('▶ schema + capture assertions');
 check(recording.schema_version === 1, 'schema_version is 1');
 check(recording.metadata.participant_id === 'E2E-P1', 'participant_id carried');

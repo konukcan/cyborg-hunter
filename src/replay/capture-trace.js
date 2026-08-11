@@ -614,6 +614,18 @@ export function attachTraceCapture(rec, env) {
     var redacted = isRedactedTarget(target);
     if (composed && isRedactedTarget(composed)) redacted = true;
     var type = String(target.type || '').toLowerCase();
+    // FILE INPUTS SAY NOTHING (spec §13 puts file selection outside the format,
+    // and initial-state.js's SKIP_INPUT_TYPES already skips them at the seed).
+    // A file input's `value` is not participant-typed text, it is
+    // "C:\fakepath\<the participant's own filename>" — real PII from outside
+    // the page — so neither the value NOR its length may travel. Dropping the
+    // event, rather than emitting the redacted variant, is what keeps this
+    // channel and the keyframe seed saying the same thing about one control.
+    // happy-dom never synthesizes the fakepath value, which is why the leak
+    // survived unit coverage until the Chromium battery
+    // (tests/browser/replay/capture-chromium.battery.mjs, case 14) drove a real
+    // setInputFiles.
+    if (target.tagName === 'INPUT' && type === 'file') return null;
     if (target.tagName === 'SELECT') {
       // No redacted variant exists for input.select or input.checked (spec
       // §5.2 defines one for input.value only), so a withheld control emits
