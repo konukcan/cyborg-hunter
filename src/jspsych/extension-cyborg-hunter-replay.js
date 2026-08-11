@@ -64,6 +64,32 @@ class CyborgHunterReplayExtension {
     } catch (e) { /* standalone replay is fine */ }
   }
 
+  // Spec §2's `host`: the runtime the recorder was embedded in, as opposed to
+  // `recorder`, which is this library. The recorder core is host-agnostic by
+  // construction and never sniffs for globals, so the adapter — the one piece
+  // that exists because jsPsych does — is where the answer comes from.
+  //
+  // §2 types host as `{name, version} | null` with version a required STRING,
+  // so a runtime that reports no version gets no host record rather than a
+  // half-record a conforming consumer would trip over. That is the defensive
+  // branch: jsPsych's own `version()` accessor covers 7.x and 8.x, and the
+  // plain-string form covers a runtime that exports it as a field.
+  //
+  // Never throws: finalize()'s outer catch turns any throw into
+  // replayFinalizeError with NO autosave, and the least important field in
+  // the file must not be able to cost the recording.
+  _detectHost() {
+    try {
+      var jp = this.jsPsych;
+      if (!jp) return null;
+      var v = typeof jp.version === 'function' ? jp.version() : jp.version;
+      if (typeof v !== 'string' || !v) return null;
+      return { name: 'jspsych', version: v };
+    } catch (e) {
+      return null;
+    }
+  }
+
   // jsPsych 7 calls on_start unconditionally for every trial that lists the
   // extension — must exist even as a no-op (see extension-cyborg-hunter.js).
   on_start(_params) {}
@@ -105,7 +131,10 @@ class CyborgHunterReplayExtension {
       } catch (e) {
         console.warn('[cyborg-hunter-replay] could not pull CH session report:', e);
       }
-      var result = await this.api.autoSaveNow({ chSessionReport: chReport });
+      var result = await this.api.autoSaveNow({
+        chSessionReport: chReport,
+        host: this._detectHost()
+      });
       this._lastRecording = result.recording;
       this.jsPsych.data.addProperties({ integrityReplayMeta: result.meta });
     } catch (e) {

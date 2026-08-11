@@ -53,6 +53,32 @@ describe('CyborgHunterReplay.attach', () => {
     assert.strictEqual(rec.segments[0].events[0].type, 'mouse.click');
     api.destroy();
   });
+
+  it('a misconfigured capture root reaches the meta pointer as a capture failure', async () => {
+    // The live half of the golden's `observed_root` row. Task 6's I-1 fix made
+    // a root selector that matches nothing say so twice — `observed_root: null`
+    // (spec §2's spelling for document.body, which is what was actually
+    // observed) plus a capture failure naming the channel — and persistence.js
+    // maps every capture failure's channel into the pointer. So the analyst
+    // sees "this file describes a different subtree than the study configured"
+    // from the CSV alone, without opening the recording.
+    //
+    // The unit golden pins the mapping; this pins that the channel is really
+    // produced. A golden built over a channel nothing emits passes forever.
+    const api = CHReplay.attach({
+      participantId: 'P7', tier: 'dom', root: '#no-such-stage',
+      autoSave: { mode: 'none' },
+    });
+    api.startSession();
+    api.startTrial({ trialId: 'r1' });
+    api.endTrial();
+    api.stopSession('finished');
+    const { recording, meta } = await api.autoSaveNow();
+    assert.strictEqual(recording.observed_root, null);
+    assert.ok(meta.capture_failures.includes('observed_root'),
+      `expected observed_root in ${JSON.stringify(meta.capture_failures)}`);
+    api.destroy();
+  });
 });
 
 describe('jsPsych replay adapter', () => {
@@ -64,7 +90,10 @@ describe('jsPsych replay adapter', () => {
     });
   }
 
-  function mockJsPsych(withChExtension) {
+  // `version` mirrors jsPsych's own accessor (a method returning the string).
+  // Pass `null` for a runtime that exposes none, or a thrower to check that
+  // host detection cannot take the finish path down with it.
+  function mockJsPsych(withChExtension, version = () => '8.2.1') {
     const store = { props: {}, lastTrial: {} };
     const chMonitor = {
       destroyed: false,
@@ -87,6 +116,7 @@ describe('jsPsych replay adapter', () => {
       store, chMonitor,
       jsPsych: {
         extensions: withChExtension ? { 'cyborg-hunter': { monitor: chMonitor } } : {},
+        ...(version === null ? {} : { version }),
         getProgress: () => ({ current_trial_global: 7 }),
         getCurrentTrial: () => ({ type: { info: { name: 'html-button-response' } } }),
         data: {
@@ -141,6 +171,67 @@ describe('jsPsych replay adapter', () => {
     // omit case — the call happens, and returns null honestly.
     assert.strictEqual(segment.initial_state, null);
     assert.strictEqual(rec.extensions['cyborg-hunter'].tier, 'dom');
+  });
+
+  // ── host identity (spec §2) ──────────────────────────────────────────────
+  // `recorder` says which library wrote the file; `host` says what it was
+  // embedded in. Only the adapter knows the answer — the recorder core is
+  // host-agnostic by construction — so the adapter is the one place that can
+  // state it, and the serializer takes it as an option rather than sniffing
+  // for globals.
+
+  it('finalize stamps the jsPsych host identity onto the recording', async () => {
+    const { jsPsych } = mockJsPsych(true);
+    const ext = new CyborgHunterReplayExtension(jsPsych);
+    ext.initialize({ participantId: 'P2', tier: 'trace', autoSave: { mode: 'none' } });
+    ext.on_load({});
+    ext.on_finish({});
+    await ext.finalize();
+    assert.deepStrictEqual(ext.getLastRecording().host,
+      { name: 'jspsych', version: '8.2.1' });
+  });
+
+  it('a jsPsych runtime that reports no version yields host null, not a half-record', async () => {
+    // Spec §2 types host as `{name: string; version: string} | null` — version
+    // is a required STRING, so {name:'jspsych', version:null} would be a
+    // producer-side type violation. The format's own spelling for "no host
+    // information" is null, and that is what an undetectable version leaves us
+    // with. Both jsPsych 7 and 8 expose version(), so this is the defensive
+    // branch, not the expected one.
+    const { jsPsych } = mockJsPsych(true, null);
+    const ext = new CyborgHunterReplayExtension(jsPsych);
+    ext.initialize({ participantId: 'P2', tier: 'trace', autoSave: { mode: 'none' } });
+    ext.on_load({});
+    ext.on_finish({});
+    await ext.finalize();
+    assert.strictEqual(ext.getLastRecording().host, null);
+  });
+
+  it('a throwing version() costs the host record, not the save', async () => {
+    // finalize()'s outer try/catch would turn any throw here into
+    // replayFinalizeError — i.e. no autosave at all. Host identity is the
+    // least important field in the file; it must never be able to cost the
+    // recording.
+    const { jsPsych, store } = mockJsPsych(true, () => { throw new Error('no version'); });
+    const ext = new CyborgHunterReplayExtension(jsPsych);
+    ext.initialize({ participantId: 'P2', tier: 'trace', autoSave: { mode: 'none' } });
+    ext.on_load({});
+    ext.on_finish({});
+    await ext.finalize();
+    assert.strictEqual(store.props.integrityReplayMeta.saved_to, 'none',
+      'the recording still saved');
+    assert.strictEqual(store.props.replayFinalizeError, undefined);
+    assert.strictEqual(ext.getLastRecording().host, null);
+  });
+
+  it('standalone recordings carry no host (the other side of the pin)', () => {
+    const api = CHReplay.attach({ participantId: 'P8', tier: 'trace', autoSave: { mode: 'none' } });
+    api.startSession();
+    api.startTrial({ trialId: 'r1' });
+    api.endTrial();
+    api.stopSession('finished');
+    assert.strictEqual(api.getRecording().host, null);
+    api.destroy();
   });
 
   it('works without the cyborg-hunter extension (standalone recording)', async () => {
