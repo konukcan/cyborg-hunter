@@ -503,6 +503,60 @@ test('the CLI refuses to emit output that fails strict validation', () => {
   assert.match(err.stderr.toString(), /viewport/);
 });
 
+// ── (4) the real jsPsych capture: corruption guardian + big-input regression ─
+//
+// tests/tools/fixtures/jspsych-v1-full.json is the raw v1 recording the
+// Playwright harness cut (14 trials, 909 events, 1.2MB), and
+// tests/replay/schema-v2/fixtures/jspsych-full.json is what this converter made
+// of it. The conformance runner checks the SECOND file; nothing checked the
+// first, so a corrupted or truncated capture would sit in the tree unnoticed
+// until someone tried to regenerate from it — precisely when the regeneration
+// path is supposed to be trustworthy. These three tests close that, and in
+// doing so give the converter its only regression test over a real recording:
+// every unit test above runs on a hand-built minimal object, so a mapping bug
+// that only appears at scale (a trial shape the minimal object does not have, a
+// 470KB stylesheet, a 189K-char canvas data URL) has no other tripwire.
+const RAW_FULL_PATH = 'tests/tools/fixtures/jspsych-v1-full.json';
+const FULL_FIXTURE_PATH = 'tests/replay/schema-v2/fixtures/jspsych-full.json';
+// The digest the fixture's expectations quote as the raw-capture → fixture link
+// (extensions["cyborg-hunter"].converter.source_sha256). Written out here as
+// well as compared through the fixture, so a mismatch reads as "the capture
+// changed" rather than as one line inside a 1.2MB deep-equal.
+const RAW_FULL_SHA256 = '1d4a079d15493a0530b7a1f4827d59bfc3d1241a583051065bd6085405634664';
+
+const rawFull = () => JSON.parse(readFileSync(RAW_FULL_PATH, 'utf8'));
+
+test('the committed raw jsPsych capture still converts and strict-validates', () => {
+  const result = validateStrict(convertRecording(rawFull()));
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.ok, true);
+});
+
+test('converting the committed raw capture reproduces the jspsych-full fixture', () => {
+  // The regeneration claim, executed: the conformance fixture is not a file
+  // someone once produced and then edited, it is this converter's output for
+  // the committed input. Corruption of EITHER file fails here, and so does a
+  // converter change that alters the mapping without re-cutting the fixture.
+  const converted = convertRecording(rawFull());
+  assert.equal(converted.extensions['cyborg-hunter'].converter.source_sha256, RAW_FULL_SHA256);
+  assert.deepEqual(converted, JSON.parse(readFileSync(FULL_FIXTURE_PATH, 'utf8')));
+});
+
+test('the capture carries the pinned stylesheet as text, not a cross-origin null', () => {
+  // The recording harness serves the pinned jsPsych CSS from its own origin
+  // precisely so the recorder can read `cssRules`; loaded from the CDN the
+  // sheet is cross-origin and v1 records `css: null`, leaving a replayer with
+  // an unstyled page. This is the one property of the capture that a
+  // regeneration could silently lose (it would still convert, still validate,
+  // still count 909 events), so it is asserted rather than described.
+  const raw = rawFull();
+  assert.equal(raw.stylesheets.length, 1);
+  assert.equal(raw.stylesheets[0].kind, 'link');
+  assert.equal(typeof raw.stylesheets[0].css, 'string');
+  assert.ok(raw.stylesheets[0].css.length > 100_000,
+    `base stylesheet carries only ${raw.stylesheets[0].css.length} chars of CSS`);
+});
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 // Reverses key order at the top level and inside each trial. Passthrough

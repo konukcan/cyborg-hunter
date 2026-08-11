@@ -1,7 +1,15 @@
 {
   "fixture": "canonical-core.json",
   "strict_valid": true,
-  "counts": { "segments": 3, "events_total": 14, "keyframes": 2, "continuations": 1 },
+  "counts": {
+    "segments": 3, "events_total": 14, "keyframes": 2, "continuations": 1,
+    "events_by_type": {
+      "input.value": 2, "key.down": 2,
+      "dom.add": 1, "dom.attr": 1, "dom.remove": 1, "dom.text": 1, "key.up": 1,
+      "mouse.click": 1, "mouse.move": 1, "scroll.window": 1,
+      "visibility.hidden": 1, "visibility.visible": 1
+    }
+  },
   "spot_checks": [
     { "path": "segments.0.events.1.type", "equals": "mouse.click" },
     { "path": "segments.0.events.1.anchor.node", "equals": 2 },

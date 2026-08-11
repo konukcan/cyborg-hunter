@@ -1,0 +1,84 @@
+{
+  "fixture": "jspsych-full.json",
+  "strict_valid": true,
+  "counts": {
+    "segments": 14,
+    "events_total": 909,
+    "keyframes": 14,
+    "continuations": 0,
+    "events_by_type": {
+      "dom.attr": 233,
+      "mouse.move": 176,
+      "dom.remove": 136,
+      "dom.add": 100,
+      "input.value": 56,
+      "key.down": 47,
+      "key.up": 47,
+      "mouse.click": 30,
+      "mouse.down": 30,
+      "mouse.up": 30,
+      "canvas.snapshot": 11,
+      "scroll.window": 6,
+      "input.checked": 5,
+      "fullscreen.enter": 1,
+      "fullscreen.exit": 1
+    }
+  },
+  "spot_checks": [
+    { "path": "schema_version", "equals": 2 },
+    { "path": "recorder", "equals": { "name": "jspsych", "version": "8.2.3" } },
+    { "path": "host", "equals": { "name": "jspsych", "version": "8.2.3" } },
+    { "path": "observed_root", "equals": "#jspsych-content" },
+    { "path": "participant_id", "equals": null },
+    { "path": "truncated", "equals": false },
+    { "path": "end_reason", "equals": "finished" },
+    { "path": "viewport_changes", "equals": [] },
+
+    { "path": "extensions.cyborg-hunter.converter",
+      "equals": { "tool": "jspsych-v1-to-v2", "version": "1.1.0",
+                  "source_sha256": "1d4a079d15493a0530b7a1f4827d59bfc3d1241a583051065bd6085405634664" } },
+
+    { "path": "segments.0.plugin", "equals": "instructions" },
+    { "path": "segments.0.label", "equals": null },
+    { "path": "segments.0.t_load", "equals": null },
+    { "path": "segments.0.initial_state", "equals": null },
+    { "path": "segments.0.initial_dom.tag", "equals": "body" },
+    { "path": "segments.13.plugin", "equals": "fullscreen" },
+
+    { "path": "segments.8.events.0.type", "equals": "canvas.snapshot" },
+    { "path": "segments.9.events.0.type", "equals": "canvas.snapshot" },
+    { "path": "segments.9.events.5.type", "equals": "canvas.snapshot" },
+    { "path": "segments.9.events.5.region", "equals": { "x": 59, "y": 74, "w": 12, "h": 15 } },
+    { "path": "segments.9.events.40.region", "equals": { "x": 59, "y": 74, "w": 206, "h": 177 } },
+    { "path": "segments.9.events.81.region", "equals": { "x": 220, "y": 45, "w": 24, "h": 123 } },
+
+    { "path": "stylesheets.0.id", "equals": 1 },
+    { "path": "stylesheets.0.kind", "equals": "link" },
+    { "path": "stylesheets.0.media", "equals": null },
+    { "path": "stylesheet_events.0.type", "equals": "stylesheet.add" },
+    { "path": "stylesheet_events.0.sheet.id", "equals": 2 },
+    { "path": "stylesheet_events.0.sheet.kind", "equals": "inline" },
+    { "path": "stylesheet_events.1.type", "equals": "stylesheet.remove" },
+    { "path": "stylesheet_events.1.id", "equals": 2 },
+
+    { "path": "rng.math_random_patched", "equals": true },
+    { "path": "rng_calls.0.fn", "equals": "Math.random" },
+    { "path": "rng_calls.0.args", "equals": [] },
+
+    { "path": "segments.1.events.9.type", "equals": "fullscreen.enter" },
+    { "path": "segments.13.events.0.type", "equals": "fullscreen.exit" },
+    { "path": "segments.11.events.7.type", "equals": "input.checked" },
+    { "path": "segments.11.events.7.checked", "equals": true }
+  ],
+  "invariants": [ "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe", "no_redaction_leak" ],
+  "checkpoints": [],
+  "notes": {
+    "provenance": "REAL capture, not synthetic. tools/convert/record-jspsych-v1.mjs drove the vendored bench/harness/trials/replay-test-suite.js timeline (14 trials) in headless Chromium against jsPsych pin 4706a5e751c572c09a44a1b9a60d910e0c251d4a (jspsych_version 8.2.3, the PR-3661 preview that adds record_session), then tools/convert/jspsych-v1-to-v2.mjs converted the v1 recording. Nothing here is hand-authored: canonical-core.json is the hand-authored spec oracle, this file is a foreign producer's answer to the same spec.",
+    "regeneration": "The raw v1 input is committed at tests/tools/fixtures/jspsych-v1-full.json. extensions['cyborg-hunter'].converter.source_sha256 (spot-checked above) is the link between the two, and tests/tools/convert.test.js re-converts the committed raw file on every run to prove the link still holds. The whole converter stamp is asserted as one object rather than field by field, so the absence of a 'backfilled' key is asserted too: this capture carries both stylesheets and stylesheet_events, so the converter had nothing to backfill.",
+    "checkpoints": "Empty by design. Checkpoint oracles over this fixture are T5's, executed by the fork player; a value asserted here without an executor would be a claim nobody checks.",
+    "no_redaction_leak": "Holds VACUOUSLY. jsPsych v1 has no redaction, so no event in this fixture carries a `redacted` marker and the typed survey answers sit in plaintext input.value. The invariant is listed because it is ALWAYS_ON in the runner, not because this fixture exercises it — canonical-core is what proves the privacy floor bites.",
+    "media_gap": "KNOWN LIMITATION. This fixture carries zero media.* events: the vendored replay-test-suite timeline has no audio or video trial (the bench loads plugin-html-audio-response only for its own grafted trials, which the suite does not include). The media spot check the converter design sketches is therefore NOT satisfiable from this timeline, and media coverage needs a different timeline rather than a different driver. Tracked as a corpus gap for T7 or later.",
+    "other_absent_event_types": "clipboard.*, touch.*, input.select, scroll.element, focus/blur, visibility.*, dom.text, recording.capture_stopped — all consequences of the timeline (no <select>, no touch device, no clipboard trial, the window never loses focus), not of the converter.",
+    "stylesheets": "stylesheets[0] is the pinned jsPsych stylesheet with its real CSS text (470,464 chars, most of it @fontsource Open Sans embedded as base64 woff2), because the recording harness serves the pinned CSS from its own origin — a cross-origin sheet has unreadable cssRules and the v1 recorder can then only write css: null. Its href accordingly carries the 127.0.0.1 origin and ephemeral port of the recording run, which is where the page genuinely loaded it from; the href is deliberately not spot-checked, since the port changes on every regeneration. The 703-char inline sheet added and removed by the sketchpad plugin is what makes stylesheet_events non-empty."
+  }
+}

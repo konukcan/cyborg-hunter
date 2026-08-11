@@ -39,6 +39,17 @@
 // are not part of the vendored suite). A recording that needs media.* coverage
 // needs a different timeline, not a different driver.
 //
+// WHY THE STYLESHEET IS SERVED SAME-ORIGIN
+// The page loads the pinned jsPsych CSS through this script's own server rather
+// than linking jsDelivr. The bytes are the pinned build's, fetched from the CDN
+// at run time — nothing is rewritten — but a cross-origin sheet has unreadable
+// `cssRules`, so the v1 recorder can only write `css: null` for it and a replayer
+// gets a base stylesheet with no text. Same-origin, the recorder captures the
+// real CSS (~475KB, most of it @fontsource Open Sans embedded as base64 woff2),
+// and the recording replays styled without network access. The recorded `href`
+// then carries this run's 127.0.0.1 origin, which is where the page genuinely
+// loaded it from.
+//
 // NETWORK: jsDelivr must be reachable. A preflight fetch fails fast with the
 // fallback instruction rather than leaving Playwright to time out.
 
@@ -67,6 +78,7 @@ const PLUGINS = [
 const TIMELINE_MODULE = '/bench/harness/trials/replay-test-suite.js';
 const PIN_WITNESSES = ['bench/harness/index.html', 'bench/harness/trials/replay-test-suite.js'];
 const RECORD_ROUTE = '/__record-jspsych-v1__.html';
+const CSS_ROUTE = '/__jspsych-css__.css';
 const DEFAULT_OUT = 'tests/tools/fixtures/jspsych-v1-full.json';
 
 // The timeline's own documented order (replay-test-suite.js:57-69). Asserted
@@ -115,8 +127,7 @@ function assertPin() {
   }
 }
 
-async function preflightCdn() {
-  const url = `${CDN}/packages/jspsych/dist/index.browser.min.js`;
+async function fetchPinned(url) {
   const res = await fetch(url, { redirect: 'follow' }).catch((e) => {
     throw new Error(
       `jsDelivr unreachable (${e.message}). This script cannot produce a real recording ` +
@@ -124,8 +135,18 @@ async function preflightCdn() {
     );
   });
   if (!res.ok) throw new Error(`jsDelivr returned ${res.status} for ${url}`);
-  const bytes = (await res.arrayBuffer()).byteLength;
-  log(`  CDN preflight ok (${bytes} bytes of pinned jsPsych core)`);
+  return res.text();
+}
+
+// Doubles as the CDN preflight: the core is fetched only to prove jsDelivr is
+// answering (the page loads it from the CDN itself), while the CSS text is kept
+// and served back from this script's origin — see the header note.
+async function preflightCdn() {
+  const core = await fetchPinned(`${CDN}/packages/jspsych/dist/index.browser.min.js`);
+  log(`  CDN preflight ok (${core.length} bytes of pinned jsPsych core)`);
+  const css = await fetchPinned(`${CDN}/packages/jspsych/css/jspsych.css`);
+  log(`  pinned jsPsych CSS fetched (${css.length} bytes), served same-origin at ${CSS_ROUTE}`);
+  return css;
 }
 
 // ── the page ────────────────────────────────────────────────────────────────
@@ -144,7 +165,7 @@ function buildPage() {
 <head>
   <meta charset="utf-8">
   <title>record jsPsych v1 session</title>
-  <link rel="stylesheet" href="${CDN}/packages/jspsych/css/jspsych.css">
+  <link rel="stylesheet" href="${CSS_ROUTE}">
   ${tags}
 </head>
 <body>
@@ -184,12 +205,17 @@ const MIME = {
 // http rather than file:// for two reasons: jsPsych disables Web Audio and
 // preloading under file:// (its "safe mode"), and ES-module imports of the
 // vendored timeline need a real origin.
-function startServer(pageHtml) {
+function startServer(pageHtml, pinnedCss) {
   const server = createServer((req, res) => {
     const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
     if (pathname === RECORD_ROUTE) {
       res.writeHead(200, { 'Content-Type': MIME['.html'] });
       res.end(pageHtml);
+      return;
+    }
+    if (pathname === CSS_ROUTE) {
+      res.writeHead(200, { 'Content-Type': MIME['.css'] });
+      res.end(pinnedCss);
       return;
     }
     const target = resolve(repoRoot, '.' + pathname);
@@ -449,6 +475,9 @@ function summarize(rec) {
     types: Object.fromEntries(Object.entries(types).sort((a, b) => b[1] - a[1])),
     canvas_snapshots: { full: canvasFull, region: canvasRegion },
     stylesheets: rec.stylesheets.length,
+    // null here means the recorder could not read the sheet's rules, which is
+    // what the same-origin CSS route exists to prevent.
+    stylesheet_css_chars: rec.stylesheets.map(s => (s.css === null ? null : s.css.length)),
     stylesheet_events: rec.stylesheet_events.length,
     viewport_changes: rec.viewport_changes.length,
     rng_calls: rec.rng_calls.length,
@@ -490,9 +519,9 @@ async function main() {
       'npm i -D playwright-core.'
     );
   }
-  await preflightCdn();
+  const pinnedCss = await preflightCdn();
 
-  const server = await startServer(buildPage());
+  const server = await startServer(buildPage(), pinnedCss);
   const url = `http://127.0.0.1:${server.address().port}${RECORD_ROUTE}`;
   log(`  serving ${repoRoot} at ${url}`);
 

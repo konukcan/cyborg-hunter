@@ -139,6 +139,14 @@ for (const file of FIXTURES) {
     // the wrong recording; a missing block would make its assertions no-ops.
     assert.equal(exp.fixture, file, `expectations/${file} declares fixture "${exp.fixture}"`);
     assert.ok(exp.counts, `expectations/${file} has no counts block`);
+    // Required, not optional. Segment and event totals say how big a recording
+    // is; only the per-type histogram says what is IN it, and that is the whole
+    // claim a producer fixture makes — a jsPsych recording losing every
+    // canvas.snapshot to a mapping regression keeps its 909-event total. An
+    // optional block would be silently absent exactly on the fixtures nobody
+    // took the trouble to inventory, so it is demanded of all of them
+    // (tools/gen-expectations-counts.mjs computes it).
+    assert.ok(exp.counts.events_by_type, `expectations/${file} has no counts.events_by_type`);
     assert.ok(Array.isArray(exp.spot_checks), `expectations/${file} has no spot_checks array`);
     assert.ok(Array.isArray(exp.invariants), `expectations/${file} has no invariants array`);
     const res = validateStrict(raw);
@@ -149,6 +157,18 @@ for (const file of FIXTURES) {
     assert.equal(eventsTotal, exp.counts.events_total);
     assert.equal(rec.segments.filter(s => s.initial_dom != null).length, exp.counts.keyframes);
     assert.equal(rec.segments.filter(s => s.initial_dom == null).length, exp.counts.continuations);
+    // Recomputed here rather than trusted: the histogram is an authored claim
+    // about the fixture, and deepEqual holds it to being exhaustive in both
+    // directions — a type the fixture carries but the block omits fails just as
+    // loudly as a type the block invents.
+    const byType = {};
+    for (const s of rec.segments) for (const e of s.events) byType[e.type] = (byType[e.type] ?? 0) + 1;
+    assert.deepEqual(byType, exp.counts.events_by_type);
+    // The two authored numbers must agree with each other as well, so an
+    // inconsistent pair is reported as such instead of as one opaque mismatch.
+    const summed = Object.values(exp.counts.events_by_type).reduce((n, k) => n + k, 0);
+    assert.equal(summed, exp.counts.events_total,
+      `counts.events_by_type sums to ${summed} but counts.events_total says ${exp.counts.events_total}`);
     for (const sc of exp.spot_checks) {
       assert.deepEqual(getPath(rec, sc.path), sc.equals, `spot check ${sc.path}`);
     }

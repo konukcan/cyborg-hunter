@@ -7,8 +7,15 @@ package-founding time. Until then, CH's CI runs it via `npm run test:schema`.
 
 Layout: validator.js (dual profiles, spec §11) · fixtures/ (conformance
 corpus) · expectations/ (per-fixture assertions) · conformance.test.js
-(runner). Hand-authored canonical fixtures are the consumer contract;
-generated producer recordings arrive in later tasks (T4, T7).
+(runner). Hand-authored canonical fixtures are the consumer contract
+(canonical-core); producer recordings answer it (jspsych-full, a real jsPsych
+recording converted by tools/convert/jspsych-v1-to-v2.mjs — T4; more in T7).
+
+Every expectations file states `counts.events_by_type`, and the runner
+recomputes it. `tools/gen-expectations-counts.mjs` computes the block for a new
+fixture; it is an authoring convenience outside this directory, imported by
+nothing here, and a package lift should take it along rather than leave the
+next corpus author counting 909 events by hand.
 
 These files are ESM and currently run as such because CH's root package.json
 sets `"type": "module"`. At package-founding time the new package.json must
