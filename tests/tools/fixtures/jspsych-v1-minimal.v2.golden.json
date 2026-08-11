@@ -64,16 +64,18 @@
   "end_reason": "finished",
   "truncated": false,
   "extensions": {
-    "converter": {
-      "tool": "jspsych-v1-to-v2",
-      "version": "1.0.0",
-      "source_sha256": "82f0e641014a501ed281b665d1a4520b27a25df263ba06e7ab305f011480adc8"
+    "cyborg-hunter": {
+      "converter": {
+        "tool": "jspsych-v1-to-v2",
+        "version": "1.1.0",
+        "source_sha256": "82f0e641014a501ed281b665d1a4520b27a25df263ba06e7ab305f011480adc8"
+      }
     }
   },
   "segments": [
     {
       "index": 0,
-      "label": "0",
+      "label": null,
       "plugin": "html-keyboard-response",
       "t_start": 0,
       "t_dom_ready": 12.5,
@@ -153,7 +155,7 @@
     },
     {
       "index": 1,
-      "label": "1",
+      "label": null,
       "plugin": "canvas-keyboard-response",
       "t_start": 1500,
       "t_dom_ready": 1512,
