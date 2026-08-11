@@ -58,6 +58,10 @@
 //   --inject=no-present            -> GO1, GO2, GO3a, GO3b, GO4 fail
 //   --inject=unsandbox-neg         -> NEG fails (the trap stops reproducing)
 //   --inject=style-attr-no-repair  -> GO3b fails (the re-present duty)
+//   --inject=style-attr-preserves  -> GO3b fails (the CLOBBER half). The style
+//        write carries the background properties, so presentation survives.
+//        Both halves of GO3b are required negatives: without this the criterion
+//        would pass over a hazard that had stopped reproducing (review C-1).
 //   --inject=backing-store-oracle  -> GO1 PASSES while the screen is blank.
 //        This is the trap itself, wired up: it reads the in-frame backing
 //        store instead of the screenshot. Run it to see the green test over
@@ -93,7 +97,7 @@ const CFG = {
   tol: Number(opt('tol', 8)),          // design §3.2 criterion 1: 8/255 per channel
   inject: opt('inject', null),         // fault injection — see the header
 };
-const INJECTS = ['no-present', 'unsandbox-neg', 'style-attr-no-repair', 'backing-store-oracle'];
+const INJECTS = ['no-present', 'unsandbox-neg', 'style-attr-no-repair', 'style-attr-preserves', 'backing-store-oracle'];
 if (CFG.inject && !INJECTS.includes(CFG.inject)) {
   console.error(`unknown --inject=${CFG.inject}; expected one of ${INJECTS.join(', ')}`);
   process.exit(2);
@@ -363,8 +367,17 @@ async function runEngine(name, browser, origin) {
   record(name, 'GO3a survives dom.attr class', rgbNear(afterClass, RED, CFG.tol), `outside-region=${rgb(afterClass)}`);
 
   // ── GO3b: a `style` dom.attr patch CLOBBERS it — measured, and the repair pinned ──
-  await page.evaluate(() => window.__setAttr('f-go', '#c', 'style',
-    'display:block;width:' + 160 + 'px;height:' + 80 + 'px'));
+  await page.evaluate(async ({ preserve, w, h }) => {
+    let decl = 'display:block;width:' + w + 'px;height:' + h + 'px';
+    if (preserve) {
+      // The reviewer's C-1 variant: a style write that carries the background
+      // through, so presentation survives and the clobber does NOT reproduce.
+      const el = document.getElementById('f-go').contentDocument.querySelector('#c');
+      decl += ';background-image:' + el.style.backgroundImage +
+              ';background-size:100% 100%;background-repeat:no-repeat';
+    }
+    window.__setAttr('f-go', '#c', 'style', decl);
+  }, { preserve: CFG.inject === 'style-attr-preserves', w: CW, h: CH_ });
   goShot = await shot(page, '#f-go');
   const afterStyle = pixelAt(goShot, 20, 20);
   const clobbered = !rgbNear(afterStyle, RED, CFG.tol);
@@ -374,9 +387,18 @@ async function runEngine(name, browser, origin) {
   goShot = await shot(page, '#f-go');
   const afterRepresent = pixelAt(goShot, 20, 20);
   const inRegion2 = pixelAt(goShot, REGION.x + REGION.w / 2, REGION.y + REGION.h / 2);
-  record(name, 'GO3b style dom.attr — clobber measured, re-present restores',
-    rgbNear(afterRepresent, RED, CFG.tol) && rgbNear(inRegion2, BLUE, CFG.tol),
-    `after style attr=${rgb(afterStyle)} (${clobbered ? 'CLOBBERED — Task 5 must re-present' : 'survived'}), ` +
+  // GO3b is a REQUIRED NEGATIVE, on the same discipline as NEG: the clobber
+  // must reproduce, AND re-presenting must repair it. Asserting only the repair
+  // lets a preserving `style` write pass the clean run, at which point the
+  // Task-5 duty this criterion creates becomes unnecessary work nobody notices.
+  // (Review C-1: a variant whose style write preserved the background printed
+  // "(survived)" and still exited 0.) The clobber is CSSOM-mandated —
+  // setAttribute('style', …) replaces the whole inline declaration block — so
+  // if it stops reproducing, the viewer's presentation route has changed and
+  // the duty needs re-deriving, which is exactly what a failure should say.
+  record(name, 'GO3b style dom.attr — clobber reproduces AND re-present restores',
+    clobbered && rgbNear(afterRepresent, RED, CFG.tol) && rgbNear(inRegion2, BLUE, CFG.tol),
+    `after style attr=${rgb(afterStyle)} (${clobbered ? 'CLOBBERED — Task 5 must re-present' : 'SURVIVED — clobber did NOT reproduce'}), ` +
     `after re-present=${rgb(afterRepresent)}/${rgb(inRegion2)}`);
 
   // ── GO4: canvas added mid-span by dom.add ──

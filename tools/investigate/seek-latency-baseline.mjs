@@ -40,14 +40,41 @@
 //           deep-span-plus-canvas model. Yields the case(iii)/case(ii) ratio
 //           and the composite worst case in one artifact.
 //
-// THE MODEL IS A MODEL
+// THE MODEL IS A MODEL, AND HERE IS EXACTLY WHAT IT COVERS
 //   Tasks 2-5 build the real instantiator, patch applier, span walk and canvas
 //   presenter. None of them exist at Task 0. The page script below is a
-//   MEASUREMENT MODEL of that work — the same operations in the same realm
-//   under the same CSP, deliberately with no tolerance handling, no id-map
-//   lifetime rules and no redaction. Its numbers are a FLOOR on what the real
+//   MEASUREMENT MODEL of that work: the same operations in the same realm
+//   under the same CSP. Its numbers are a FLOOR on what the real
 //   implementation costs, not a prediction of it. Do not mistake it for a
-//   prototype: nothing here should be copied into src/.
+//   prototype; nothing here should be copied into src/.
+//
+//   MODELLED: keyframe mount (body-root split, frame-realm createElement, `on*`
+//     attributes dropped); all four §5.1 patches — dom.attr, dom.text (TEXT and
+//     COMMENT nodes only), dom.add (subtree instantiation, before-resolution,
+//     id-binding overwrite) and dom.remove (subtree purge from the id map by
+//     recursive DOM walk); canvas composite through a per-canvas decode chain
+//     plus toDataURL presentation; the §8 five-check alignment bundle.
+//
+//   NOT MODELLED, every one of which biases the numbers LOW:
+//     input.value / input.checked / input.select writes to live controls;
+//     scroll.window and scroll.element; stylesheet.add/update/remove and the
+//     stylesheet_events replay to the keyframe origin (§5 step 2);
+//     initial_state seeding as synthetic t=0 events (§6) — the model sets
+//     initial_state: null on every segment; fullscreen.*, visibility.*,
+//     focus/blur, clipboard.*, media.*; and Task 2's remaining §12
+//     instantiation duties (javascript:/vbscript: URL refusal, script/noscript
+//     -> template, iframe src/srcdoc suppression + placeholder stamping,
+//     exclusion placeholders, canvas_size, media_src), which all add per-node
+//     cost. Task 9 re-baselines against the real implementation; these figures
+//     size the problem, they do not settle it.
+//
+//   COVERAGE ASSERTIONS, because a modelled patch that resolves nothing costs
+//   nothing and silently deflates the deep case: every scenario asserts it
+//   applied what it claims (mounts, composites, presented chars, both check
+//   arms, non-zero structural patches) and that it left ZERO unresolved
+//   patches. That last one caught a real defect while this harness was being
+//   extended — an arbitrary removal pool purged ancestors of its own later
+//   targets, so 348 of 300 structural patches were no-ops.
 //
 // WHY A SYNTHETIC DEEP-SPAN MODEL (plan-review item 5)
 //   The composite worst case is unrecordable from the committed corpus.
@@ -114,6 +141,27 @@ function collectElementIds(dom, out = []) {
   return out;
 }
 
+/**
+ * Text-node ids. §5.1's dom.text addresses TEXT and COMMENT nodes, so aiming
+ * it at element ids both misstates the vocabulary and no-ops on any element
+ * without a text first child — 78 of jspsych-full segment 11's 215 elements,
+ * 36%, which is a third of the model's patches dirtying nothing (review M-6b).
+ */
+function collectTextIds(dom, out = []) {
+  if (!dom) return out;
+  if (dom.kind === 'text') out.push(dom.id);
+  (dom.children || []).forEach((c) => collectTextIds(c, out));
+  return out;
+}
+
+/** Every element's parent id, so a dom.add can re-attach where a remove took it from. */
+function parentMap(dom, parent = null, out = new Map()) {
+  if (!dom) return out;
+  if (parent !== null) out.set(dom.id, parent);
+  (dom.children || []).forEach((c) => parentMap(c, dom.id, out));
+  return out;
+}
+
 /** Real canvas.snapshot payloads from jspsych-full: 1 full baseline + 9 regions. */
 function realCanvasSnapshots() {
   const all = [];
@@ -152,8 +200,45 @@ function syntheticTree(target, startId = 100000) {
  * `eventsPerSegment` events at the requested anchored fraction, plus one
  * canvas.snapshot (seg 0 = the real full baseline, the rest = real regions).
  */
+/**
+ * Non-anchored event mix, sized from jspsych-full's own 909 events:
+ * dom.attr 25.6%, dom.remove 15.0%, dom.add 11.0%, mouse.move 19.4%.
+ * Structural total (add + remove) is 26% there and 30% here — conservative.
+ * The EVEN split between add and remove is a modelling choice: at the
+ * fixture's 1.36:1 remove:add ratio a 10-segment span empties the tree by
+ * segment 9, and removes that resolve nothing measure nothing, which is the
+ * bias this mix exists to remove (review C-2).
+ */
+const NON_ANCHORED_MIX = [
+  'dom.remove', 'dom.attr', 'dom.add', 'dom.text', 'mouse.move',
+  'dom.remove', 'dom.attr', 'dom.add', 'mouse.move', 'dom.text',
+  'dom.remove', 'dom.attr', 'dom.add', 'mouse.move', 'mouse.move', 'mouse.move',
+];
+
 function buildDeepSpanModel({ tree, segments, eventsPerSegment, anchoredFrac, canvas }) {
   const elementIds = collectElementIds(tree).filter((i) => i !== tree.id);
+  const textIds = collectTextIds(tree);
+  const parents = parentMap(tree);
+  // Removable pool: LEAF elements only (no element children). dom.remove purges
+  // the node and its whole subtree from the id map, so a pool of arbitrary
+  // elements makes later patches on purged descendants unresolvable — and an
+  // unresolvable patch costs nothing, which is the exact bias review C-2 is
+  // about. Leaves purge only themselves and their text, their parents survive,
+  // so the paired dom.add always re-attaches. On jspsych-full segment 11 this
+  // gives 76 removable leaves, 139 stable elements and 306 stable text nodes.
+  const hasElementChild = new Set();
+  (function scan(n) {
+    if (!n) return;
+    if ((n.children || []).some((c) => c.kind === 'element')) hasElementChild.add(n.id);
+    (n.children || []).forEach(scan);
+  })(tree);
+  const pool = elementIds.filter((i) => parents.has(i) && !hasElementChild.has(i));
+  const poolSet = new Set(pool);
+  // Non-structural patches and anchors address nodes no remove ever purges, so
+  // every event in the model does the work it names.
+  const stableEls = elementIds.filter((i) => !poolSet.has(i));
+  const stableTexts = textIds.filter((i) => !poolSet.has(parents.get(i)));
+  let removeIdx = 0, addIdx = 0, freshId = 800000;
   const snaps = realCanvasSnapshots();
   const canvasId = 900001;
   const withCanvas = JSON.parse(JSON.stringify(tree));
@@ -163,8 +248,25 @@ function buildDeepSpanModel({ tree, segments, eventsPerSegment, anchoredFrac, ca
     children: [], canvas_size: { w: 400, h: 300 },
   });
 
+  // A re-added subtree. jspsych-full's 100 dom.add payloads average 1.96 nodes
+  // (element + text child), with a handful running 35, so the model uses the
+  // small shape by default and the large one at the fixture's own frequency.
+  function reAddPayload(id, big) {
+    const kids = [{ id: freshId++, kind: 'text', text: 'readded ' + id }];
+    if (big) {
+      for (let k = 0; k < 16; k++) {
+        kids.push({
+          id: freshId++, kind: 'element', tag: 'span', attrs: { class: 'ra' + k },
+          children: [{ id: freshId++, kind: 'text', text: 'x' + k }],
+        });
+      }
+    }
+    return { id, kind: 'element', tag: 'div', attrs: { class: 'readded' }, children: kids };
+  }
+
   const out = [];
   let t = 0;
+  let mixIdx = 0;
   for (let s = 0; s < segments; s++) {
     const events = [];
     // INTERLEAVED, not blocked: a real seek alternates patches and anchored
@@ -173,7 +275,7 @@ function buildDeepSpanModel({ tree, segments, eventsPerSegment, anchoredFrac, ca
     const anchoredEvery = Math.max(1, Math.round(1 / anchoredFrac));
     for (let i = 0; i < eventsPerSegment; i++) {
       t += 5;
-      const target = elementIds[(s * 7 + i * 13) % elementIds.length];
+      const target = stableEls[(s * 7 + i * 13) % stableEls.length];
       if (i % anchoredEvery === 0) {
         // A discrete interaction: CH's capture puts both alignment blocks on
         // these (capture-trace.js withAlignment) and on nothing else.
@@ -183,10 +285,23 @@ function buildDeepSpanModel({ tree, segments, eventsPerSegment, anchoredFrac, ca
           camera: { scroll_x: 0, scroll_y: 0, client_w: 800, client_h: 600, w: 800, h: 600, dpr: 1, vv_scale: 1, vv_offset_x: 0, vv_offset_y: 0 },
           anchor: { tag: 'div', id: null, node: target, rect: { x: 10, y: 10, w: 50, h: 20 } },
         });
-      } else if (i % 4 === 1) {
-        events.push(i % 8 === 1
-          ? { type: 'dom.attr', t, node: target, name: 'class', value: 'c' + (i % 5) }
-          : { type: 'dom.text', t, node: target, text: 'v' + i });
+        continue;
+      }
+      const kind = NON_ANCHORED_MIX[mixIdx++ % NON_ANCHORED_MIX.length];
+      if (kind === 'dom.attr') {
+        events.push({ type: 'dom.attr', t, node: target, name: 'class', value: 'c' + (i % 5) });
+      } else if (kind === 'dom.text') {
+        events.push({ type: 'dom.text', t, node: stableTexts[(s * 5 + i * 11) % stableTexts.length], text: 'v' + i });
+      } else if (kind === 'dom.remove') {
+        events.push({ type: 'dom.remove', t, node: pool[removeIdx++ % pool.length] });
+      } else if (kind === 'dom.add') {
+        // Puts back what a remove took, under the parent it came from, so the
+        // patch resolves and pays instantiation + insertion for real.
+        const id = pool[addIdx++ % pool.length];
+        events.push({
+          type: 'dom.add', t, parent: parents.get(id), before: null,
+          node: reAddPayload(id, addIdx % 50 === 0),
+        });
       } else {
         events.push({ type: 'mouse.move', t, x: 10 + (i % 700), y: 10 + (i % 500) });
       }
@@ -293,6 +408,8 @@ function modelPageHtml() {
   var SHELL_HEAD = ${JSON.stringify(shellHead)};
   var frame = document.getElementById('F');
   var idMap = null;
+  var nodeIds = null;      // reverse map, so dom.remove can purge a subtree by DOM walk
+  var patchFailures = 0;
   var offscreens = Object.create(null);
   var chains = Object.create(null);
   var touched = Object.create(null);
@@ -326,14 +443,26 @@ function modelPageHtml() {
       var kids = n.children || [];
       for (var i = 0; i < kids.length; i++) el.appendChild(instantiate(kids[i], doc, map));
     }
-    map.set(n.id, el);
+    map.set(n.id, el);          // dom.add OVERWRITES an existing binding (move re-bind)
+    nodeIds.set(el, n.id);
     return el;
+  }
+
+  // dom.remove purges the node AND its whole subtree from the map (design §4).
+  // The recursive DOM walk plus one Map.delete per node is the cost Task 3 pays.
+  function purge(node) {
+    var id = nodeIds.get(node);
+    if (id !== undefined) { idMap.delete(id); nodeIds['delete'](node); }
+    var c = node.firstChild;
+    while (c) { purge(c); c = c.nextSibling; }
   }
 
   window.__mountTree = function (dom) {
     var doc = fdoc();
     var body = doc.body;
     idMap = new Map();
+    nodeIds = new WeakMap();
+    patchFailures = 0;
     while (body.firstChild) body.removeChild(body.firstChild);
     for (var i = body.attributes.length - 1; i >= 0; i--) body.removeAttribute(body.attributes[i].name);
     if ((dom.tag || '').toLowerCase() === 'body') {
@@ -342,17 +471,30 @@ function modelPageHtml() {
       var kids = dom.children || [];
       for (var j = 0; j < kids.length; j++) body.appendChild(instantiate(kids[j], doc, idMap));
       idMap.set(dom.id, body);
+      nodeIds.set(body, dom.id);
     } else {
       body.appendChild(instantiate(dom, doc, idMap));
     }
     return idMap.size;
   };
 
-  // ── patches (models design §5.1) ──
+  // ── patches (models design §5.1, all four) ──
   function applyPatch(p) {
+    if (p.type === 'dom.add') {
+      var parent = idMap.get(p.parent);
+      if (!parent) { patchFailures++; return false; }
+      var added = instantiate(p.node, fdoc(), idMap);
+      var before = p.before != null ? idMap.get(p.before) : null;
+      if (before && before.parentNode === parent) parent.insertBefore(added, before);
+      else parent.appendChild(added);
+      return true;
+    }
     var node = idMap.get(p.node);
-    if (!node) return false;
-    if (p.type === 'dom.attr') {
+    if (!node) { patchFailures++; return false; }
+    if (p.type === 'dom.remove') {
+      purge(node);
+      if (node.parentNode) node.parentNode.removeChild(node);
+    } else if (p.type === 'dom.attr') {
       if (p.value === null) node.removeAttribute(p.name); else node.setAttribute(p.name, p.value);
     } else if (p.type === 'dom.text') {
       // §5.1 dom.text addresses TEXT and COMMENT nodes. Writing textContent on
@@ -410,9 +552,10 @@ function modelPageHtml() {
   };
 
   window.__patchCost = function (patches) {
+    var before = patchFailures;
     var t0 = performance.now();
     for (var i = 0; i < patches.length; i++) applyPatch(patches[i]);
-    return performance.now() - t0;
+    return { ms: performance.now() - t0, failures: patchFailures - before };
   };
 
   window.__mountCost = function (dom) {
@@ -478,12 +621,13 @@ function modelPageHtml() {
     window.__resetCanvas();
     var t0 = performance.now();
     window.__mountTree(segments[0].initial_dom);
-    var checks = 0, patches = 0, canvases = 0, sink = 0;
+    var checks = 0, patches = 0, structural = 0, canvases = 0, sink = 0;
     for (var s = 0; s <= toSegment; s++) {
       var evs = segments[s].events;
       for (var i = 0; i < evs.length; i++) {
         var e = evs[i];
-        if (e.type === 'dom.attr' || e.type === 'dom.text') { applyPatch(e); patches++; }
+        if (e.type === 'dom.add' || e.type === 'dom.remove') { applyPatch(e); structural++; }
+        else if (e.type === 'dom.attr' || e.type === 'dom.text') { applyPatch(e); patches++; }
         else if (e.type === 'canvas.snapshot') {
           if (opts.canvas) { composite(e.node, e.data_url, e.region || null, 400, 300); canvases++; }
         } else if (e.anchor && opts.checks) { sink += alignPrimitive('all', e); checks++; }
@@ -494,7 +638,11 @@ function modelPageHtml() {
     return settled().then(function () {
       var presented = opts.canvas ? presentTouched() : 0;
       void fdoc().documentElement.clientHeight;   // force the present to lay out
-      return { syncMs: syncMs, settledMs: performance.now() - t0, checks: checks, patches: patches, canvases: canvases, presentedUrlChars: presented };
+      return {
+        syncMs: syncMs, settledMs: performance.now() - t0,
+        checks: checks, patches: patches, structural: structural,
+        patchFailures: patchFailures, canvases: canvases, presentedUrlChars: presented,
+      };
     });
   };
 })();
@@ -589,24 +737,54 @@ async function runEngine(name, browser, origin) {
     console.log(`  ${label.padEnd(38)} ${show(res.mount[label])}  [${nodes} mapped]`);
   }
 
-  // Patch application, on the 535-node real tree.
+  // Patch application, on the 535-node real tree. dom.text addresses TEXT node
+  // ids, per §5.1 (review M-6b: aiming it at elements no-ops on 36% of them).
   const realTree = trees['jspsych-full seg11 (535 nodes, real)'];
   const realIds = collectElementIds(realTree).filter((i) => i !== realTree.id);
+  const realTextIds = collectTextIds(realTree);
+  const realParents = parentMap(realTree);
+  const realHasElChild = new Set();
+  (function scan(n) {
+    if (!n) return;
+    if ((n.children || []).some((c) => c.kind === 'element')) realHasElChild.add(n.id);
+    (n.children || []).forEach(scan);
+  })(realTree);
+  const realPool = realIds.filter((i) => realParents.has(i) && !realHasElChild.has(i));
   const mkPatches = (k) => Array.from({ length: k }, (_, i) => (i % 2
     ? { type: 'dom.attr', node: realIds[i % realIds.length], name: 'class', value: 'p' + (i % 7) }
-    : { type: 'dom.text', node: realIds[i % realIds.length], text: 'x' + i }));
-  console.log(`\n── PRIM: dom.attr/dom.text application (535-node tree) ──`);
-  res.patches = {};
-  for (const k of [1000, 4000]) {
-    const patches = mkPatches(k);
-    const xs = [];
-    for (let r = 0; r <= CFG.runs; r++) {
-      await page.evaluate((t) => window.__mountTree(t), realTree);
-      const ms = await page.evaluate((p) => window.__patchCost(p), patches);
-      if (r) xs.push(ms);
+    : { type: 'dom.text', node: realTextIds[i % realTextIds.length], text: 'x' + i }));
+  // dom.remove + dom.add pairs: remove a node, put it back where it was.
+  const mkStructural = (k) => {
+    const out = [];
+    for (let i = 0; i < k / 2; i++) {
+      const id = realPool[i % realPool.length];
+      out.push({ type: 'dom.remove', node: id });
+      out.push({
+        type: 'dom.add', parent: realParents.get(id), before: null,
+        node: { id, kind: 'element', tag: 'div', attrs: { class: 'readded' }, children: [{ id: 700000 + i, kind: 'text', text: 'r' + i }] },
+      });
     }
-    res.patches[k] = stat(xs);
-    console.log(`  ${String(k).padStart(4)} patches:                        ${show(res.patches[k])}   (${fixed(res.patches[k].median / k, 5)} ms each)`);
+    return out;
+  };
+  console.log(`\n── PRIM: patch application (535-node tree) ──`);
+  res.patches = {};
+  for (const [label, mk] of [['dom.attr/dom.text', mkPatches], ['dom.add/dom.remove', mkStructural]]) {
+    for (const k of [1000, 4000]) {
+      const patches = mk(k);
+      const xs = [];
+      let failures = 0;
+      for (let r = 0; r <= CFG.runs; r++) {
+        await page.evaluate((t) => window.__mountTree(t), realTree);
+        const m = await page.evaluate((p) => window.__patchCost(p), patches);
+        if (r) xs.push(m.ms);
+        failures = m.failures;
+      }
+      const key = `${label} x${k}`;
+      res.patches[key] = { ...stat(xs), failures };
+      // A patch that resolves nothing costs nothing (review C-2).
+      if (failures !== 0) fail(`[${name}] "${key}" left ${failures} unresolved patches`);
+      console.log(`  ${key.padEnd(28)} ${show(res.patches[key])}   (${fixed(res.patches[key].median / k, 5)} ms each, ${failures} unresolved)`);
+    }
   }
 
   // ── ALIGN: the driver §11 named wrongly ────────────────────────────────
@@ -667,7 +845,7 @@ async function runEngine(name, browser, origin) {
         res.span[key] = { sync: stat(acc[c].sync), settled: stat(acc[c].settled), meta };
         console.log(`  ${key}`);
         console.log(`      sync    ${show(res.span[key].sync)}`);
-        console.log(`      settled ${show(res.span[key].settled)}   [checks ${meta.checks}, patches ${meta.patches}, canvas ${meta.canvases}, presented ${meta.presentedUrlChars} chars]`);
+        console.log(`      settled ${show(res.span[key].settled)}   [checks ${meta.checks}, attr/text ${meta.patches}, add/remove ${meta.structural}, unresolved ${meta.patchFailures}, canvas ${meta.canvases}, presented ${meta.presentedUrlChars} chars]`);
       });
     }
   }
@@ -701,6 +879,13 @@ async function runEngine(name, browser, origin) {
   }
   if (!(res.span['canvas=off checks=off case iii (mount + 10 segments)'].meta.checks === 0)) {
     fail(`[${name}] checks=off ran alignment checks anyway`);
+  }
+  // The C-2 class of defect: a structural patch that resolves nothing costs
+  // nothing and silently deflates the deep case. Both halves are asserted.
+  const deep = res.span['canvas=off checks=on case iii (mount + 10 segments)'].meta;
+  if (!(deep.structural > 0)) fail(`[${name}] deep-span case iii applied zero dom.add/dom.remove`);
+  if (deep.patchFailures !== 0) {
+    fail(`[${name}] deep-span case iii left ${deep.patchFailures} unresolved patches — structural work was measured as a no-op`);
   }
 
   await page.close();
