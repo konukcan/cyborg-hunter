@@ -15,11 +15,11 @@
 //   capture-trace: isInRedactedSubtree(el, config.redactSelector)
 //   snapshot/dom:  isInRedactedSubtree(node, opts.redactSelector)
 //
-// Adoption status: the snapshot serializer (`snapshot.js`) uses this module.
-// The v1 duplicates in `capture-trace.js` and `capture-dom.js` stay live until
-// Tasks 3 and 5 rewrite their call sites onto it — until then the three
-// implementations must stay semantically identical, which is why the union of
-// their password checks (property OR attribute) lives here.
+// Adoption: complete. Every capture path — the snapshot walk, the mutation
+// mapper, the keyframe seed and event capture — asks this module, and the v1
+// duplicates it replaced are gone. The password check is the union of what the
+// two of them used to do separately (property OR attribute), which is why the
+// predicate is broader than either was.
 
 var ELEMENT_NODE = 1;
 

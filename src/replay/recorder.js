@@ -40,8 +40,22 @@ export const REPLAY_DEFAULTS = {
   // one they never see: a desktop drag-resize, or a mobile scroll with URL-bar
   // chrome, yields up to two entries per frame per channel for as long as it
   // lasts (measured: 5000 coalesced resizes → 365 KB while the trial buffer held
-  // one event). Consecutive-identical states are dropped before this counts, so
-  // 2000 distinct geometries (~150 KB) is far past any real session.
+  // one event).
+  //
+  // The two storm shapes are bounded by different guards, and it is worth being
+  // precise about which does what. A window sitting IDLE between frames repeats
+  // the same geometry, and consecutive-identical dedup absorbs that entirely
+  // (measured: 5000 → 1 entry). A window being actively DRAGGED reports a
+  // distinct geometry every frame, which dedup cannot touch — that is what this
+  // cap is for, and 2000 distinct states is about 33 s of continuous dragging at
+  // 60 Hz, accumulated over the whole session. Past it the stream stops for good
+  // and says so once through captureFailure, which means a participant who
+  // fiddles with the window early keeps the early geometry and loses later
+  // changes. That inversion is the known cost of a forward-only bound; the
+  // alternative (dropping oldest) would leave the early segments unreplayable,
+  // which is worse, since a viewport stream is state and not deltas. 2000 kept
+  // deliberately at the v2 switchover: dedup now absorbs the cheap case, so
+  // these are 2000 REAL geometries (~150 KB), already far past any real session.
   maxViewportChanges: 2000
 };
 
@@ -81,8 +95,15 @@ export function createRecorder(userConfig) {
     tier: config.tier,
     keys: config.keys,
     sessionStart: null,        // performance.now() at startSession
-    sessionStartEpoch: null,   // Date.now() at startSession (wire metadata + filename)
+    sessionStartEpoch: null,   // Date.now() at startSession (wire time base + filename)
+    userAgent: '',             // spec §2; read once at startSession
+    // Spec §2's ViewportState — the SAME shape every `viewport_changes` entry
+    // carries, because they describe the same thing at different times.
     viewport: null,
+    // documentElement's client box, which §2's ViewportState has no room for
+    // and CH's viewer sizes its reconstruction by. Vendor data (spec §9).
+    viewportClient: null,
+    observedRoot: null,        // selector of the observed subtree (spec §2); set by capture-dom
     stylesheets: [],           // filled by capture-dom at startSession (tier dom)
     trials: [],
     guardViolations: [],       // filled via GuardFriction.onViolation subscription
@@ -93,13 +114,9 @@ export function createRecorder(userConfig) {
     viewportChanges: [],
     captureFailures: [],
     captureStopped: false,
-    endReason: null,
-    markerAttr: null           // set by capture-dom (serialization markers)
+    endReason: null
   };
   var currentTrial = null;
-  // Opaque marker registry (capture-dom owns it; capture-trace reads it for
-  // interaction anchors). The recorder never inspects it — staying DOM-free.
-  var markers = null;
 
   function transition(to) {
     if (VALID[state].indexOf(to) === -1) {
@@ -125,7 +142,12 @@ export function createRecorder(userConfig) {
       tStart: (opts && opts.tStart) != null ? opts.tStart : null,
       tDomReady: (opts && opts.tDomReady) != null ? opts.tDomReady : null,
       tEnd: null,
-      initialDom: '',
+      // Spec §3: a keyframe is a DomNode tree, a continuation is null. Null
+      // until the DOM capture's trial-start hook fills it, and on trace tier
+      // it stays null for the whole recording, which is the honest statement
+      // that no DOM was ever observed.
+      initialDom: null,
+      initialState: null,
       events: []
     };
   }
@@ -175,19 +197,30 @@ export function createRecorder(userConfig) {
   // configured limit that was actually crossed is CH's own diagnostic, not part
   // of the standard event, so it rides in the vendor namespace (spec §9) rather
   // than as an unknown top-level field.
-  function captureStoppedSentinel(t, detail) {
-    return {
+  //
+  // ONCE PER RECORDING (§5.7: "emitted once, into the segment open at stop
+  // time"), which is also what makes top-level `truncated` a faithful mirror of
+  // it — one flag, one signal. v1 fired it per trial, so a recording that hit a
+  // cap in three trials claimed to have stopped capturing three times. The
+  // per-trial RECOVERY is unchanged and is a different fact: one oversized trial
+  // stops only itself, and the next captures fresh. What the recording says once
+  // is that something, somewhere, was dropped.
+  var captureStopSignalled = false;
+  function signalCaptureStopped(trial, t, detail) {
+    stoppedTrials.add(trial);
+    session.captureStopped = true;
+    if (captureStopSignalled) return;
+    captureStopSignalled = true;
+    trial.events.push({
       type: 'recording.capture_stopped',
       t: t,
       reason: 'buffer_limit',
       extensions: { 'cyborg-hunter': detail },
-    };
+    });
   }
 
-  // The single path into the buffer, shared by `pushEvent` (v1 vocabulary,
-  // capture-dom until Task 6) and `pushRecord` (v2). Lifecycle gate, implicit
-  // trial opening and both per-trial caps live here, so the two vocabularies
-  // can never disagree about when a recording stops.
+  // The single path into the buffer, behind `pushRecord`. Lifecycle gate,
+  // implicit trial opening and both per-trial caps live here.
   function storeEvent(e) {
     if (state === 'destroyed') {
       throw new Error('[cyborg-hunter-replay] event pushed to a destroyed recorder');
@@ -201,28 +234,20 @@ export function createRecorder(userConfig) {
     // cap drops further events, but a fresh trial is unaffected.
     if (stoppedTrials.has(currentTrial)) return;
     if (currentTrial.events.length >= config.maxEventsPerTrial) {
-      stoppedTrials.add(currentTrial);
-      session.captureStopped = true;
-      currentTrial.events.push(
-        captureStoppedSentinel(e.t, { limit_events: config.maxEventsPerTrial }));
+      signalCaptureStopped(currentTrial, e.t, { limit_events: config.maxEventsPerTrial });
       return;
     }
     // Size cap: stop capturing once the trial's estimated serialized length
     // exceeds maxCharsPerTrial, so a few huge values can't blow up the payload
     // while staying under the event-count cap. The budget is SEEDED with the
-    // initial DOM snapshot (stored on the trial, not pushed as an event) so a
-    // multi-megabyte snapshot counts too rather than bypassing the cap.
+    // keyframe (stored on the trial, not pushed as an event) so a
+    // multi-megabyte snapshot counts too rather than bypassing the cap — see
+    // `noteSnapshotChars`, which is where that seed now comes from.
     if (config.maxCharsPerTrial != null) {
-      var soFar = trialChars.get(currentTrial);
-      if (soFar == null) {
-        soFar = currentTrial.initialDom ? currentTrial.initialDom.length : 0;
-      }
+      var soFar = trialChars.get(currentTrial) || 0;
       soFar += estimateEventChars(e);
       if (soFar > config.maxCharsPerTrial) {
-        stoppedTrials.add(currentTrial);
-        session.captureStopped = true;
-        currentTrial.events.push(
-          captureStoppedSentinel(e.t, { limit_chars: config.maxCharsPerTrial }));
+        signalCaptureStopped(currentTrial, e.t, { limit_chars: config.maxCharsPerTrial });
         return;
       }
       trialChars.set(currentTrial, soFar);
@@ -237,25 +262,28 @@ export function createRecorder(userConfig) {
       transition('session');
       session.sessionStart = performance.now();
       session.sessionStartEpoch = Date.now();
-      // Viewport geometry, if a window exists (absent in node tests).
+      // Viewport geometry, if a window exists (absent in node tests). Spec §2's
+      // ViewportState, identical in shape to every `viewport_changes` entry.
       var w = typeof window !== 'undefined' ? window : null;
+      var vv = w && w.visualViewport ? w.visualViewport : null;
+      session.viewport = w ? {
+        w: w.innerWidth || 0,
+        h: w.innerHeight || 0,
+        dpr: w.devicePixelRatio || 1,
+        scale: vv && typeof vv.scale === 'number' ? vv.scale : 1,
+        offset_x: vv ? (vv.offsetLeft || 0) : 0,
+        offset_y: vv ? (vv.offsetTop || 0) : 0
+      } : null;
       // documentElement.clientWidth/Height = the LAYOUT width the page was
       // actually formatted against (innerWidth minus any classic scrollbar) —
-      // the viewer sizes its reconstruction by this, not innerWidth.
+      // the viewer sizes its reconstruction by this, not innerWidth. Spec §2
+      // has no field for it, so it travels as vendor data (spec §9).
       var de = typeof document !== 'undefined' && document.documentElement
         ? document.documentElement : null;
-      session.viewport = w ? {
-        width: w.innerWidth || null,
-        height: w.innerHeight || null,
-        client_width: de ? de.clientWidth || null : null,
-        client_height: de ? de.clientHeight || null : null,
-        dpr: w.devicePixelRatio || 1,
-        visual_viewport: w.visualViewport ? {
-          width: w.visualViewport.width, height: w.visualViewport.height,
-          scale: w.visualViewport.scale
-        } : null
-      } : { width: null, height: null, client_width: null, client_height: null,
-            dpr: null, visual_viewport: null };
+      session.viewportClient = de
+        ? { w: de.clientWidth || 0, h: de.clientHeight || 0 } : null;
+      session.userAgent = typeof navigator !== 'undefined' && navigator.userAgent
+        ? String(navigator.userAgent) : '';
       if (config.autoSave.mode === 'none') {
         console.warn('[cyborg-hunter-replay] autoSave.mode is "none" — the recording will be lost unless you call getRecording() yourself.');
       }
@@ -264,8 +292,12 @@ export function createRecorder(userConfig) {
     startTrial: function (opts) {
       if (state === 'trial') {
         // Standalone users may forget endTrial(); auto-close so events never
-        // bleed across trials, and leave an auditable marker.
-        this.pushEvent('ch:lifecycle_error', { reason: 'startTrial_without_endTrial' });
+        // bleed across trials, and leave an auditable marker. The marker is a
+        // capture failure, not an event: spec §5.8 admits no vendor event types
+        // in the stream, and this channel already carries CH's capture-side
+        // anomalies to the analyst through the vendor extension.
+        this.captureFailure('lifecycle',
+          new Error('startTrial_without_endTrial: the open trial was auto-closed'));
         closeTrial();
         state = 'session';
       } else if (currentTrial) {
@@ -296,21 +328,12 @@ export function createRecorder(userConfig) {
       session.endReason = reason || 'finished';
     },
 
-    // Central event sink used by all capture modules.
-    // Events land in the current trial; unbracketed events lazily open a
-    // single implicit trial that spans the session (design §5).
-    pushEvent: function (kind, payload, tOverride) {
-      storeEvent(Object.assign(
-        { t: tOverride != null ? tOverride : performance.now(), kind: kind },
-        payload || {}));
-    },
-
-    // v2 sink (spec §5): the caller hands over a complete RecordedEvent minus
-    // its `t`, because v2 payloads are per-type shapes with nested blocks
-    // (`camera`, `anchor`, `mods`, `extensions`) rather than a flat bag merged
-    // onto a `kind`. `type` leads the wire, `t` follows it, matching how the
-    // fixtures read — and `t` is written AFTER the merge, so the sink owns the
-    // timestamp even if a caller ever puts one in the record.
+    // The event sink (spec §5): the caller hands over a complete RecordedEvent minus
+    // its `t`. v2 payloads are per-type shapes with nested blocks (`camera`,
+    // `anchor`, `mods`, `extensions`) rather than v1's flat bag merged onto a
+    // `kind`. `type` leads the wire, `t` follows it, matching how the fixtures
+    // read — and `t` is written AFTER the merge, so the sink owns the timestamp
+    // even if a caller ever puts one in the record.
     pushRecord: function (record, tOverride) {
       var e = Object.assign({ type: record.type, t: null }, record);
       e.t = tOverride != null ? tOverride : performance.now();
@@ -350,6 +373,35 @@ export function createRecorder(userConfig) {
       }));
     },
 
+    // Guard-friction violations (spec §9's vendor namespace). NOT an event:
+    // §5.8 forbids vendor types in the stream, and there is no standard event
+    // for "the participant left fullscreen". The entry keeps its `t`, so a
+    // viewer can still place it on the timeline beside the events.
+    pushGuardViolation: function (entry, tOverride) {
+      if (state === 'destroyed') {
+        throw new Error('[cyborg-hunter-replay] guard violation pushed to a destroyed recorder');
+      }
+      if (state === 'created' || state === 'stopped') return;
+      session.guardViolations.push(Object.assign({}, entry, {
+        t: tOverride != null ? tOverride : performance.now()
+      }));
+    },
+
+    // How many characters the keyframe payload of this trial takes.
+    //
+    // The keyframe lives ON the trial rather than in the event stream, so the
+    // per-trial size cap cannot see it unless the capture module says. v1 read
+    // `initialDom.length` off an HTML STRING; a v2 keyframe is a DomNode tree,
+    // whose `.length` is undefined — and `undefined + n` is NaN, which compares
+    // false against any cap, so the whole size budget would have failed silently
+    // open. capture-dom measures the payload exactly (it has to anyway, to
+    // decide whether the snapshot itself is over budget) and reports it here.
+    noteSnapshotChars: function (trial, chars) {
+      if (trial && typeof chars === 'number' && isFinite(chars)) {
+        trialChars.set(trial, chars);
+      }
+    },
+
     // Capture-channel failure: record and keep going. Recording must never
     // break an experiment (design §6).
     captureFailure: function (channel, err) {
@@ -368,10 +420,11 @@ export function createRecorder(userConfig) {
       session.stylesheets = sheets || [];
     },
 
-    // Marker registry passthrough (opaque — see comment on `markers` above).
-    setMarkers: function (reg) { markers = reg; },
-    getMarkers: function () { return markers; },
-    setMarkerAttr: function (attr) { session.markerAttr = attr || null; },
+    // Selector of the observed subtree (spec §2 `observed_root`); null means
+    // "the document body", which is also what a trace-tier recording says.
+    setObservedRoot: function (selector) {
+      session.observedRoot = typeof selector === 'string' && selector ? selector : null;
+    },
 
     // Listener/interval registry — single teardown point.
     addListener: function (target, event, handler, options) {

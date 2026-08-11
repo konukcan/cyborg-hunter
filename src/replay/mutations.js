@@ -6,8 +6,8 @@
 // addressing that tree's integer ids. Pure and observer-free — it maps an
 // ARRAY of MutationRecords to an array of events — so it can be tested against
 // records a real observer produced without a recorder, a clock, or a browser
-// in the loop. Live wiring (replacing capture-dom.js's observer callback)
-// happens at the capture switchover.
+// in the loop. The live wiring is capture-dom.js's observer callback, which
+// hands over the batch exactly as the observer reported it.
 //
 // Everything is decided at FLUSH time, against the DOM as it stands when the
 // observer callback runs, which is also the state serializeTree sees:
@@ -46,7 +46,7 @@
 // compositions nobody wrote down: random batches, applied to a player, against
 // what a fresh keyframe of the same DOM would say.
 //
-// RETIRED from v1 (capture-dom.js:470-507), deliberately:
+// RETIRED from v1's observer callback, deliberately:
 //   - the one-childList-patch-per-target intra-batch dedup. It existed because
 //     every v1 childList patch re-serialized the target's FULL resulting
 //     children, so N appends to one container cost O(N²) of the participant's

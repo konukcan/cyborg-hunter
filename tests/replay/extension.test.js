@@ -32,8 +32,9 @@ describe('CyborgHunterReplay.attach', () => {
       // The replaced instance is destroyed: writes fail loudly, but its
       // buffer stays READABLE (CH getSessionReport idiom) — destroy-then-
       // serialize must never lose an in-progress recording.
-      assert.throws(() => a._recorder.pushEvent('click', {}), /destroyed/);
-      assert.strictEqual(a.getRecording().schema_version, 1);
+      assert.throws(
+        () => a._recorder.pushRecord({ type: 'mouse.move', x: 0, y: 0 }), /destroyed/);
+      assert.strictEqual(a.getRecording().schema_version, 2);
       b.destroy();
     } finally { console.warn = origWarn; }
   });
@@ -42,14 +43,14 @@ describe('CyborgHunterReplay.attach', () => {
     const api = CHReplay.attach({ participantId: 'P9', tier: 'trace', autoSave: { mode: 'datapipe', experimentId: 'X' } });
     api.startSession();
     api.startTrial({ trialId: 'r1' });
-    api._recorder.pushEvent('click', { x: 3, y: 4 });
+    api._recorder.pushRecord({ type: 'mouse.click', x: 3, y: 4, button: 0, target: null });
     api.endTrial();
     api.stopSession('finished');
     const rec = api.getRecording();
-    assert.strictEqual(rec.schema_version, 1);
-    assert.strictEqual(rec.metadata.participant_id, 'P9');
-    assert.strictEqual(rec.trials.length, 1);
-    assert.strictEqual(rec.trials[0].events[0].kind, 'click');
+    assert.strictEqual(rec.schema_version, 2);
+    assert.strictEqual(rec.participant_id, 'P9');
+    assert.strictEqual(rec.segments.length, 1);
+    assert.strictEqual(rec.segments[0].events[0].type, 'mouse.click');
     api.destroy();
   });
 });
@@ -107,14 +108,14 @@ describe('jsPsych replay adapter', () => {
     await ext.finalize();
     const meta = store.props.integrityReplayMeta;
     assert.ok(meta, 'integrityReplayMeta must be attached');
-    assert.strictEqual(meta.schema_version, 1);
+    assert.strictEqual(meta.schema_version, 2);
     assert.strictEqual(meta.saved_to, 'none');
     // the recording itself is retrievable for tests/debugging
     const rec = ext.getLastRecording();
-    assert.strictEqual(rec.trials.length, 1);
-    assert.strictEqual(rec.trials[0].trial_id, 'trial-7');
-    assert.strictEqual(rec.trials[0].plugin, 'html-button-response');
-    assert.strictEqual(rec.ch_extensions.scoring.soft_score, 2,
+    assert.strictEqual(rec.segments.length, 1);
+    assert.strictEqual(rec.segments[0].label, 'trial-7');
+    assert.strictEqual(rec.segments[0].plugin, 'html-button-response');
+    assert.strictEqual(rec.extensions['cyborg-hunter'].scoring.soft_score, 2,
       'CH session report merged via the stashed monitor reference');
   });
 
@@ -126,7 +127,8 @@ describe('jsPsych replay adapter', () => {
     ext.on_finish({});
     await ext.finalize();
     assert.ok(store.props.integrityReplayMeta);
-    assert.strictEqual(ext.getLastRecording().ch_extensions.scoring, null);
+    assert.strictEqual(
+      ext.getLastRecording().extensions['cyborg-hunter'].scoring, null);
   });
 
   it('double finalize() does not autosave twice', async () => {
@@ -152,7 +154,7 @@ describe('jsPsych replay adapter', () => {
     ext.on_finish({});
     await ext.finalize();
     const rec = ext.getLastRecording();
-    const bracketed = rec.trials.filter(t => t.trial_id !== '__session__');
+    const bracketed = rec.segments.filter(t => t.label !== '__session__');
     assert.strictEqual(bracketed.length, 1, 'exactly one real trial, not a phantom');
   });
 

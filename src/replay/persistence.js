@@ -10,14 +10,21 @@ var DATAPIPE_URL = 'https://pipe.jspsych.org/api/data/';
 
 import { sanitizeId } from '../shared/constants.js';
 
+// The CH vendor namespace of a v2 recording (spec §9), where `metadata.tier`
+// and the `ch_extensions` diagnostics moved.
+function chExt(recording) {
+  var ext = recording && recording.extensions;
+  return (ext && ext['cyborg-hunter']) || {};
+}
+
 /**
- * <pid>-replay-<sessionStartEpochMs>.json — the epoch suffix makes reloads
+ * <pid>-replay-<recordingStartEpochMs>.json — the epoch suffix makes reloads
  * produce distinct artifacts instead of overwriting (CLI picks the latest
  * and warns on multiples).
  */
 export function replayFilename(recording) {
-  var pid = sanitizeId(recording.metadata.participant_id);
-  var epoch = Date.parse(recording.metadata.start_time);
+  var pid = sanitizeId(recording.participant_id);
+  var epoch = Date.parse(recording.recording_started_at);
   return pid + '-replay-' + epoch + '.json';
 }
 
@@ -25,16 +32,22 @@ export function replayFilename(recording) {
  * The small pointer that rides along in the jsPsych data (one
  * addProperties call) so the analyst can tell from the CSV alone whether a
  * replay exists, how big it was, and where it went.
+ *
+ * The OUTPUT shape is a stable contract with the CLI ingest and the HTML index
+ * (they read these six keys); only where the values are read FROM moved to v2.
  */
 export function buildReplayMeta(recording, savedTo) {
+  var ext = chExt(recording);
   return {
     schema_version: recording.schema_version,
-    tier: recording.metadata.tier,
+    tier: ext.tier != null ? ext.tier : null,
     saved_to: savedTo,
     bytes_uncompressed: JSON.stringify(recording).length,
-    capture_failures: (recording.ch_extensions.capture_failures || [])
+    capture_failures: (ext.capture_failures || [])
       .map(function (f) { return f.channel; }),
-    capture_stopped: !!recording.ch_extensions.capture_stopped
+    // Spec §5.7's standard flag, which mirrors the vendor one; reading the
+    // standard field keeps the pointer honest for any v2 producer.
+    capture_stopped: !!recording.truncated
   };
 }
 

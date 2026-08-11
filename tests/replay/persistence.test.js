@@ -7,16 +7,21 @@ import {
   replayFilename, buildReplayMeta, autoSave,
 } from '../../src/replay/persistence.js';
 
+// A v2 recording (spec §2). Task 6 moved the paths persistence reads —
+// `metadata` dissolved into the top level and `ch_extensions` became
+// `extensions["cyborg-hunter"]` — in lockstep with the serializer; the meta
+// pointer's own OUTPUT shape is unchanged and stays Task 7's contract.
 function recording(overrides) {
   return {
-    schema_version: 1,
-    metadata: {
-      participant_id: 'P1', tier: 'dom',
-      start_time: new Date(1751600000000).toISOString(),
-      end_reason: 'finished',
+    schema_version: 2,
+    participant_id: 'P1',
+    recording_started_at: new Date(1751600000000).toISOString(),
+    end_reason: 'finished',
+    truncated: false,
+    segments: [],
+    extensions: {
+      'cyborg-hunter': { tier: 'dom', capture_failures: [], capture_stopped: false },
     },
-    trials: [],
-    ch_extensions: { capture_failures: [], capture_stopped: false },
     ...overrides,
   };
 }
@@ -28,7 +33,7 @@ describe('replayFilename', () => {
 
   it('sanitizes participant ids for filesystem safety', () => {
     const rec = recording();
-    rec.metadata.participant_id = 'p/1:weird id';
+    rec.participant_id = 'p/1:weird id';
     assert.strictEqual(replayFilename(rec), 'p_1_weird_id-replay-1751600000000.json');
   });
 });
@@ -36,9 +41,9 @@ describe('replayFilename', () => {
 describe('buildReplayMeta', () => {
   it('summarizes the recording and where it went', () => {
     const rec = recording();
-    rec.ch_extensions.capture_failures = [{ channel: 'scroll', message: 'x' }];
+    rec.extensions['cyborg-hunter'].capture_failures = [{ channel: 'scroll', message: 'x' }];
     const meta = buildReplayMeta(rec, 'datapipe:ABC/P1-replay-1751600000000.json');
-    assert.strictEqual(meta.schema_version, 1);
+    assert.strictEqual(meta.schema_version, 2);
     assert.strictEqual(meta.tier, 'dom');
     assert.strictEqual(meta.saved_to, 'datapipe:ABC/P1-replay-1751600000000.json');
     assert.ok(meta.bytes_uncompressed > 100);

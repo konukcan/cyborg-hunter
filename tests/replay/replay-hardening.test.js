@@ -3,9 +3,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { Window } from 'happy-dom';
 import { createRecorder } from '../../src/replay/recorder.js';
 import { attachTraceCapture } from '../../src/replay/capture-trace.js';
-import { serializeDom, mutationToPatch, attachDomCapture } from '../../src/replay/capture-dom.js';
+import { attachDomCapture } from '../../src/replay/capture-dom.js';
 import { buildViewerModel } from '../../src/cli/renderers/replay-assets.js';
 import { autoSave } from '../../src/replay/persistence.js';
 
@@ -64,66 +65,85 @@ describe('F2 — keystroke capture must honor redactSelector', () => {
   });
 });
 
+// A tier-2 capture over a real (happy-dom) document, with the observer
+// injected so batches flush synchronously. The v1 sections here poked the
+// HTML-string walker and the patch translator directly; both retired at the
+// v2 switchover, and the invariant they defended — a redacted subtree's
+// content reaches NO channel (spec §8) — is now a property of the wiring, so
+// that is where it is checked.
+function domHarness(html, config) {
+  const win = new Window({ url: 'https://example.org/' });
+  const doc = win.document;
+  doc.body.innerHTML = html;
+  globalThis.window = { innerWidth: 800, innerHeight: 600, devicePixelRatio: 1 };
+  const rec = createRecorder(Object.assign(
+    { participantId: 'P', tier: 'dom', root: '#stage' }, config));
+  let observerCb = null;
+  const real = new win.MutationObserver(() => {});
+  rec.startSession();
+  attachDomCapture(rec, {
+    doc, win, now: () => 1000,
+    MutationObserver: function (cb) {
+      observerCb = cb;
+      return { observe: (n, i) => real.observe(n, i), disconnect: () => real.disconnect() };
+    },
+  });
+  return {
+    rec, doc,
+    root: () => doc.querySelector('#stage'),
+    flush: () => observerCb(real.takeRecords()),
+    trial: (i) => rec.getState().trials[i],
+    events: () => rec.getState().trials.flatMap(t => t.events),
+  };
+}
+
 describe('F3 — DOM capture must honor redactSelector', () => {
-  function inputNode(attrs, extra) {
-    return Object.assign({
-      nodeType: 1, tagName: 'INPUT', type: (attrs.type || 'text'),
-      attributes: Object.entries(attrs).map(([name, value]) => ({ name, value })),
-      childNodes: [],
-      matches: (sel) => sel === '[data-ch-redact]' && attrs['data-ch-redact'] !== undefined,
-      getAttribute: (n) => attrs[n],
-    }, extra);
-  }
+  const REDACT = { redactSelector: '[data-ch-redact]' };
 
-  it('does not serialize the value attribute of a redactSelector-matching input', () => {
-    const node = inputNode({ 'data-ch-redact': '', type: 'email', value: 'alice@example.com' });
-    const html = serializeDom(node, { redactSelector: '[data-ch-redact]' });
-    assert.ok(!html.includes('alice@example.com'), `redacted value leaked into DOM: ${html}`);
-    assert.ok(html.includes('data-ch-redacted="true"'), 'redaction marker present');
+  it('the keyframe withholds the value of a redactSelector-matching input', () => {
+    const h = domHarness(
+      '<div id="stage"><input data-ch-redact type="email" value="alice@example.com">' +
+      '<input type="text" value="visible answer"></div>', REDACT);
+    h.rec.startTrial({ trialId: 't1' });
+    const json = JSON.stringify(h.trial(0).initialDom);
+    assert.ok(!json.includes('alice@example.com'), `redacted value leaked: ${json}`);
+    assert.ok(json.includes('visible answer'), 'a non-redacted value still serializes');
   });
 
-  it('still serializes the value of a non-redacted input', () => {
-    const node = inputNode({ type: 'text', value: 'visible answer' });
-    const html = serializeDom(node, { redactSelector: '[data-ch-redact]' });
-    assert.ok(html.includes('visible answer'));
+  it('typing into a redacted contenteditable emits no text', () => {
+    // The real shape a characterData mutation delivers: the target is a TEXT
+    // NODE with no matches() of its own, so only the ancestor walk catches it.
+    const h = domHarness(
+      '<div id="stage"><div data-ch-redact contenteditable>seed</div></div>', REDACT);
+    h.rec.startTrial({ trialId: 't1' });
+    h.root().firstChild.firstChild.data = 'typed secret';
+    h.flush();
+    const json = JSON.stringify(h.events());
+    assert.ok(!json.includes('typed secret'), `redacted text leaked: ${json}`);
   });
 
-  // A redacted contenteditable div with a text-node child — the REAL shape a
-  // characterData mutation delivers (target is the text node, which has no
-  // matches()), so this exercises the ancestor walk, not an element shortcut.
-  function redactedDivWithText(text) {
-    const textNode = { nodeType: 3, textContent: text, parentNode: null };
-    const div = {
-      nodeType: 1, tagName: 'DIV', parentNode: null,
-      attributes: [{ name: 'data-ch-redact', value: '' }],
-      matches: (sel) => sel === '[data-ch-redact]',
-      getAttribute: () => null,
-      childNodes: [textNode],
-    };
-    textNode.parentNode = div;
-    return { div, textNode };
-  }
-
-  it('redacts characterData mutations whose target is a text node inside a redacted element', () => {
-    const { div, textNode } = redactedDivWithText('typed secret');
-    const patch = mutationToPatch({ type: 'characterData', target: textNode }, div, { redactSelector: '[data-ch-redact]' });
-    assert.ok(patch, 'patch produced');
-    assert.ok(!String(patch.value).includes('typed secret'), `redacted text leaked: ${patch.value}`);
+  it('a subtree inserted into a redacted container arrives stripped', () => {
+    const h = domHarness('<div id="stage"><div data-ch-redact></div></div>', REDACT);
+    h.rec.startTrial({ trialId: 't1' });
+    const added = h.doc.createElement('p');
+    added.textContent = 'typed secret';
+    h.root().firstChild.appendChild(added);
+    h.flush();
+    const json = JSON.stringify(h.events());
+    assert.ok(json.includes('dom.add'), 'structure is not content: the add still happens');
+    assert.ok(!json.includes('typed secret'), `redacted insertion leaked: ${json}`);
   });
 
-  it('redacts childList mutations on a redacted element (children withheld)', () => {
-    const { div } = redactedDivWithText('typed secret');
-    const patch = mutationToPatch({ type: 'childList', target: div }, div, { redactSelector: '[data-ch-redact]' });
-    assert.ok(patch);
-    assert.ok(!String(patch.html).includes('typed secret'), `redacted childList leaked: ${patch.html}`);
-  });
-
-  it('preserves characterData for a non-redacted text node', () => {
-    const textNode = { nodeType: 3, textContent: 'visible', parentNode: null };
-    const div = { nodeType: 1, tagName: 'DIV', parentNode: null, matches: () => false, childNodes: [textNode], getAttribute: () => null, attributes: [] };
-    textNode.parentNode = div;
-    const patch = mutationToPatch({ type: 'characterData', target: textNode }, div, { redactSelector: '[data-ch-redact]' });
-    assert.equal(patch.value, 'visible');
+  it('content withheld once stays withheld after the page moves it out (spec §8)', () => {
+    // Redaction is a property of the FILE, not of a node's current position.
+    const h = domHarness(
+      '<div id="stage"><div data-ch-redact><p id="moved">secret text</p></div>' +
+      '<div id="open"></div></div>', REDACT);
+    h.rec.startTrial({ trialId: 't1' });
+    h.doc.getElementById('open').appendChild(h.doc.getElementById('moved'));
+    h.flush();
+    const json = JSON.stringify(h.events());
+    assert.ok(!json.includes('secret text'), `taint lost on move: ${json}`);
   });
 });
 
@@ -134,26 +154,32 @@ describe('F4 — recorder must cap total payload size, not just event count', ()
     rec.startSession();
     rec.startTrial({ trialId: 't1' });
     const big = 'x'.repeat(10000);
-    for (let i = 0; i < 20; i++) rec.pushEvent('input', { value: big });
+    for (let i = 0; i < 20; i++) {
+      rec.pushRecord({ type: 'input.value', node: 1, value: big });
+    }
     const st = rec.getState();
     assert.equal(st.captureStopped, true, 'size budget must stop capture');
     const evs = st.trials.flatMap(tr => tr.events);
-    assert.ok(evs.some(e => e.type === 'recording.capture_stopped'),
-      'a capture_stopped marker is recorded (spec §5.7)');
+    assert.equal(evs.filter(e => e.type === 'recording.capture_stopped').length, 1,
+      'exactly one capture_stopped signal per recording (spec §5.7)');
     // Far fewer than 20 events land — the size cap bit well before 100k events.
-    assert.ok(evs.filter(e => e.kind === 'input').length < 20);
+    assert.ok(evs.filter(e => e.type === 'input.value').length < 20);
   });
 
-  it('counts the initial DOM snapshot toward the budget (not just events)', () => {
+  it('counts the keyframe toward the budget (not just events)', () => {
     globalThis.window = { innerWidth: 800, innerHeight: 600, devicePixelRatio: 1 };
     const rec = createRecorder({ participantId: 'P', maxCharsPerTrial: 5000 });
-    // Simulate capture-dom's snapshot hook writing a large initial DOM.
-    rec.onTrialStart((trial) => { trial.initialDom = 'd'.repeat(6000); });
+    // Simulate capture-dom's keyframe hook: the tree is stored on the trial,
+    // so its size reaches the budget only because the hook reports it.
+    rec.onTrialStart((trial) => {
+      trial.initialDom = { id: 1, kind: 'text', text: 'd'.repeat(6000) };
+      rec.noteSnapshotChars(trial, JSON.stringify(trial.initialDom).length);
+    });
     rec.startSession();
     rec.startTrial({ trialId: 't1' });
-    rec.pushEvent('mousemove', { x: 1, y: 1 }); // tiny event, but snapshot already over budget
+    rec.pushRecord({ type: 'mouse.move', x: 1, y: 1 });  // tiny, but already over
     const st = rec.getState();
-    assert.equal(st.captureStopped, true, 'a snapshot over the budget must trip the cap on the next event');
+    assert.equal(st.captureStopped, true, 'a keyframe over the budget must trip the cap on the next event');
   });
 
   it('the cap is PER-TRIAL: a fresh trial resumes capture after a prior trial hit it', () => {
@@ -161,32 +187,32 @@ describe('F4 — recorder must cap total payload size, not just event count', ()
     const rec = createRecorder({ participantId: 'P', maxEventsPerTrial: 2 });
     rec.startSession();
     rec.startTrial({ trialId: 't1' });
-    rec.pushEvent('mousemove', { x: 1 });
-    rec.pushEvent('mousemove', { x: 2 });
-    rec.pushEvent('mousemove', { x: 3 }); // trips the cap in t1
+    rec.pushRecord({ type: 'mouse.move', x: 1, y: 0 });
+    rec.pushRecord({ type: 'mouse.move', x: 2, y: 0 });
+    rec.pushRecord({ type: 'mouse.move', x: 3, y: 0 }); // trips the cap in t1
     rec.endTrial();
     rec.startTrial({ trialId: 't2' });
-    rec.pushEvent('click', { x: 9 });     // must NOT be dropped
+    rec.pushRecord({ type: 'mouse.move', x: 9, y: 0 });  // must NOT be dropped
     const trials = rec.getState().trials;
     const t2 = trials.find(t => t.trialId === 't2');
-    assert.ok(t2.events.some(e => e.kind === 'click' && e.x === 9),
+    assert.ok(t2.events.some(e => e.type === 'mouse.move' && e.x === 9),
       'a new trial must capture even though an earlier trial hit the cap');
   });
 
-  it('DROPS an oversized initial DOM snapshot at assignment (not just on the next event)', () => {
+  it('DROPS an oversized keyframe at assignment (not just on the next event)', () => {
     globalThis.window = { innerWidth: 800, innerHeight: 600, devicePixelRatio: 1 };
-    // Cap 5 chars → any real snapshot is oversized and must be dropped.
+    // Cap 5 chars → any real keyframe is oversized and must be dropped.
     const rec = createRecorder({ participantId: 'P', tier: 'dom', maxCharsPerTrial: 5 });
     const body = {
       nodeType: 1, tagName: 'DIV', attributes: [],
       childNodes: [{ nodeType: 3, textContent: 'hello world this is a long snapshot', childNodes: [] }],
     };
     const doc = { body, querySelector: () => null, styleSheets: [] };
-    attachDomCapture(rec, { doc, win: {}, now: () => 0, MutationObserver: null });
     rec.startSession();
-    rec.startTrial({ trialId: 't1' }); // fires the snapshot hook — no event needed
+    attachDomCapture(rec, { doc, win: {}, now: () => 0, MutationObserver: null });
+    rec.startTrial({ trialId: 't1' }); // fires the keyframe hook — no event needed
     const st = rec.getState();
-    assert.equal(st.trials[0].initialDom, '', 'oversized snapshot must be dropped, not retained');
+    assert.equal(st.trials[0].initialDom, null, 'oversized keyframe must be dropped, not retained');
     assert.ok(st.captureFailures.some(f => f.channel === 'dom_snapshot'),
       'a dom_snapshot captureFailure records the drop');
   });
@@ -221,7 +247,12 @@ describe('F7 — buildViewerModel must sort events by time', () => {
 
 describe('F9 — autoSave must never throw, even on an unserializable recording', () => {
   it('returns saved_to:failed on a circular reference instead of throwing', async () => {
-    const circular = { metadata: { participant_id: 'P', start_time: '2026-01-01T00:00:00Z', tier: 'trace' }, ch_extensions: {} };
+    const circular = {
+      schema_version: 2, participant_id: 'P',
+      recording_started_at: '2026-01-01T00:00:00Z',
+      truncated: false, segments: [],
+      extensions: { 'cyborg-hunter': { tier: 'trace', capture_failures: [] } },
+    };
     circular.self = circular; // circular → JSON.stringify throws
     let result;
     await assert.doesNotReject(async () => {

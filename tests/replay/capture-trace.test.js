@@ -749,6 +749,25 @@ describe('exclusion floor (spec §4) — the guard-bait shape', () => {
     }, 'a click on the element itself is unchanged');
   });
 
+  it('drops the anchor entirely when an excluded target has nothing held to clamp to', () => {
+    // The clamp needs a node the file holds. On trace tier (no DOM captured at
+    // all), and for an excluded element outside the observed root, there is
+    // none — and without this the event would ship the tag and rectangle of
+    // exactly the subtree spec §4 withholds, with `node: null` and no file to
+    // contradict it. Alignment fields are optional (§6), so the conforming
+    // answer is to say nothing.
+    const { page: p } = baitPage();
+    const inner = p.getElementById('inner');
+    inner.getBoundingClientRect = () => ({ left: 15, top: 25, width: 80, height: 20 });
+
+    const { doc, events } = harness({});   // no span: nothing is addressable
+    doc.fire('click', { clientX: 16, clientY: 26, button: 0, target: inner });
+
+    assert.strictEqual(events()[0].anchor, undefined);
+    assert.strictEqual(events()[0].target, null);
+    assert.ok(events()[0].camera, 'the camera block is unaffected — it describes the window');
+  });
+
   it('withholds the clipboard length too, in both modes', () => {
     // The module's own floor: not a typed value, not its length. input.value
     // refuses `value_len` for the same element, so a clipboard `len` would be
@@ -970,16 +989,17 @@ describe('viewport changes are session-level, not events (spec §2)', () => {
     assert.strictEqual(rec.getState().viewportChanges[0].t, 1000);
   });
 
-  it('drains both channels in timestamp order when they are pending together', () => {
+  it('collapses a same-flush resize+pinch pair to one entry at the LATER time', () => {
     // Both channels write into ONE array whose entries keep their original
     // timestamps, and spec §7 requires it sorted (validator.js:107). A fixed
     // resize-then-vv flush order wrote [1001, 1000]; mobile keyboard-open and
     // URL-bar transitions fire the two together, so this is an ordinary path.
     //
-    // Both emits read the state live, so the pair is field-identical and the
-    // dedup below collapses it — which means the flush ORDER now decides which
-    // timestamp survives. The earlier one is the right answer: it is when that
-    // geometry was first observable.
+    // Both emits read the state LIVE, so a pair pending in one flush is
+    // field-identical and describes one composite geometry — which becomes
+    // observable when the SECOND notification arrives. Stamping it with the
+    // first asserts the new width existed before it did, and a player
+    // classifying zoom or pinch would misattribute every event in between.
     const { rec, doc, win, env } = harness({});
     const vv = { scale: 1, offsetLeft: 0, offsetTop: 0, addEventListener() {} };
     const vvHandlers = [];
@@ -998,8 +1018,33 @@ describe('viewport changes are session-level, not events (spec §2)', () => {
     const ts = rec.getState().viewportChanges.map(c => c.t);
     assert.deepStrictEqual(ts, [...ts].sort((a, b) => a - b),
       'viewport_changes must be time-sorted (spec §7): got ' + JSON.stringify(ts));
-    assert.deepStrictEqual(ts, [1000],
-      'the vv change is pending first, so it is emitted first');
+    assert.deepStrictEqual(ts, [1001],
+      'one entry for one geometry, stamped when it became observable');
+    assert.deepStrictEqual(rec.getState().viewportChanges[0].w, 640,
+      'and it carries the state both channels were reporting');
+  });
+
+  it('…in the other arrival order too (the LATER time wins, not one channel)', () => {
+    // The discriminating half. With a fixed emit order the surviving timestamp
+    // is always the first-emitted channel's, which happens to be right when
+    // that channel is also the later one. Reverse the arrivals and only the
+    // max-of-both rule still answers correctly.
+    const { rec, doc, win, env } = harness({});
+    const vv = { scale: 1, offsetLeft: 0, offsetTop: 0, addEventListener() {} };
+    const vvHandlers = [];
+    vv.addEventListener = (ev, fn) => vvHandlers.push([ev, fn]);
+    win.visualViewport = vv;
+    attachTraceCapture(rec, { ...env, win });
+
+    win.innerWidth = 640;
+    win.fire('resize', {});                              // resize at t=1000
+    env.advance(1);
+    vv.scale = 2;
+    vvHandlers.find(([ev]) => ev === 'scroll')[1]({});   // vv at t=1001
+    env.advance(1);
+    doc.fire('click', { clientX: 1, clientY: 1, button: 0 });  // flushes both
+
+    assert.deepStrictEqual(rec.getState().viewportChanges.map(c => c.t), [1001]);
   });
 
   it('drops a state identical to the one before it', () => {

@@ -1,413 +1,109 @@
 // src/replay/capture-dom.js
-// Tier-2 ("dom") capture: initial-DOM serialization, MutationObserver →
-// patch log, initial stylesheet capture, guard-friction pre-scramble hook.
+// Tier-2 ("dom") capture, wired to the v2 node-tree pipeline: keyframe
+// snapshots (snapshot.js), MutationObserver batches → `dom.*` patches
+// (mutations.js), the `initial_state` seed (initial-state.js), initial
+// stylesheet capture, and the guard-friction pre-scramble hook.
 //
-// The serializer is a hand-rolled tree walker (clean-room; no dependency on
-// outerHTML) so it can (a) strip/redact during the walk and (b) run against
-// duck-typed fixture trees in node tests.
+// This module owns no serialization logic of its own any more. It is the
+// WIRING: what the observed root is, when a keyframe is taken, which span the
+// ids come from, and how a batch reaches the recorder. Everything it used to
+// do by hand is now a shared, separately tested module — which is the point:
+// the keyframe and the patches that address it must agree about exclusion,
+// redaction and node identity, and the only way to guarantee that is for both
+// to run the same code.
 //
-// Node addressing: a path is the list of childNodes indices from the capture
-// root down to the node ([1,1] = root.childNodes[1].childNodes[1]). The
-// viewer resolves paths against its reconstructed tree; paths are relative
-// to the SNAPSHOT state at each point in the patch sequence, which holds as
-// long as patches are applied in order from the initial DOM.
+// What retired here at the v2 switchover (spec §14's CH migration list):
+//   - the HTML-STRING walker (`serializeDom`) and its iframe span placeholder,
+//     void-tag table and escaping. A keyframe is a DomNode tree (spec §4);
+//     iframes are recorded as the element itself with no children (§13).
+//   - the NONCE MARKER registry (`data-chn-*`). Integer node ids scoped to a
+//     keyframe span replaced it, so nothing has to be stamped into serialized
+//     markup and harvested back out by the viewer.
+//   - CHILD-INDEX PATHS (`nodePath`) and the `mutation` patch shape. Patches
+//     address nodes by id (§5.1).
+//   - INTRA-BATCH DEDUP and the characterData→childList fold. Both existed
+//     because a v1 childList patch re-serialized the target's whole resulting
+//     children; a `dom.add` carries only what was inserted. mutations.js's
+//     header records the reasoning, and its batch pre-scan is why the observer
+//     callback below hands over the COMPLETE records array untouched.
+//   - the DUPLICATED redaction predicates. redaction.js is the one definition
+//     (spec §8 makes redaction a property of the file, which is a claim only a
+//     single predicate can make checkable).
 
-var ELEMENT_NODE = 1;
-var TEXT_NODE = 3;
-
-// Elements never serialized: executable or replay-irrelevant. IFRAME is NOT
-// here — frames serialize as inert size-preserving placeholders (see
-// serializeNode) so the surrounding layout doesn't collapse in the viewer.
-var SKIP_TAGS = { SCRIPT: true, NOSCRIPT: true };
-
-/**
- * Serialization-stable node references. Child-index paths are not stable
- * across HTML reparsing (the parser drops comments, merges text nodes, and
- * inserts elements like <tbody>), so every serialized ELEMENT is stamped
- * with a marker attribute instead. The attribute name embeds a per-recording
- * nonce so page CSS written before the recording existed cannot target it
- * ([data-chn-*]{display:none} attacks) and pre-existing page attributes
- * cannot collide. Ids live in a WeakMap keyed by the LIVE node — the live
- * DOM is never mutated (stamping real attributes would echo through the
- * MutationObserver and interfere with the host page). The viewer harvests
- * markers into an out-of-band map and strips them before any measured layout.
- */
-export function createMarkerRegistry(nonce) {
-  var ids = new WeakMap();
-  var next = 1;
-  return {
-    attr: 'data-chn-' + nonce,
-    refFor: function (node) {
-      var n = ids.get(node);
-      if (n == null) { n = next++; ids.set(node, n); }
-      return n;
-    }
-  };
-}
-
-// Void elements per the HTML spec — serialized without a closing tag.
-var VOID_TAGS = {
-  AREA: true, BASE: true, BR: true, COL: true, EMBED: true, HR: true,
-  IMG: true, INPUT: true, LINK: true, META: true, SOURCE: true,
-  TRACK: true, WBR: true
-};
-
-// Valid attribute-name token; also refuses event-handler attributes
-// (on*) as defense-in-depth — the viewer sandbox+CSP already block inline
-// handlers, but the serialized artifact should not carry them at all.
-var ATTR_NAME_RE = /^[a-zA-Z_:][-a-zA-Z0-9_:.]*$/;
-function isSerializableAttr(name) {
-  return ATTR_NAME_RE.test(name) && !/^on/i.test(name);
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function isBait(node, opts) {
-  if (opts && opts.keepBait) return false;
-  if (!node || node.nodeType !== ELEMENT_NODE) return false;
-  if (node.id === 'ch-decoy') return true;
-  var attrs = node.attributes || [];
-  for (var i = 0; i < attrs.length; i++) {
-    if (attrs[i].name === 'data-ch-role') return true;
-    if (attrs[i].name === 'data-ch-decoy') return true;
-  }
-  return false;
-}
-
-function isPassword(node) {
-  return node.tagName === 'INPUT' &&
-    (node.type === 'password' || hasAttr(node, 'type', 'password'));
-}
-
-// True when the node should be redacted in the DOM capture: a password field
-// (always) or anything matching the configured redactSelector. Without this the
-// DOM path (initial snapshot, value attributes, characterData/childList patches)
-// leaked the content of fields the researcher explicitly marked for redaction,
-// silently defeating redactSelector for everything except the RAF-coalesced
-// input-value events.
-function isRedacted(node, opts) {
-  if (!node) return false;
-  if (isPassword(node)) return true;
-  var sel = opts && opts.redactSelector;
-  if (!sel || typeof node.matches !== 'function') return false;
-  try { return node.matches(sel); } catch (e) { return false; }
-}
-
-// True when the node is inside (or is) a redacted element. Walks ancestors so
-// that mutation targets which are TEXT NODES (characterData records, added text
-// nodes) — which have no matches() of their own — are correctly redacted when
-// their containing element is. Without the walk, characterData on a redacted
-// contenteditable would leak the typed text through mutation patches.
-function isInRedactedSubtree(node, opts) {
-  var cur = node;
-  while (cur) {
-    if (cur.nodeType === ELEMENT_NODE && isRedacted(cur, opts)) return true;
-    cur = cur.parentNode;
-  }
-  return false;
-}
-
-function hasAttr(node, name, value) {
-  var attrs = node.attributes || [];
-  for (var i = 0; i < attrs.length; i++) {
-    if (attrs[i].name === name) return value == null || attrs[i].value === value;
-  }
-  return false;
-}
+import { serializeTree } from './snapshot.js';
+import { mapMutations, MUTATION_OBSERVER_INIT } from './mutations.js';
+import { buildInitialState } from './initial-state.js';
+import { createSpan } from './span.js';
 
 /**
- * Serializes a DOM subtree to an HTML string.
- * - strips scripts/iframes and (by default) honeypot/decoy nodes
- * - prefers the `src` PROPERTY for images (always absolute) over the
- *   attribute (may be relative and unresolvable inside the viewer's srcdoc)
- * - redacts password input values (marker attribute, no content)
- */
-export function serializeDom(root, opts) {
-  opts = opts || {};
-  var out = [];
-  serializeNode(root, opts, out);
-  return out.join('');
-}
-
-// Iframe → inert placeholder. Child documents are never captured (their
-// events don't bubble to this document and the srcdoc CSP blocks frames
-// anyway), but dropping the element entirely would collapse the surrounding
-// layout and silently shift every element below it. The placeholder keeps
-// the recorded footprint; the viewer shows a per-trial "iframe content not
-// captured" warning when one is present.
-// Current footprint of an iframe, for the placeholder and for footprint
-// re-sync patches when the iframe's attributes later mutate.
-function iframeFootprint(node) {
-  var w = null, h = null;
-  try {
-    if (typeof node.getBoundingClientRect === 'function') {
-      var r = node.getBoundingClientRect();
-      // A 0×0 rect is a VALID footprint (hidden iframe) — the placeholder
-      // must reproduce it, not invent a default-size box that shifts layout.
-      if (r) { w = Math.round(r.width || 0); h = Math.round(r.height || 0); }
-    }
-  } catch (e) { /* fall through to attributes */ }
-  if (w == null) {
-    w = parseInt(hasAttr(node, 'width') ? getAttrValue(node, 'width') : '', 10);
-    h = parseInt(hasAttr(node, 'height') ? getAttrValue(node, 'height') : '', 10);
-    if (!(w > 0)) w = 300;   // spec default iframe size
-    if (!(h > 0)) h = 150;
-  }
-  return { w: w, h: h };
-}
-
-// Layout-affecting computed properties copied onto the placeholder so an
-// absolutely-positioned / block / floated / margined iframe doesn't collapse
-// into a plain in-flow inline box and shift everything around it.
-var IFRAME_LAYOUT_PROPS = ['position', 'top', 'right', 'bottom', 'left',
-  'margin', 'float', 'vertical-align', 'z-index'];
-
-function iframeFootprintStyle(node) {
-  var f = iframeFootprint(node);
-  var css = '';
-  var display = 'inline-block';
-  try {
-    var view = node.ownerDocument && node.ownerDocument.defaultView;
-    if (view && typeof view.getComputedStyle === 'function') {
-      var cs = view.getComputedStyle(node);
-      // display: keep the computed value except 'inline' — a span needs
-      // inline-block (or stronger) to honor explicit width/height.
-      if (cs.display && cs.display !== 'inline') display = cs.display;
-      for (var i = 0; i < IFRAME_LAYOUT_PROPS.length; i++) {
-        var prop = IFRAME_LAYOUT_PROPS[i];
-        var v = cs.getPropertyValue(prop);
-        if (v && v !== 'auto' && v !== 'none' && v !== 'normal' &&
-            v !== 'baseline' && v !== '0px') {
-          css += prop + ':' + v + ';';
-        }
-      }
-    }
-  } catch (e) { /* fall back to the plain inline-block footprint */ }
-  return 'display:' + display + ';' + css +
-    'width:' + f.w + 'px;height:' + f.h + 'px';
-}
-
-function serializeIframePlaceholder(node, opts, out) {
-  // <span>, not <div>: iframes are phrasing content, so the placeholder must
-  // be too — a div inside <p> would trigger parser reparenting (implicit </p>)
-  // and shift the reconstructed layout the placeholder exists to preserve.
-  out.push('<span data-ch-iframe=""');
-  if (opts.markers) {
-    out.push(' ' + opts.markers.attr + '="' + opts.markers.refFor(node) + '"');
-  }
-  out.push(' style="' + iframeFootprintStyle(node) + '"></span>');
-}
-
-function getAttrValue(node, name) {
-  var attrs = node.attributes || [];
-  for (var i = 0; i < attrs.length; i++) {
-    if (attrs[i].name === name) return attrs[i].value;
-  }
-  return '';
-}
-
-function serializeNode(node, opts, out) {
-  if (!node) return;
-  if (node.nodeType === TEXT_NODE) {
-    out.push(escapeHtml(node.textContent || ''));
-    return;
-  }
-  if (node.nodeType !== ELEMENT_NODE) return;   // comments, PIs: irrelevant
-  var tag = node.tagName;
-  if (SKIP_TAGS[tag]) return;
-  if (isBait(node, opts)) return;
-  if (tag === 'IFRAME') { serializeIframePlaceholder(node, opts, out); return; }
-
-  var lower = tag.toLowerCase();
-  out.push('<' + lower);
-  if (opts.markers) {
-    out.push(' ' + opts.markers.attr + '="' + opts.markers.refFor(node) + '"');
-  }
-  // Shadow roots are not serializable from the outside: the host's box
-  // survives but its rendered content does not. Mark it so the viewer can
-  // refuse to "verify" interactions against a hollow reconstruction.
-  if (node.shadowRoot) out.push(' data-ch-shadow=""');
-
-  var redactValue = isRedacted(node, opts);
-  var srcOverride = (tag === 'IMG' && node.src) ? node.src : null;
-  var wroteSrc = false;
-
-  var attrs = node.attributes || [];
-  for (var i = 0; i < attrs.length; i++) {
-    var name = attrs[i].name;
-    var value = attrs[i].value;
-    if (!isSerializableAttr(name)) continue;
-    if (name === 'value' && redactValue) continue;
-    if (name === 'src' && srcOverride) { value = srcOverride; wroteSrc = true; }
-    out.push(' ' + name + '="' + escapeHtml(value) + '"');
-  }
-  if (srcOverride && !wroteSrc) out.push(' src="' + escapeHtml(srcOverride) + '"');
-  if (redactValue) out.push(' data-ch-redacted="true"');
-  out.push('>');
-
-  if (!VOID_TAGS[tag]) {
-    // A redacted element's text children (e.g. contenteditable content) are
-    // withheld too — otherwise typed text under a redactSelector match would
-    // leak straight into the snapshot despite the marker on the element.
-    if (!redactValue) {
-      var kids = node.childNodes || [];
-      for (var k = 0; k < kids.length; k++) serializeNode(kids[k], opts, out);
-    }
-    out.push('</' + lower + '>');
-  }
-}
-
-/**
- * Child-index path from root to node; [] for the root itself; null if the
- * node is not under the root (e.g. extension-injected DOM outside the
- * experiment container).
- */
-export function nodePath(node, root) {
-  var path = [];
-  var cur = node;
-  while (cur && cur !== root) {
-    var parent = cur.parentNode;
-    if (!parent) return null;
-    var idx = indexOfChild(parent, cur);
-    if (idx === -1) return null;
-    path.unshift(idx);
-    cur = parent;
-  }
-  return cur === root ? path : null;
-}
-
-function indexOfChild(parent, child) {
-  var kids = parent.childNodes || [];
-  for (var i = 0; i < kids.length; i++) if (kids[i] === child) return i;
-  return -1;
-}
-
-/**
- * Translates one MutationRecord into a JSON patch entry, or null when the
- * mutation should not be recorded (bait subtree, node outside root).
- */
-export function mutationToPatch(record, root, opts) {
-  var target = record.target;
-  // Walk up: mutations inside bait subtrees are never recorded.
-  var cur = target;
-  while (cur) {
-    if (isBait(cur, opts)) return null;
-    cur = cur.parentNode;
-  }
-  // With a marker registry, characterData mutations are recorded as the
-  // PARENT's resulting-children snapshot: text nodes are not parser-stable
-  // references (adjacent text nodes merge on reparse; empty ones vanish), so
-  // a text-node address can resolve to the wrong node in the reconstruction.
-  // The parent element IS stable via its marker, and a children snapshot is
-  // idempotent like every other childList patch.
-  if (record.type === 'characterData' && opts.markers) {
-    var parent = target.parentNode;
-    if (!parent || nodePath(parent, root) === null) return null;
-    record = { type: 'childList', target: parent };
-    target = parent;
-  }
-
-  var path = nodePath(target, root);
-  if (path === null) return null;
-
-  // Marker reference: the parser-stable address the viewer resolves first;
-  // the child-index path stays as a diagnostic fallback. `tag` is the tag
-  // EXPECTED IN THE RECONSTRUCTION (that's what resolution validates) — for
-  // iframes that is the placeholder span, not the source tag.
-  var ref = opts.markers && target.nodeType === ELEMENT_NODE
-    ? { n: opts.markers.refFor(target),
-        tag: target.tagName === 'IFRAME' ? 'span' : target.tagName.toLowerCase() }
-    : null;
-
-  if (record.type === 'childList') {
-    // State-snapshot patch: removed nodes are already detached (they have
-    // no address), so a faithful add/remove log is impossible. Serializing
-    // the target's RESULTING children makes application an idempotent
-    // innerHTML assignment — and backward seeks just rebuild from the
-    // initial DOM and re-apply patches in order.
-    //
-    // A childList mutation on (or inside) a redacted element emits empty
-    // children: serializeChildren walks the target's children directly, so it
-    // would otherwise leak text/inputs that serializeNode hides when it reaches
-    // the redacted element itself.
-    return Object.assign({
-      op: 'childList',
-      path: path,
-      html: isInRedactedSubtree(target, opts) ? '' : serializeChildren(target, opts)
-    }, ref || {});
-  }
-  if (record.type === 'attributes') {
-    // The reconstruction holds a placeholder SPAN where the iframe was, and
-    // width/height ATTRIBUTES don't size a span — so any attribute change on
-    // an iframe is translated into a fresh footprint style patch instead of
-    // forwarding an attribute the placeholder can't honor.
-    if (target.tagName === 'IFRAME') {
-      return Object.assign(
-        { op: 'attributes', path: path, name: 'style', value: iframeFootprintStyle(target) },
-        ref || {});
-    }
-    var name = record.attributeName;
-    if (!isSerializableAttr(name)) return null;
-    var value = typeof target.getAttribute === 'function'
-      ? target.getAttribute(name) : null;
-    // Never leak the value attribute of a redacted field (password or
-    // redactSelector match, including via a redacted ancestor).
-    if (name === 'value' && isInRedactedSubtree(target, opts)) value = null;
-    return Object.assign({ op: 'attributes', path: path, name: name, value: value }, ref || {});
-  }
-  if (record.type === 'characterData') {
-    // characterData targets are TEXT NODES, so redaction must consult the
-    // containing element(s): typing into a redacted contenteditable must not
-    // carry the typed text through the patch.
-    var text = isInRedactedSubtree(target, opts) ? '' : (target.textContent || '');
-    return { op: 'characterData', path: path, value: text };
-  }
-  return null;
-}
-
-// Serializes only the CHILDREN of a node (innerHTML semantics) — used by
-// the childList state-snapshot patch.
-function serializeChildren(node, opts) {
-  var out = [];
-  var kids = node.childNodes || [];
-  for (var i = 0; i < kids.length; i++) serializeNode(kids[i], opts, out);
-  return out.join('');
-}
-
-/**
- * Initial stylesheet capture: css text where readable, href fallback for
- * cross-origin sheets (viewer inlines css; hrefs render as absolute links).
+ * Initial stylesheet capture (spec §2 `StylesheetSnapshot`).
+ *
+ * Ids are the array position plus one, assigned here because the format wants
+ * them: `stylesheet_events` addresses sheets by id, and even with that stream
+ * empty (CH captures no CSSOM mutations — spec §13's known limit) a consumer
+ * reads the two arrays as one addressable set.
+ *
+ * `kind` follows the sheet's origin rather than its readability: a <link>
+ * stays a link sheet even when its rules are readable same-origin, and its
+ * `css` is filled in when they are. A cross-origin sheet throws on `cssRules`,
+ * so only the (absolute) href survives — the viewer can link it, nothing can
+ * inline it.
  */
 export function captureStylesheets(doc) {
   var out = [];
   var sheets = (doc && doc.styleSheets) || [];
   for (var i = 0; i < sheets.length; i++) {
     var sheet = sheets[i];
+    var href = sheet.href || null;
+    var media = sheet.media && sheet.media.mediaText ? sheet.media.mediaText : null;
+    var css = null;
     try {
       var rules = sheet.cssRules;
-      var css = [];
-      for (var r = 0; r < rules.length; r++) css.push(rules[r].cssText);
-      out.push({ css: css.join('\n') });
+      var text = [];
+      for (var r = 0; r < rules.length; r++) text.push(rules[r].cssText);
+      css = text.join('\n');
     } catch (e) {
-      // Cross-origin sheet: record the (absolute) href so the viewer can
-      // at least link it; content is unreadable from this origin.
-      out.push({ href: sheet.href || null });
+      css = null;                      // cross-origin: unreadable from here
     }
+    out.push(href
+      ? { id: i + 1, kind: 'link', href: href, css: css, media: media }
+      : { id: i + 1, kind: 'inline', css: css == null ? '' : css, media: media });
   }
   return out;
 }
 
+// How many characters a keyframe payload costs, as the wire would carry it.
+// Exact rather than estimated: the trial's size budget is a bound on the
+// payload, and the payload is a JSON tree, so its JSON length is the thing
+// being bounded. Measured ONCE per keyframe and used twice — to decide whether
+// the snapshot itself is over budget, and to seed the recorder's per-trial
+// character count, which cannot see anything stored on the trial.
+function payloadChars(value) {
+  if (value == null) return 0;
+  try { return JSON.stringify(value).length; } catch (e) { return 0; }
+}
+
 /**
  * Attaches tier-2 capture to a recorder:
- *  - snapshots initial DOM + stylesheets at session start and at each
- *    startTrial (recorder calls snapshotTrial via the returned hooks)
- *  - MutationObserver → 'mutation' events
+ *  - a KEYFRAME at each trial start: the DomNode tree plus its `initial_state`
+ *    seed, both taken on the shared capture span
+ *  - MutationObserver batches → `dom.*` patch events
+ *  - initial stylesheet capture at attach
  *  - guard-friction cooperation: onViolation('start') fires synchronously
  *    BEFORE obfuscateContent() (pinned by contract test), so the clean-DOM
  *    snapshot taken inside the callback is genuinely pre-scramble.
+ *
+ * @param {object} rec  the recorder
+ * @param {object} env  {doc, win, now, MutationObserver} for testing, plus the
+ *   two capture-wide objects the assembly (index.js) threads to BOTH capture
+ *   modules:
+ *     `span`     the capture span (span.js) — node ids and the file's own
+ *                record of what it contains. The SAME object capture-trace
+ *                gets, because an event's `target` and a patch's `node` are
+ *                the same numbering or neither means anything.
+ *     `scrolled` a function returning capture-trace's set of elements that
+ *                have scrolled, which the keyframe seed enumerates (spec §3
+ *                `element_scroll`). Only the scroll listener knows this.
  */
 export function attachDomCapture(rec, env) {
   env = env || {};
@@ -416,17 +112,33 @@ export function attachDomCapture(rec, env) {
   var now = env.now || function () { return performance.now(); };
   var MutationObserverImpl = env.MutationObserver ||
     (typeof MutationObserver !== 'undefined' ? MutationObserver : null);
-  // Per-recording marker nonce (see createMarkerRegistry). Registered on the
-  // recorder so capture-trace can reference the same registry for interaction
-  // anchors and the serializer can emit the attribute name on the wire.
-  var markers = createMarkerRegistry(
-    (Math.random().toString(16).slice(2, 10) || 'fallback0'));
-  if (typeof rec.setMarkers === 'function') {
-    rec.setMarkers(markers);
-    rec.setMarkerAttr(markers.attr);
-  }
-  var opts = { keepBait: rec.config.keepBait, redactSelector: rec.config.redactSelector,
-               markers: markers };
+  // A lone attachment (a test wiring this module by itself) gets its own span
+  // rather than an ambient shared one: a module-level default is what lets a
+  // stray serialization write into a live recording's model (span.js).
+  var span = env.span || createSpan();
+  var scrolled = typeof env.scrolled === 'function'
+    ? env.scrolled : function () { return null; };
+  // One options bag for every consumer — the snapshot walk, the mutation
+  // mapper, the seed and the guard snapshot. Exclusion and redaction cannot be
+  // answered one way in the keyframe and another way in a patch if there is
+  // only one answer to hand around.
+  var opts = {
+    keepBait: rec.config.keepBait,
+    redactSelector: rec.config.redactSelector,
+    taint: env.taint,
+  };
+
+  // THE OBSERVED ROOT, resolved ONCE.
+  //
+  // v1 re-resolved it at every snapshot and every batch, which let the keyframe
+  // and the patches addressing it describe two different elements if the page
+  // replaced the container — and the observer, attached to whichever element
+  // existed first, would have been watching neither. The recording's root is by
+  // definition the element the observer watches, so it is resolved here and
+  // held. (Task 4's residual: the seed's "did anything get walked" guard
+  // catches a never-walked span, not a walk of a DIFFERENT root. One root
+  // identity is what makes that unreachable rather than merely unlikely.)
+  var root = resolveRoot();
 
   function resolveRoot() {
     var r = rec.config.root;
@@ -436,81 +148,100 @@ export function attachDomCapture(rec, env) {
     return r || doc.body;
   }
 
+  // Spec §2 types `observed_root` as a SELECTOR, so an element handed over
+  // directly is reported by its id when it has one and as null otherwise —
+  // null meaning "the document body", which is also the default.
+  function rootSelector() {
+    var r = rec.config.root;
+    if (typeof r === 'string' && r) return r;
+    if (root && root.id) return '#' + root.id;
+    return null;
+  }
+
+  rec.setObservedRoot(rootSelector());
+
   try {
     rec.setStylesheets(captureStylesheets(doc));
   } catch (e) { rec.captureFailure('stylesheets', e); }
 
-  // Snapshot the initial DOM at the start of every trial (explicit or
-  // implicit) — this is the frame the viewer reconstructs and patches.
+  // ── Keyframes (spec §3) ──
+  // A keyframe at the start of every trial, which is v1's cadence and the
+  // spec's advice for wiping hosts. Task 8 makes it size-aware for
+  // persistent-DOM hosts; until then every segment is a keyframe and no
+  // segment is a continuation, which is a legal recording either way.
   //
-  // The initial snapshot is the single largest capture source and is stored on
-  // the trial (not pushed as an event), so the recorder's per-event size cap
-  // can't see it. Enforce the cap HERE at assignment: a snapshot longer than
-  // maxCharsPerTrial is dropped (with a captureFailure) rather than retained,
-  // so a giant DOM can't bypass the resource/payload limit. A dropped snapshot
-  // makes that trial's replay show "no DOM captured" rather than blowing up.
+  // The order is a contract, not a preference: reset, then walk, then seed.
+  // `span.reset()` restarts ids at 1 and empties the delivered picture in one
+  // call (span.js), the walk is the span's first allocation so the tree numbers
+  // 1..N, and the seed reads the ids that walk assigned. Taken in any other
+  // order the seed names nodes the file does not contain.
   rec.onTrialStart(function (trial) {
     try {
-      var html = serializeDom(resolveRoot(), opts);
+      span.reset();
+      var tree = serializeTree(root, span, opts);
+      var seed = buildInitialState(root, span, {
+        win: win,
+        scrolled: scrolled(),
+        keepBait: opts.keepBait,
+        redactSelector: opts.redactSelector,
+        taint: opts.taint,
+      });
+      var chars = payloadChars(tree) + payloadChars(seed);
       var cap = rec.config.maxCharsPerTrial;
-      if (cap != null && html.length > cap) {
+      if (cap != null && chars > cap) {
+        // The keyframe is the single largest capture source and is stored on
+        // the trial rather than pushed as an event, so the recorder's cap
+        // cannot refuse it — it is refused HERE, or a giant DOM bypasses the
+        // payload limit entirely. The trial then replays as "no DOM captured".
         rec.captureFailure('dom_snapshot', new Error(
-          'initial DOM snapshot length ' + html.length + ' exceeds maxCharsPerTrial ' +
+          'initial DOM keyframe of ' + chars + ' chars exceeds maxCharsPerTrial ' +
           cap + '; dropped to bound payload size'));
-        trial.initialDom = '';
+        trial.initialDom = null;
+        trial.initialState = null;
+        // The walk told the span the player holds this tree. It does not: the
+        // keyframe is not in the file. Resetting again empties that picture, so
+        // the patches that follow address nothing and are dropped rather than
+        // naming ids no player ever received.
+        span.reset();
       } else {
-        trial.initialDom = html;
+        trial.initialDom = tree;
+        trial.initialState = seed;
+        rec.noteSnapshotChars(trial, chars);
       }
     } catch (e) {
       rec.captureFailure('dom_snapshot', e);
-      trial.initialDom = '';
+      trial.initialDom = null;
+      trial.initialState = null;
+      span.reset();
     }
   });
 
+  // ── Mutations (spec §5.1) ──
   if (MutationObserverImpl) {
     var observer = new MutationObserverImpl(function (records) {
       try {
-        var root = resolveRoot();
-        // Intra-batch dedup: ONE childList patch per TARGET NODE, emitted at
-        // the target's FIRST record position. A single task appending N
-        // children to one container delivers N childList records, and each
-        // patch serializes the target's FULL resulting children — O(N²)
-        // work on the participant's machine without dedup. Serialization
-        // happens at callback time (final state), so every record for a
-        // target would carry identical html — only ORDER matters, and
-        // first-occurrence order guarantees a node created in-batch has its
-        // ancestor's creating patch emitted BEFORE any patch targeting the
-        // new node (observer records are chronological). Keyed by node
-        // IDENTITY, not path (path-keyed dedup was refuted: same-batch
-        // index aliasing). attributes/characterData records never skipped.
-        // Dedup key = the EFFECTIVE childList target: in marker mode,
-        // characterData records become parent-level childList snapshots
-        // inside mutationToPatch, so N text rewrites on one node are the
-        // same O(N²) storm as N appends and must dedup on the PARENT.
-        var seenChildListTargets = new Set();
-        var effectiveChildListTarget = function (record) {
-          if (record.type === 'childList') return record.target;
-          if (record.type === 'characterData' && opts.markers &&
-              record.target && record.target.parentNode) {
-            return record.target.parentNode;
-          }
-          return null;
-        };
-        for (var i = 0; i < records.length; i++) {
-          var key = effectiveChildListTarget(records[i]);
-          if (key) {
-            if (seenChildListTargets.has(key)) continue;
-            seenChildListTargets.add(key);
-          }
-          var patch = mutationToPatch(records[i], root, opts);
-          if (patch) rec.pushEvent('mutation', patch, now());
+        // The COMPLETE batch, in the observer's own order. mapMutations
+        // pre-scans it (which removals and insertions are still to come, what
+        // each attribute held before the batch) and that pre-scan is what makes
+        // the mapping batch-coherent — filtering or reordering records here
+        // would silently break it.
+        var events = mapMutations(records, {
+          root: root,
+          span: span,
+          // One callback = one `t` (spec §7): the batch is one task's worth of
+          // DOM change, and the observer reports it with no per-record times.
+          t: now(),
+          keepBait: opts.keepBait,
+          redactSelector: opts.redactSelector,
+          taint: opts.taint,
+        });
+        for (var i = 0; i < events.length; i++) {
+          rec.pushRecord(events[i], events[i].t);
         }
       } catch (e) { rec.captureFailure('mutations', e); }
     });
     try {
-      observer.observe(resolveRoot(), {
-        childList: true, attributes: true, characterData: true, subtree: true
-      });
+      observer.observe(root, MUTATION_OBSERVER_INIT);
       // Registered through the listener registry with the observer marker so
       // recorder.destroy() disconnects it (same convention as core monitor).
       rec.addListener(
@@ -519,9 +250,35 @@ export function attachDomCapture(rec, env) {
     } catch (e) { rec.captureFailure('mutations', e); }
   }
 
-  // Guard-friction cooperation: snapshot the clean DOM synchronously when a
-  // violation starts (before friction scrambles content), so the analyst can
-  // see exactly what the participant saw at the moment of violation.
+  // ── Guard-friction cooperation ──
+  // Snapshot the clean DOM synchronously when a violation starts (before
+  // friction scrambles content), so the analyst can see exactly what the
+  // participant saw at the moment of violation.
+  //
+  // The snapshot is taken on a THROWAWAY SPAN. It is not part of the recording
+  // the player replays — it is a CH diagnostic in the vendor namespace — so
+  // numbering it into the live span would tell the live recording that the
+  // player holds nodes it was never sent, and suppress the next patch for each
+  // of them (span.js, D1). Its ids are internal to itself and start at 1; a
+  // reader compares it to the recording by structure, not by id.
+  //
+  // The violation itself is a session-level vendor entry, not an event: spec
+  // §5.8 admits no vendor event types in the stream, and there is no standard
+  // event for "the participant left fullscreen".
+  function guardSnapshot() {
+    var tree = serializeTree(root, createSpan(), opts);
+    var cap = rec.config.maxCharsPerTrial;
+    // Bounded by the same budget a keyframe is: this is a whole second copy of
+    // the DOM, and unlike a keyframe it rides a session-level array that no
+    // per-trial cap can see.
+    if (cap != null && payloadChars(tree) > cap) {
+      rec.captureFailure('guard_violation', new Error(
+        'pre-scramble DOM snapshot exceeds maxCharsPerTrial ' + cap + '; withheld'));
+      return null;
+    }
+    return tree;
+  }
+
   if (win.GuardFriction && typeof win.GuardFriction.onViolation === 'function') {
     try {
       // Late-subscription hardening: if a violation is ALREADY in progress
@@ -532,14 +289,13 @@ export function attachDomCapture(rec, env) {
       // misses an ongoing violation.
       // Local invariant guard: assembly (index.js) only attaches captures
       // after startSession(), but make that self-evident here — synthesize
-      // only when the recorder is actually recording, so no wiring change
-      // can ever route this through a pre-session pushEvent.
+      // only when the recorder is actually recording.
       var recState = rec.getState().state;
       if ((recState === 'session' || recState === 'trial') &&
           typeof win.GuardFriction.getCurrentState === 'function') {
         var gs = win.GuardFriction.getCurrentState();
         if (gs && gs.in_violation) {
-          rec.pushEvent('ch:guard_violation', {
+          rec.pushGuardViolation({
             reason: gs.current_reason || 'unknown',
             phase: 'start',
             synthesized_at_subscribe: true,
@@ -548,20 +304,20 @@ export function attachDomCapture(rec, env) {
             // whatever the DOM looks like right now, and its name must not
             // overclaim (an analyst could otherwise read scrambled content
             // as what the participant "really saw" pre-violation).
-            dom_at_subscribe: serializeDom(resolveRoot(), opts)
+            dom_at_subscribe: guardSnapshot()
           }, now());
         }
       }
       win.GuardFriction.onViolation(function (violation) {
         try {
           if (violation && violation.phase === 'start') {
-            rec.pushEvent('ch:guard_violation', {
+            rec.pushGuardViolation({
               reason: violation.reason,
               phase: 'start',
-              pre_scramble_dom: serializeDom(resolveRoot(), opts)
+              pre_scramble_dom: guardSnapshot()
             }, now());
           } else if (violation && violation.phase) {
-            rec.pushEvent('ch:guard_violation', {
+            rec.pushGuardViolation({
               reason: violation.reason, phase: violation.phase,
               duration_ms: violation.duration != null ? violation.duration : null
             }, now());

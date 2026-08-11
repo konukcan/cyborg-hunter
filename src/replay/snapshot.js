@@ -1,11 +1,10 @@
 // src/replay/snapshot.js
 // DomNode snapshot serializer for the v2 recording format (spec §4).
 //
-// Replaces the v1 HTML-string walker (capture-dom.js `serializeDom`) as the
-// keyframe producer: a keyframe is now a tree of `{id, kind, ...}` objects,
-// and every node carries the integer id that later `dom.*` patches address it
-// by. The string walker stays live until Tasks 3/5 retire its remaining
-// callers; nothing here imports it.
+// Replaced the v1 HTML-string walker (capture-dom.js `serializeDom`) as the
+// keyframe producer: a keyframe is a tree of `{id, kind, ...}` objects, and
+// every node carries the integer id that later `dom.*` patches address it by.
+// The string walker is gone; capture-dom.js calls this at every trial start.
 //
 // Three families of node never reach the file, and all three are deliberate:
 //   - script/noscript: skipped outright, no node and no placeholder. The

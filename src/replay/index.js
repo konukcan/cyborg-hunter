@@ -15,6 +15,7 @@
 import { createRecorder } from './recorder.js';
 import { attachTraceCapture } from './capture-trace.js';
 import { attachDomCapture } from './capture-dom.js';
+import { createSpan } from './span.js';
 import { serialize } from './serializer.js';
 import {
   replayFilename, buildReplayMeta, autoSave, compressRecording,
@@ -39,13 +40,37 @@ export function attach(userConfig) {
 
     startSession: function () {
       rec.startSession();
+      // ONE capture span per recording (span.js): the node ids the keyframe
+      // assigns and the record of what the file contains. Both capture modules
+      // get the SAME object, because an event's `target` and a patch's `node`
+      // are the same numbering or neither of them means anything. Created here,
+      // reset at each keyframe by the DOM capture.
+      var span = createSpan();
+      // The §8 redaction taint set is deliberately NOT threaded alongside it.
+      // Both capture modules accept one, and threading an explicit object to
+      // some consumers and not others is the failure this seam invites: the
+      // halves stop sharing, and a field moved out of a redacted container is
+      // re-exposed by whichever half was forgotten. Passing NONE puts every
+      // consumer — snapshot, mutations, initial-state, capture-trace — on
+      // redaction.js's single module-level set, which is the symmetric answer
+      // and the fail-closed one: a future consumer that forgets to thread
+      // still lands in the same place. Its cost is that two recorders on one
+      // page can over-redact each other's nodes, which is the safe direction,
+      // and is what redaction.js documents.
+      //
       // Capture modules attach after the session transition so nothing
-      // touches the DOM until the researcher opts in.
-      attachTraceCapture(rec);
+      // touches the DOM until the researcher opts in. Trace capture goes
+      // FIRST: its scrolled-element tracker is what the keyframe seed
+      // enumerates, and its trial-start hook (which prunes that set) must run
+      // before the keyframe hook that reads it.
+      var trace = attachTraceCapture(rec, { span: span });
       if (rec.config.tier === 'dom' || rec.config.tier === 'canvas') {
         // 'canvas' is accepted for forward compat but captures at dom tier
         // in v0.7 (canvas snapshots arrive with the v0.8 diff codec).
-        attachDomCapture(rec);
+        attachDomCapture(rec, {
+          span: span,
+          scrolled: trace.getScrolledElements,
+        });
       }
       return api;
     },

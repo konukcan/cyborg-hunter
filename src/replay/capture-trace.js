@@ -8,8 +8,8 @@
 //
 //   - **Dotted `type` names** (spec §5) replace v1's flat `kind`, and the
 //     payload under each name is that type's own shape, not a bag of fields
-//     merged onto an event. Hence `rec.pushRecord(record, t)` instead of
-//     `pushEvent(kind, payload, t)`.
+//     merged onto an event. Hence `rec.pushRecord(record, t)`, which took over
+//     from v1's flat `pushEvent(kind, payload, t)` merge.
 //   - **Client-frame coordinates only** (spec §7 makes the client frame
 //     normative). v1 carried both frames — page in `x`/`y`, client in
 //     `cx`/`cy` — because its viewer did the projection itself; page positions
@@ -272,6 +272,14 @@ export function attachTraceCapture(rec, env) {
   // compare them against anyway. A click ON the excluded element needs no
   // clamp, since §4 puts that element's own tag in the tree.
   //
+  // And when there is NOTHING to clamp to — an excluded target with no held
+  // ancestor at all, which is trace tier (no DOM captured) or an excluded
+  // element outside the observed root — the whole anchor is dropped. The clamp
+  // has no node to describe, the file has nothing to cross-check against, and
+  // the alternative is shipping the tag and rectangle of exactly the subtree
+  // §4 withholds. Alignment fields are optional (§6), so saying nothing is a
+  // conforming answer; saying it about excluded content is the only honest one.
+  //
   // `id` is OMITTED (not nulled) when identity is withheld — spec §6 says
   // omitted for redacted targets, §4 says events inside an excluded subtree
   // carry no anchor identity — so "no id attribute" (null) stays
@@ -279,6 +287,7 @@ export function attachTraceCapture(rec, env) {
   function anchorFor(facts) {
     var el = facts.el;
     if (!el || !el.tagName) return null;
+    if (facts.excluded && !facts.heldEl) return null;
     var described = (facts.excluded && facts.heldEl && facts.heldEl !== el)
       ? facts.heldEl : el;
     var a = { tag: (described.tagName || '').toLowerCase() };
@@ -336,6 +345,17 @@ export function attachTraceCapture(rec, env) {
         // element. A REDACTED one keeps its offsets: §8 withholds content, and
         // an offset is not content; §5.6 defines no redacted variant to put it
         // in; and the node reference is one spec §7 explicitly keeps.
+        //
+        // No composed-target check here, and not for lack of symmetry with the
+        // other channels: a `scroll` event is fired with neither `bubbles` nor
+        // `composed`, so a scroller inside a shadow root never reaches this
+        // window-level listener AT ALL. There is no retargeted scroll to
+        // handle — the case is a §13 capture limit (the offsets are simply not
+        // recorded), not a floor bypass. When the shadow HOST is itself the
+        // scroller, or a slotted light-DOM element is, the event fires on a
+        // document-tree node and the floors apply normally. The same fact is
+        // why `scrolledElements` can never hold a shadow-internal scroller, so
+        // the keyframe seed is consistent with this by construction.
         if (isExcludedTarget(target)) return;
         var node = nodeIdFor(target);
         if (node == null) return;   // spec §5.6 requires a node id
@@ -376,18 +396,32 @@ export function attachTraceCapture(rec, env) {
   }
 
   // Both viewport channels write into ONE array (spec §2) whose entries keep
-  // their original timestamps, so the order they are emitted in IS the order
-  // the file carries — and `viewport_changes` must be time-sorted (spec §7).
-  // A fixed resize-then-vv order wrote [1001, 1000] whenever a pinch preceded a
-  // resize in the same flush, which mobile keyboard-open and URL-bar
-  // transitions produce as an ordinary path. RAF coalescing makes the two
-  // channels' flush callbacks arrive in registration order rather than
-  // timestamp order, so BOTH callbacks drain through here.
+  // their original timestamps, and `viewport_changes` must be time-sorted
+  // (spec §7). RAF coalescing makes the two channels' flush callbacks arrive in
+  // registration order rather than timestamp order, so BOTH callbacks drain
+  // through here.
+  //
+  // When both are pending they describe ONE state: each emit reads the live
+  // geometry, so the pair is field-identical and only its timestamp is in
+  // question. It gets the LATER of the two. The composite geometry became
+  // observable when the second notification arrived; stamping it with the first
+  // asserts that the new width existed before it did, and for a player
+  // classifying zoom or pinch, backdating a state misattributes every event in
+  // between. (Mobile keyboard-open and URL-bar transitions fire the two
+  // together, so this is an ordinary path, not a corner.) The error either way
+  // is bounded by one frame — the reason this is a one-liner and not a redesign.
   function flushViewport() {
     resizeFlushQueued = false;
     vvFlushQueued = false;
-    var vvFirst = pendingVv && pendingResize && pendingVv.t < pendingResize.t;
-    if (vvFirst) { emitVv(); emitResize(); } else { emitResize(); emitVv(); }
+    if (pendingResize && pendingVv) {
+      var t = Math.max(pendingResize.t, pendingVv.t);
+      pendingResize = null;
+      pendingVv = null;
+      rec.pushViewportChange(viewportState(), t);
+      return;
+    }
+    emitResize();
+    emitVv();
   }
 
   // Synchronous camera flush — called at the top of every discrete-event
