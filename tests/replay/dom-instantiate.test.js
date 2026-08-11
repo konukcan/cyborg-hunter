@@ -625,12 +625,20 @@ describe('the module is concatenable into the report viewer as a plain script', 
     // `'use strict'` IIFE the client uses; ESM is strict by default, so a
     // sloppy-only construct would pass the module tests and break in the report.
     const api = new Function("'use strict';" + script +
-      '\nreturn { instantiateTree: instantiateTree, mountTree: mountTree };')();
+      '\nreturn { instantiateTree: instantiateTree, mountTree: mountTree,' +
+      ' applyPatches: applyPatches };')();
     const dom = fixture('canonical-core').segments[0].initial_dom;
     const doc = freshDoc();
     const { root, idMap } = api.instantiateTree(dom, doc);
     assert.deepEqual(readTree(root, invert(idMap)), expected(dom));
-    same(api.mountTree(dom, doc.body, doc).root.parentNode, doc.body,
+    const mount = api.mountTree(dom, doc.body, doc);
+    same(mount.root.parentNode, doc.body,
       'the concatenated mountTree still mounts into the body');
+    // The §5.1 applier ships in the same file (T5 Task 3) and has to survive
+    // the same strip-and-concatenate, so it is exercised through the
+    // reconstructed API rather than trusted to.
+    api.applyPatches([{ type: 'dom.text', t: 1, node: 5, text: 'Clicked!' }], mount);
+    assert.equal(mount.idMap.get(5).nodeValue, 'Clicked!');
+    assert.equal(mount.patchFailures, 0);
   });
 });

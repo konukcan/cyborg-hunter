@@ -1,7 +1,12 @@
 // src/replay/dom-instantiate.js
 // SessionRecording v2 keyframe (a DomNode tree, spec §4) → real DOM inside the
 // reconstruction frame, plus the `Map<number, Node>` every `dom.*` patch
-// (§5.1), every event `target`, and every `anchor.node` (§6) resolves through.
+// (§5.1), every event `target`, and every `anchor.node` (§6) resolves through —
+// and, since T5 Task 3, the application of those four patches through that map.
+// Instantiation and patching live together because they are one reading of §4:
+// `dom.add` instantiates a subtree into the same maps a keyframe fills, and a
+// second module would have to import this one, which the concatenation contract
+// below forbids.
 //
 // THIS IS WHERE THE HTML-STRING ERA ENDS, and that is a security result rather
 // than a refactor. v1 built the reconstruction by interpolating a captured HTML
@@ -86,6 +91,26 @@ var URL_ATTRS = {
 // them all. CH files never carry them; foreign producers might.
 var NAME_TOKEN_RE = /^[a-zA-Z_:][-a-zA-Z0-9_:.]*$/;
 
+// Tags only, on top of the Name production: the XML namespace prefixes are
+// RESERVED, and `createElementNS` enforces that where `createElement` does not.
+// Measured tri-engine (playwright-core 1.62.1): `createElementNS(<any ns>,
+// 'xml:foo' | 'xmlns:foo' | 'xmlns')` throws `NamespaceError` on chromium,
+// firefox and webkit, while happy-dom 20.9.0 accepts all three — so without
+// this line a foreign `svg` subtree carrying one aborts the whole mount in the
+// analyst's browser and passes every node test. `a:b` and a bare `xml` are
+// legal everywhere and stay legal. Case is not part of the rule but is not a
+// gap either: the walk lowercases a tag before creating it, so `XML:Foo`
+// reaches `createElementNS` as `xml:foo` and is caught here.
+//
+// It gates TAGS ONLY, deliberately. `setAttribute` does no namespace
+// validation, so `xmlns:xlink="…"` — which real SVG markup carries — sets
+// fine and is kept.
+var RESERVED_TAG_PREFIX_RE = /^(?:xml|xmlns):|^xmlns$/;
+
+var ELEMENT_NODE = 1;
+var TEXT_NODE = 3;
+var COMMENT_NODE = 8;
+
 // Foreign content (spec-r3 gap, recorded). Spec §4's DomNode carries no
 // namespace, so a player has to infer one, and `createElement` alone cannot
 // reconstruct SVG at all: an `svg > circle` built that way lands in the XHTML
@@ -121,6 +146,12 @@ function isNameToken(name) {
 
 function isSafeAttrName(name) {
   return isNameToken(name) && !/^on/i.test(name);
+}
+
+// The tag guard, applied at the instantiation boundary for keyframes and for
+// every `dom.add` subtree alike.
+function isUsableTag(tag) {
+  return isNameToken(tag) && !RESERVED_TAG_PREFIX_RE.test(tag);
 }
 
 // The namespace an element is created in, given its parent's.
@@ -208,13 +239,13 @@ function instantiateNode(domNode, ctx, parentNs) {
     node = doc.createComment(domNode.text == null ? '' : String(domNode.text));
   } else {
     var tag = String(domNode.tag == null ? '' : domNode.tag).toLowerCase();
-    if (!isNameToken(tag)) {
+    if (!isUsableTag(tag)) {
       ctx.skipped++;
       return null;
     }
     node = instantiateElement(domNode, ctx, tag, parentNs);
   }
-  ctx.idMap.set(domNode.id, node);
+  bind(ctx, domNode.id, node);
   return node;
 }
 
@@ -275,14 +306,67 @@ function instantiateElement(domNode, ctx, tag, parentNs) {
   return el;
 }
 
+// The span-scoped state. One of these per keyframe span (design §4): the id map
+// is rebuilt from scratch at every span restore, and everything a patch needs
+// to resolve travels with it.
+//
+// `idOf` is the reverse index, and it ships rather than being rebuilt on demand
+// because `dom.remove` has to purge the removed node AND its whole subtree from
+// the map — matching `dom-player.js` and the fork's `removeFromMap`, so a later
+// patch naming a purged descendant is caught rather than resolved against a
+// detached node. Rebuilding it per removal is O(span) per patch; keeping it
+// alongside costs one `Map` and is maintained in exactly one place (`bind`).
 function newContext(doc) {
-  return { doc: doc, idMap: new Map(), canvases: new Map(), skipped: 0 };
+  return {
+    doc: doc, root: null,
+    idMap: new Map(), idOf: new Map(), canvases: new Map(),
+    skipped: 0, patchFailures: 0,
+  };
 }
 
 function result(ctx, root) {
-  return {
-    root: root, idMap: ctx.idMap, canvases: ctx.canvases, skipped: ctx.skipped,
-  };
+  ctx.root = root;
+  return ctx;
+}
+
+// Bind an id to a node, overwriting whatever either side held.
+//
+// The overwrite IS the contract (design §4, T3 Task 3 pin M5): a `dom.remove` +
+// `dom.add` pair carrying the same id is a MOVE, and treating the second
+// binding as a duplicate loses the node. Both directions are cleared first, so
+// the two maps stay exact inverses of each other — the property the subtree
+// purge depends on and a test pins over both fixtures.
+function bind(ctx, id, node) {
+  var prev = ctx.idMap.get(id);
+  if (prev !== undefined && prev !== node) ctx.idOf.delete(prev);
+  var prevId = ctx.idOf.get(node);
+  if (prevId !== undefined && prevId !== id) ctx.idMap.delete(prevId);
+  ctx.idMap.set(id, node);
+  ctx.idOf.set(node, id);
+}
+
+// Drop a node and every descendant from both maps.
+//
+// `template.content` is walked as well as `childNodes` for the realm reason
+// `INERT_TAGS` records: happy-dom routes `appendChild` on a template into
+// `content`, browsers keep it in `childNodes`. Walking both leaves the same map
+// in every realm, which is the same determinism argument the name filters rest
+// on. Deleting an id twice is a no-op, so the overlap costs nothing.
+function purgeSubtree(ctx, node) {
+  if (!node) return;
+  var id = ctx.idOf.get(node);
+  if (id !== undefined) {
+    ctx.idOf.delete(node);
+    if (ctx.idMap.get(id) === node) ctx.idMap.delete(id);
+    ctx.canvases.delete(id);
+  }
+  var kids = node.childNodes || [];
+  for (var i = 0; i < kids.length; i++) purgeSubtree(ctx, kids[i]);
+  var content = node.content;
+  if (content && content.childNodes) {
+    var inner = content.childNodes;
+    for (var j = 0; j < inner.length; j++) purgeSubtree(ctx, inner[j]);
+  }
 }
 
 /**
@@ -290,12 +374,15 @@ function result(ctx, root) {
  *
  * @param {object} domNode  a spec §4 DomNode tree
  * @param {Document} doc    the frame's document — every node is created in it
- * @returns {{root: Node|null, idMap: Map<number, Node>,
- *            canvases: Map<number, {w, h}>, skipped: number}}
- *   `canvases` is the §4 `canvas_size` annotation, which no DOM read can
- *   recover, keyed by the same ids as `idMap`. `skipped` counts the nodes no
- *   DOM could hold; it belongs in the `counters.patchFailures` surface that
- *   already drives the "recorded change(s) could not be reapplied" chip.
+ * @returns {{root: Node|null, doc: Document, idMap: Map<number, Node>,
+ *            idOf: Map<Node, number>, canvases: Map<number, {w, h}>,
+ *            skipped: number, patchFailures: number}}
+ *   the span state `applyPatch` extends. `canvases` is the §4 `canvas_size`
+ *   annotation, which no DOM read can recover, keyed by the same ids as
+ *   `idMap`. `skipped` counts the nodes no DOM could hold and `patchFailures`
+ *   the patches that named something the map does not hold; both belong in the
+ *   `counters.patchFailures` surface that already drives the "recorded
+ *   change(s) could not be reapplied" chip.
  */
 function instantiateTree(domNode, doc) {
   var ctx = newContext(doc);
@@ -328,8 +415,7 @@ function instantiateTree(domNode, doc) {
  *   nothing-to-restore case
  * @param {Element} body  the frame's `<body>`
  * @param {Document} doc  the frame's document
- * @returns {{root: Node|null, idMap: Map<number, Node>,
- *            canvases: Map<number, {w, h}>, skipped: number}}
+ * @returns {object}  the span state, as `instantiateTree` documents it
  */
 function mountTree(domNode, body, doc) {
   while (body.firstChild) body.removeChild(body.firstChild);
@@ -355,7 +441,7 @@ function mountTree(domNode, body, doc) {
   }
 
   applyAttrs(body, domNode.attrs || {}, null);
-  ctx.idMap.set(domNode.id, body);
+  bind(ctx, domNode.id, body);
   var kids = domNode.children || [];
   for (var j = 0; j < kids.length; j++) {
     var child = instantiateNode(kids[j], ctx, null);
@@ -364,7 +450,168 @@ function mountTree(domNode, body, doc) {
   return result(ctx, body);
 }
 
+// ── spec §5.1 patch application ────────────────────────────────────────────
+//
+// TOLERANT, COUNTED, SURFACED (design §4). A patch naming an id the map does
+// not hold is skipped and counted into `patchFailures`, never thrown on. This
+// is a DELIBERATE divergence from `tests/replay/support/dom-player.js`, which
+// throws on the same input: the test player's job is to catch mapper bugs, the
+// viewer's job is to show an analyst as much of an unrepeatable session as
+// survives. The consequence is recorded and routed — a tolerant viewer cannot
+// detect a producer emitting dangling references, which is why T7 owes a
+// dangling-reference negative fixture (design §14 risk 2).
+//
+// What is NOT counted: an attribute refused by the §12 filters. Instantiation
+// drops the same names silently, so counting them here would light up the
+// "recorded change(s) could not be reapplied" chip for a filter working exactly
+// as designed. A dropped `on*` handler leaves the visual reconstruction right;
+// an unresolvable id means it is wrong.
+
+function resolve(mount, id) {
+  var node = mount.idMap.get(id);
+  return node === undefined ? null : node;
+}
+
+function tagNameOf(node) {
+  return node && node.tagName ? String(node.tagName).toLowerCase() : '';
+}
+
+// The frame's own structure, which a recording must never be able to detach.
+// `mountTree` binds a `body` root to the frame's OWN `<body>` (design §4's
+// body-root split), so a `dom.remove` naming that id would otherwise call
+// `.remove()` on the element every later mount and patch depends on and leave
+// the reconstruction nowhere to go. Pinned at the mount in Task 2, enforced
+// here.
+function isFrameStructure(node, doc) {
+  return !!doc && (node === doc.body || node === doc.documentElement);
+}
+
+function applyAdd(patch, mount) {
+  var parent = resolve(mount, patch.parent);
+  if (!parent || parent.nodeType !== ELEMENT_NODE) {
+    mount.patchFailures++;
+    return;
+  }
+  // The inserted subtree inherits the LIVE parent's namespace, so a `dom.add`
+  // into an SVG subtree does not silently produce XHTML children that lay out
+  // at 0×0 — and an add into an SVG HTML-integration point produces HTML
+  // again. `dom-player.js` carries the same rule; re-sync both when either
+  // moves.
+  var childNs = childNamespaceOf(tagNameOf(parent), parent.namespaceURI);
+  var node = instantiateNode(patch.node, mount, childNs);
+  if (!node) return;              // already counted into `skipped`
+
+  var ref = null;
+  if (patch.before !== null && patch.before !== undefined) {
+    var anchor = mount.idMap.get(patch.before);
+    // A `before` the map does not hold, or one that is not a child of this
+    // parent, cannot be honoured: the node is appended instead. Counted,
+    // because the recorded POSITION was lost even though the node survived —
+    // the reconstruction is knowingly approximate at that point.
+    if (anchor !== undefined && anchor.parentNode === parent) ref = anchor;
+    else mount.patchFailures++;
+  }
+
+  try {
+    parent.insertBefore(node, ref);
+  } catch (err) {
+    // A hierarchy the DOM refuses. The subtree is unbound again rather than
+    // left in the map, where a later patch would resolve it against a node
+    // nothing can see.
+    mount.patchFailures++;
+    purgeSubtree(mount, node);
+  }
+}
+
+function applyRemove(patch, mount) {
+  var node = resolve(mount, patch.node);
+  if (!node) {
+    mount.patchFailures++;
+    return;
+  }
+  if (isFrameStructure(node, mount.doc)) {
+    mount.patchFailures++;
+    return;
+  }
+  purgeSubtree(mount, node);
+  if (node.parentNode) node.parentNode.removeChild(node);
+}
+
+function applyAttr(patch, mount) {
+  var el = resolve(mount, patch.node);
+  if (!el || el.nodeType !== ELEMENT_NODE) {
+    mount.patchFailures++;
+    return;
+  }
+  var name = String(patch.name == null ? '' : patch.name);
+  if (patch.value === null || patch.value === undefined) {
+    // No name filter on the removal path, deliberately. `removeAttribute`
+    // validates nothing — browsers by spec, happy-dom measured — and removing a
+    // name this module would never have SET is a no-op, so a guard here would
+    // be a line no test could fail. (The one name that matters on this path is
+    // the viewer's own `data-ch-placeholder` stamp, which a recording can strip
+    // as well as forge; that belongs with the detector, Task 4.)
+    el.removeAttribute(name);
+    return;
+  }
+  // ONE §12 gate on the set path, and it is the gate instantiation uses, so a
+  // keyframe and a patch can never disagree about what an element may carry.
+  setFilteredAttr(el, name, patch.value);
+}
+
+function applyText(patch, mount) {
+  var node = resolve(mount, patch.node);
+  if (!node) {
+    mount.patchFailures++;
+    return;
+  }
+  // §5.1's `dom.text` addresses a text or comment node. An element has no
+  // character data, and assigning to `nodeValue` on one is a silent no-op —
+  // counting is the honest answer, and it is where the two players differ
+  // hardest: the strict one writes `.data` on whatever it resolved.
+  if (node.nodeType !== TEXT_NODE && node.nodeType !== COMMENT_NODE) {
+    mount.patchFailures++;
+    return;
+  }
+  node.nodeValue = patch.text == null ? '' : String(patch.text);
+}
+
+/**
+ * Apply one spec §5.1 patch to a mounted span.
+ *
+ * @param {object} patch  a `dom.add` / `dom.remove` / `dom.attr` / `dom.text`
+ *   event; anything else is left alone
+ * @param {object} mount  the state `mountTree`/`instantiateTree` returned
+ * @returns {boolean} whether this event was a DOM patch — so a caller's
+ *   vocabulary dispatch (§5.2-§5.8, Task 5) can fall through on `false`
+ *   without needing its own list of the four types
+ */
+function applyPatch(patch, mount) {
+  if (!patch || typeof patch !== 'object') return false;
+  var type = patch.type;
+  if (type === 'dom.add') applyAdd(patch, mount);
+  else if (type === 'dom.remove') applyRemove(patch, mount);
+  else if (type === 'dom.attr') applyAttr(patch, mount);
+  else if (type === 'dom.text') applyText(patch, mount);
+  else return false;
+  return true;
+}
+
+/**
+ * Apply a time-ordered slice of a segment's events, in order, skipping the
+ * ones that are not DOM patches.
+ *
+ * @param {object[]} patches
+ * @param {object} mount
+ * @returns {object} the same mount state, for chaining
+ */
+function applyPatches(patches, mount) {
+  var list = patches || [];
+  for (var i = 0; i < list.length; i++) applyPatch(list[i], mount);
+  return mount;
+}
+
 // ONE line of ESM syntax, last, so the build can strip it with a single
 // replace and concatenate the rest into the report's viewer script. Keep it
 // that way — the header explains why, and the test suite fails if it drifts.
-export { instantiateTree, mountTree };
+export { instantiateTree, mountTree, applyPatch, applyPatches };

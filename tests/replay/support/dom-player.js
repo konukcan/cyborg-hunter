@@ -116,8 +116,12 @@ export function createPlayer(keyframe) {
             ? null : held(e.before, 'dom.add before');
           // The inserted subtree inherits the LIVE parent's namespace, so a
           // `dom.add` into an SVG subtree does not silently produce XHTML
-          // children. Task 3's applier owes the same rule.
-          parent.insertBefore(instantiate(e.node, parent.namespaceURI), ref);
+          // children — and an add into an SVG HTML-integration point produces
+          // HTML again, which is the same `childNamespaceOf` rule the keyframe
+          // walk applies (T5 Task 3, mirrored in `dom-instantiate.js`).
+          const childNs = childNamespaceOf(
+            String(parent.tagName || '').toLowerCase(), parent.namespaceURI);
+          parent.insertBefore(instantiate(e.node, childNs), ref);
         } else if (e.type === 'dom.remove') {
           const el = held(e.node, 'dom.remove');
           el.remove();
