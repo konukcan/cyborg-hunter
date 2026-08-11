@@ -25,6 +25,7 @@ import { dirname, join } from 'path';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 
 import { buildViewerModel } from '../../../src/cli/renderers/replay-assets.js';
+import { readReplayClientSrc } from '../../../src/cli/renderers/replay-client-source.js';
 
 function resolvePlaywright() {
   const candidates = [
@@ -56,8 +57,10 @@ function check(cond, label) {
 // Inlines the REAL viewer client + a model, intercepts canvas arcs (the
 // cursor dot is the last arc drawn per frame), and exposes the viewer's own
 // debug surface for camera/check readout.
-const viewerSrc = readFileSync(
-  join(repoRoot, 'src', 'cli', 'renderers', 'replay-viewer.client.js'), 'utf8');
+// The ASSEMBLED viewer script (T5 Task 4): the client alone calls `mountTree`
+// out of a module the build concatenates ahead of it, so inlining the client
+// file on its own would harness something the report never ships.
+const viewerSrc = readReplayClientSrc();
 
 function harnessHtml(model) {
   const modelJson = JSON.stringify(model).replace(/</g, '\\u003c');

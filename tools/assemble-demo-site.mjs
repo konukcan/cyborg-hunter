@@ -12,16 +12,20 @@
 //   2. `node tools/build-preview-core.mjs` -> demo/preview-core.js.
 //   3. Copy demo/* (excluding demo/tests/ — Playwright specs must not ship
 //      in the public artifact) and dist/ into .demo-site/.
-//   4. Copy src/cli/renderers/replay-viewer.client.js to the site root —
+//   4. Write the ASSEMBLED replay viewer script to the site root —
 //      demo/results.js fetches it as text to embed in the in-browser
-//      report, the same source html-index.js reads for the CLI report.
+//      report, and it must be the same assembly html-index.js inlines into
+//      the CLI report: the client alone is missing the §4 instantiation
+//      module it calls into (T5 Task 2's concatenation decision).
 //
 // Usage: node tools/assemble-demo-site.mjs
 
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, rmSync, statSync, readdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, rmSync, statSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, dirname, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { readReplayClientSrc } from '../src/cli/renderers/replay-client-source.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -75,13 +79,12 @@ function main() {
   cpSync(DEMO_DIR, SITE_DIR, { recursive: true, filter: isRuntimeFile });
   cpSync(join(ROOT, 'dist'), join(SITE_DIR, 'dist'), { recursive: true });
   // demo/assets/ (example-participants.json, C1) is copied above as part of
-  // demo/* — it isn't excluded by isRuntimeFile. The replay viewer client
-  // lives outside demo/ (it's the CLI's own renderer asset), so it needs its
-  // own copy into the site root, alongside index.html and the other *.js.
-  cpSync(
-    join(ROOT, 'src', 'cli', 'renderers', 'replay-viewer.client.js'),
-    join(SITE_DIR, 'replay-viewer.client.js')
-  );
+  // demo/* — it isn't excluded by isRuntimeFile. The replay viewer lives
+  // outside demo/ (it's the CLI's own renderer asset) and is an ASSEMBLY of
+  // two source files, so the site gets the assembled text under the name
+  // demo/results.js fetches — never a copy of the client alone, which would
+  // load into the demo with `mountTree` undefined.
+  writeFileSync(join(SITE_DIR, 'replay-viewer.client.js'), readReplayClientSrc());
 
   console.log('assemble-demo-site: assembled ' + SITE_DIR);
 }

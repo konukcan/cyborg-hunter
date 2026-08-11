@@ -146,6 +146,47 @@ var SVG_HTML_INTEGRATION = { foreignobject: true, desc: true, title: true };
 // no recorder observes.
 var PLACEHOLDER_ATTR = 'data-ch-placeholder';
 
+// Capture's own flag for a shadow host (`snapshot.js`, spec §13): the light-DOM
+// children are ordinary capturable nodes, the shadow ROOT's content is not.
+var SHADOW_ATTR = 'data-ch-shadow';
+
+// VIEWER-OWNED ATTRIBUTES. These two names are not page content: they are what
+// the reconstruction says about ITSELF, and the viewer's chips read them back
+// out of the live DOM — the iframe/placeholder chip through
+// `iframe, [data-ch-placeholder="iframe"]`, the shadow chip through
+// `[data-ch-shadow]`. So a recording that could write them would be choosing
+// what the viewer reports about the reconstruction, and the failure runs in
+// BOTH directions:
+//
+//   FORGE — stamping `data-ch-placeholder` on any element fakes a "content was
+//     here" outline and chip over a region that was fully captured. Both names
+//     pass the Name-production filter, so nothing else stops it.
+//   STRIP — `dom.attr` with `value: null` reaches `removeAttribute`, which
+//     validates nothing in any realm (that is why the removal path carries no
+//     name filter), so a recording can delete a flag the viewer itself applied.
+//     This is the worse half: hiding the shadow chip turns spec §13's "absence
+//     of evidence is not evidence of absence" into silence, and an analyst
+//     reads an empty region as an empty region.
+//
+// ONE predicate therefore gates BOTH verbs on BOTH paths — the keyframe walk
+// and `dom.attr` — and the viewer re-stamps the flags itself from the DomNode
+// data (below). A recording can still CLAIM a shadow host in a keyframe, which
+// is exactly what capture's own flag is; what it cannot do is move, invent or
+// erase the claim afterwards.
+//
+// Scoped to the names the viewer stamps, NOT to the whole `data-ch-*`
+// namespace: `data-ch-redact` is the researcher's own marker on their own page
+// and is serialised into keyframes, and the honeypot's `data-ch-role` /
+// `data-ch-decoy` are page-authored too. Dropping those would delete
+// attributes the page really had and silently break any CSS keyed on them.
+var VIEWER_OWNED_ATTRS = {};
+VIEWER_OWNED_ATTRS[PLACEHOLDER_ATTR] = true;
+VIEWER_OWNED_ATTRS[SHADOW_ATTR] = true;
+
+function isViewerOwnedAttr(name) {
+  return VIEWER_OWNED_ATTRS[String(name).toLowerCase()] === true;
+}
+
 function isNameToken(name) {
   return NAME_TOKEN_RE.test(name);
 }
@@ -212,6 +253,13 @@ function setFilteredAttr(el, name, value, ctx) {
     return;
   }
   if (/^on/i.test(name)) return;
+  // Viewer-owned (see VIEWER_OWNED_ATTRS): refused on the SET path so a
+  // recording cannot forge a placeholder outline or a shadow chip. Uncounted,
+  // like the other integrity refusals — the reconstruction is visually right
+  // without it, and counting would light the analyst's "could not be
+  // reapplied" chip every time a filter worked. The viewer re-stamps the flags
+  // it recognises itself, in `instantiateElement`.
+  if (isViewerOwnedAttr(name)) return;
   var text = value == null ? '' : String(value);
   if (URL_ATTRS[name.toLowerCase()] === true && !isSafeUrl(text)) return;
   el.setAttribute(name, text);
@@ -320,6 +368,16 @@ function instantiateElement(domNode, ctx, tag, parentNs) {
     setFilteredAttr(el, 'src', domNode.media_src, ctx);
   }
   if (isFrame) el.setAttribute(PLACEHOLDER_ATTR, 'iframe');
+  // The shadow flag is re-stamped BY THE VIEWER from the recorded claim rather
+  // than passed through `applyAttrs`, which now refuses the name. Same DOM as
+  // before; the difference is that the flag in the reconstruction is one the
+  // viewer put there and no later patch can move or delete (see
+  // VIEWER_OWNED_ATTRS). The value is normalised to the empty string capture
+  // writes, so the chip's selector cannot be dodged by a value.
+  var recorded = domNode.attrs;
+  if (recorded && Object.prototype.hasOwnProperty.call(recorded, SHADOW_ATTR)) {
+    el.setAttribute(SHADOW_ATTR, '');
+  }
 
   // §4's `canvas_size` is the BITMAP size, which is not an attribute and must
   // not become one — it is what sizes the parent-owned offscreen canvas the
@@ -619,12 +677,14 @@ function applyAttr(patch, mount) {
   }
   var name = String(patch.name == null ? '' : patch.name);
   if (patch.value === null || patch.value === undefined) {
-    // No name filter on the removal path, deliberately. `removeAttribute`
-    // validates nothing — browsers by spec, happy-dom measured — and removing a
-    // name this module would never have SET is a no-op, so a guard here would
-    // be a line no test could fail. (The one name that matters on this path is
-    // the viewer's own `data-ch-placeholder` stamp, which a recording can strip
-    // as well as forge; that belongs with the detector, Task 4.)
+    // ONE name check on the removal path, and it is the same predicate the set
+    // path uses. `removeAttribute` validates nothing — browsers by spec,
+    // happy-dom measured — so removing a name this module would never have SET
+    // is a harmless no-op and needs no guard; what DOES need one is the
+    // viewer's own flags, which a recording can strip as well as forge. Task 3
+    // left this line to Task 4 because the detector that reads the flags back
+    // lands there.
+    if (isViewerOwnedAttr(name)) return;
     el.removeAttribute(name);
     return;
   }
