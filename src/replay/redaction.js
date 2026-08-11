@@ -83,6 +83,33 @@ export function isRedactionTainted(node, taint) {
   return !!node && taintSet(taint).has(node);
 }
 
+/**
+ * True when this node OR ANY ANCESTOR has ever been withheld.
+ *
+ * The subtree reading is the one every channel has to use, and it exists
+ * because the node-only reading disagreed with itself across channels (T3
+ * final review, F-1). The snapshot walk always inherited a tainted ancestor's
+ * verdict downward — it descends the tree, so it carries the answer with it —
+ * while the mutation mapper and the trace capture asked about the queried node
+ * alone. New content created inside a container that had been moved OUT of a
+ * redacted subtree therefore shipped in full through `dom.add`, `dom.text` and
+ * `input.value`, and was then withheld by the next keyframe describing the same
+ * nodes: one file, two verdicts, the weaker one first.
+ *
+ * A fresh child of a withheld container is withheld. That is the only reading
+ * under which the taint set's stated property — it can only ever over-redact —
+ * is true of the FILE rather than of one channel at a time.
+ */
+export function isInTaintedSubtree(node, taint) {
+  var set = taintSet(taint);
+  var cur = node;
+  while (cur) {
+    if (set.has(cur)) return true;
+    cur = cur.parentNode;
+  }
+  return false;
+}
+
 function hasTypePasswordAttr(el) {
   var attrs = el.attributes || [];
   for (var i = 0; i < attrs.length; i++) {

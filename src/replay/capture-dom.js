@@ -407,7 +407,7 @@ export function attachDomCapture(rec, env) {
 
   // ── Mutations (spec §5.1) ──
   if (MutationObserverImpl) {
-    var observer = new MutationObserverImpl(function (records) {
+    var handleBatch = function (records) {
       try {
         // The COMPLETE batch, in the observer's own order. mapMutations
         // pre-scans it (which removals and insertions are still to come, what
@@ -433,7 +433,8 @@ export function attachDomCapture(rec, env) {
         // events cost as a group on the wire.
         if (events.length) cadence.patchChars += payloadChars(events);
       } catch (e) { rec.captureFailure('mutations', e); }
-    });
+    };
+    var observer = new MutationObserverImpl(handleBatch);
     try {
       observer.observe(root, MUTATION_OBSERVER_INIT);
       // Registered through the listener registry with the observer marker so
@@ -441,6 +442,15 @@ export function attachDomCapture(rec, env) {
       rec.addListener(
         { addEventListener: function () {}, removeEventListener: function () {} },
         '_mutation_observer', observer, { _isObserver: true });
+      // The observer callback is a MICROTASK, so DOM changes made in the same
+      // task as stopSession() are still queued when the recording closes and
+      // disconnecting drops them silently. Draining the queue through the SAME
+      // handler is what makes the last thing a participant saw a patch rather
+      // than a gap (T3 final review, F-5).
+      rec.addPreCloseFlush(function () {
+        var pending = observer.takeRecords();
+        if (pending && pending.length) handleBatch(pending);
+      });
     } catch (e) { rec.captureFailure('mutations', e); }
   }
 

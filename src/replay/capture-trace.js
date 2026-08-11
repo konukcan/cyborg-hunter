@@ -174,11 +174,14 @@ export function attachTraceCapture(rec, env) {
 
   // ── One walk, three verdicts ──
   //
-  // `isInRedactedSubtree`, `isInExcludedSubtree` and `heldAncestor` ask three
-  // different questions about THE SAME parent chain, and each used to walk it
-  // itself: five traversals for an aligned key.down, and five again for every
-  // input flush. This fuses the traversal — one `while (cur = cur.parentNode)`
-  // carrying three accumulators.
+  // Redaction (including its taint history), exclusion and addressability ask
+  // three different questions about THE SAME parent chain, and each used to
+  // walk it itself, through its own subtree helper: five traversals for an
+  // aligned key.down, and five again for every input flush. This fuses the
+  // traversal — one `while (cur = cur.parentNode)` carrying three accumulators.
+  // The exclusion helper it replaced (`isInExcludedSubtree`) had no callers
+  // left afterwards and is gone; the per-node predicates it wrapped are what
+  // this walk calls.
   //
   // It is FUSION, NOT CACHING, and the distinction is the whole point. Every
   // verdict is still computed fresh from the live chain for every event, so
@@ -197,13 +200,19 @@ export function attachTraceCapture(rec, env) {
   function floorsFor(node, wantHeld) {
     var out = { redacted: false, excluded: false, node: null, heldEl: null };
     if (!node) return out;
-    // Taint is a property of the NODE, not of its chain (redaction.js): it is
-    // how content stays withheld after the page moves the element out.
-    var redacted = isRedactionTainted(node, opts.taint);
+    var redacted = false;
     var excluded = false;
     var haveHeld = !wantHeld || !span;
     var cur = node;
     while (cur && !(redacted && excluded && haveHeld)) {
+      // TAINT IS ASKED OF EVERY ANCESTOR, not just of the node (T3 final
+      // review, F-1): a field created inside a container whose content this
+      // recording already withheld is withheld too, which is the reading the
+      // snapshot walk has always used and the one that makes the taint set's
+      // "can only over-redact" property true of the file rather than of one
+      // channel. Unguarded by nodeType, unlike the selector match: text nodes
+      // carry taint as readily as elements.
+      if (!redacted && isRedactionTainted(cur, opts.taint)) redacted = true;
       if (!redacted && cur.nodeType === ELEMENT_NODE
           && isRedacted(cur, opts.redactSelector)) redacted = true;
       if (!excluded && isExcluded(cur, opts)) excluded = true;

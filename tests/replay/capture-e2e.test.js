@@ -639,3 +639,240 @@ describe('assembly wiring (index.js)', () => {
     assert.equal(click.target, null, 'and nothing is addressable');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TAINT SCOPE: one subtree, one verdict (T3 final review, F-1)
+//
+// The taint set is what keeps redacted content withheld after the page moves
+// it out of the container that redacted it. Its SCOPE used to disagree across
+// the three channels that consult it: the snapshot walk inherited a tainted
+// ancestor's verdict downward, while the mutation mapper and the trace capture
+// asked about the queried node alone. So content CREATED inside a tainted
+// container after the move shipped in full mid-segment (dom.add, dom.text,
+// input.value) and was then withheld by the next keyframe describing the same
+// nodes — one file holding two verdicts about one subtree, and the weaker one
+// arriving first.
+//
+// The scenario below is the reviewer's probe. Each sentinel travels a different
+// channel, so reverting any one of the three fixed sites turns exactly its own
+// assertion red.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const TAINT_ADD_SENTINEL = 'ZQTAINTADDEDTEXT4242';        // dom.add payload
+const TAINT_TEXT_SENTINEL = 'ZQTAINTREWRITTENTEXT515151'; // dom.text rewrite
+const TAINT_INPUT_SENTINEL = 'ZQTAINTTYPEDVALUE60606';    // input.value
+const TAINT_ATTR_SENTINEL = 'ZQTAINTVALUEATTR7171';       // dom.attr value
+
+const TAINT_SENTINELS = [
+  ['dom.add payload inside a tainted container', TAINT_ADD_SENTINEL],
+  ['dom.text rewrite inside a tainted container', TAINT_TEXT_SENTINEL],
+  ['input.value typed inside a tainted container', TAINT_INPUT_SENTINEL],
+  ['value attribute inside a tainted container', TAINT_ATTR_SENTINEL],
+];
+
+const TAINT_PAGE = `
+  <div id="stage">
+    <div id="wrap" data-ch-redact>
+      <div id="box"><span id="old">original</span></div>
+    </div>
+    <div id="outside"></div>
+  </div>
+`;
+
+async function recordTaintMove() {
+  const doc = win.document;
+  const api = CHReplay.attach({
+    participantId: 'P-TAINT-01', tier: 'dom', root: '#stage',
+    keyframeEvery: 2, autoSave: { mode: 'none' },
+  });
+  api.startSession();
+
+  // Segment 0's keyframe walks #box and #old inside the redacted wrapper, so
+  // both are taint-marked and their content is withheld.
+  api.startTrial({ trialId: 'trial-1', plugin: 'ch:standalone' });
+  await settle();
+
+  // The page moves the container OUT. Position no longer redacts it; history
+  // still does.
+  doc.getElementById('outside').appendChild(doc.getElementById('box'));
+  await settle();
+
+  // ── segment 1: a continuation, where every channel below runs with no fresh
+  //    snapshot behind it ──
+  api.startTrial({ trialId: 'trial-2', plugin: 'ch:standalone' });
+
+  const box = doc.getElementById('box');
+
+  // NEW content created inside the tainted container.
+  const added = doc.createElement('p');
+  added.id = 'added';
+  added.textContent = TAINT_ADD_SENTINEL;
+  box.appendChild(added);
+
+  const typed = doc.createElement('input');
+  typed.id = 'typed';
+  typed.type = 'text';
+  box.appendChild(typed);
+  await settle();
+
+  // …then rewritten, typed into, and mirrored into an attribute.
+  added.firstChild.data = TAINT_TEXT_SENTINEL;
+  typed.value = TAINT_INPUT_SENTINEL;
+  key(typed, 'keydown', 'Z');
+  fire(typed, 'input');
+  typed.setAttribute('value', TAINT_ATTR_SENTINEL);
+  await settle();
+
+  api.endTrial();
+
+  // ── segment 2: the next keyframe, which describes the same nodes ──
+  api.startTrial({ trialId: 'trial-3', plugin: 'ch:standalone' });
+  await settle();
+  api.endTrial();
+
+  api.stopSession('finished');
+  const recording = api.getRecording();
+  api.destroy();
+  return recording;
+}
+
+describe('taint scope: content created inside a moved-out redacted container', () => {
+  let recording;
+
+  before(async () => {
+    installWindow();
+    win.document.body.innerHTML = TAINT_PAGE;
+    try { recording = await recordTaintMove(); } finally { restoreWindow(); }
+  });
+
+  it('strict-validates', () => {
+    const res = validateStrict(recording);
+    assert.equal(res.ok, true, res.errors.join('; '));
+  });
+
+  it('drove all three channels (a scan over a dead channel passes forever)', () => {
+    // Liveness has to be proved by what SURVIVES the withholding, since the
+    // whole point of the fix is that the content does not. Each channel leaves
+    // a different trace:
+    //   - dom.add still emits the subtree, stripped;
+    //   - input.value still emits, as §5.2's redacted variant with a length;
+    //   - dom.text is SUPPRESSED entirely, so its trace is the keyframe that
+    //     describes the rewritten node (asserted in the next test).
+    const events = recording.segments.flatMap(s => s.events);
+    const adds = events.filter(e => e.type === 'dom.add');
+    assert.ok(
+      adds.some(e => JSON.stringify(e.node).includes('"id":"added"')),
+      'the new subtree was added mid-span');
+    const typedEvent = events.filter(e => e.type === 'input.value').pop();
+    assert.ok(typedEvent, 'the field was typed into');
+    assert.equal(typedEvent.redacted, true,
+      'and the event took §5.2\'s redacted variant rather than vanishing');
+    assert.equal(typedEvent.value_len, TAINT_INPUT_SENTINEL.length,
+      'whose length says the channel really carried this keystroke');
+    assert.equal(events.some(e => e.type === 'dom.text'), false,
+      'the text rewrite was suppressed, which is how dom.text withholds');
+    assert.ok(recording.segments.filter(s => s.initial_dom !== null).length >= 2,
+      'a second keyframe describes the same nodes');
+  });
+
+  for (const [channel, sentinel] of TAINT_SENTINELS) {
+    it(`withholds the ${channel}`, () => {
+      const json = JSON.stringify(recording);
+      assert.equal(json.includes(sentinel), false,
+        `${channel} leaked: the taint verdict was not inherited by this channel`);
+    });
+  }
+
+  it('the mid-span verdict agrees with the keyframe that follows it', () => {
+    // The point of the finding, stated directly: the same node must not be
+    // withheld at the keyframe and published in the patches that precede it.
+    const lastKeyframe = recording.segments.filter(s => s.initial_dom !== null).pop();
+    let addedNode = null;
+    (function walk(n) {
+      if (!n) return;
+      if (n.kind === 'element' && (n.attrs || {}).id === 'added') addedNode = n;
+      (n.children || []).forEach(walk);
+    })(lastKeyframe.initial_dom);
+    assert.ok(addedNode, 'the keyframe describes the node created mid-span');
+    const text = (addedNode.children || []).map(c => c.text).join('');
+    assert.equal(text, '', 'the keyframe withholds its text');
+
+    const patches = recording.segments.flatMap(s => s.events)
+      .filter(e => e.type === 'dom.add' || e.type === 'dom.text');
+    assert.equal(JSON.stringify(patches).includes(TAINT_TEXT_SENTINEL), false);
+    assert.equal(JSON.stringify(patches).includes(TAINT_ADD_SENTINEL), false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TEARDOWN: the last thing the participant did (T3 final review, F-5)
+//
+// A MutationObserver callback is a microtask. DOM changes made in the same task
+// as stopSession() — which is exactly where a trial's final state change lands
+// — are still queued when the recording closes, and disconnecting drops them
+// with no trace. The recorder now drains the queue through the same handler
+// before anything closes.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('teardown flushes the mutations still queued at stop', () => {
+  it('keeps DOM changes made in the same task as stopSession', () => {
+    installWindow();
+    try {
+      const doc = win.document;
+      const api = CHReplay.attach({
+        participantId: 'P-FLUSH-01', tier: 'dom', root: '#stage',
+        autoSave: { mode: 'none' },
+      });
+      api.startSession();
+      api.startTrial({ trialId: 'trial-1', plugin: 'ch:standalone' });
+
+      // No await anywhere below: the mutation, the trial end and the stop all
+      // happen in one task, so the observer has not delivered when the
+      // recording closes. This is the shape of a real final trial.
+      const last = doc.createElement('div');
+      last.id = 'final-word';
+      last.textContent = 'submitted';
+      doc.getElementById('stage').appendChild(last);
+      api.endTrial();
+      api.stopSession('finished');
+
+      const recording = api.getRecording();
+      api.destroy();
+
+      assert.equal(validateStrict(recording).ok, true);
+      const adds = recording.segments.flatMap(s => s.events)
+        .filter(e => e.type === 'dom.add');
+      assert.ok(
+        adds.some(e => JSON.stringify(e.node).includes('"id":"final-word"')),
+        'the last DOM change before stop reached the file');
+    } finally {
+      restoreWindow();
+    }
+  });
+
+  it('flushes for a caller that destroys without stopping', () => {
+    installWindow();
+    try {
+      const doc = win.document;
+      const api = CHReplay.attach({
+        participantId: 'P-FLUSH-02', tier: 'dom', root: '#stage',
+        autoSave: { mode: 'none' },
+      });
+      api.startSession();
+      api.startTrial({ trialId: 'trial-1', plugin: 'ch:standalone' });
+      const last = doc.createElement('div');
+      last.id = 'abandoned';
+      doc.getElementById('stage').appendChild(last);
+      api.destroy();   // no stopSession; the buffer survives teardown by contract
+
+      const recording = api.getRecording();
+      const adds = recording.segments.flatMap(s => s.events)
+        .filter(e => e.type === 'dom.add');
+      assert.ok(
+        adds.some(e => JSON.stringify(e.node).includes('"id":"abandoned"')),
+        'destroy() drains the queue too');
+    } finally {
+      restoreWindow();
+    }
+  });
+});

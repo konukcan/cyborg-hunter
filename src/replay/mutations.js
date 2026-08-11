@@ -71,7 +71,7 @@ import {
   serializeTree, isExcluded, nearestEmittedAncestor, isEmittableNode,
   carriesChildren, emittedAttrs, attrPatchValue, ATTR_WITHHELD,
 } from './snapshot.js';
-import { isInRedactedSubtree, markRedacted, isRedactionTainted } from './redaction.js';
+import { isInRedactedSubtree, markRedacted, isInTaintedSubtree } from './redaction.js';
 
 var ELEMENT_NODE = 1;
 
@@ -543,10 +543,14 @@ function qualifiedName(el, record) {
 }
 
 // Redacted by position, or by history: a node whose content this recording has
-// already withheld keeps withholding it after a move (redaction.js).
+// already withheld — or which sits inside one — keeps withholding it after a
+// move (redaction.js). Both halves are SUBTREE questions, and the taint half
+// was node-only until the T3 final review's F-1: new content created inside a
+// moved-out container shipped in full here while the next keyframe withheld the
+// same nodes.
 function isRedactedNow(node, state) {
   return isInRedactedSubtree(node, state.opts.redactSelector) ||
-    isRedactionTainted(node, state.opts.taint);
+    isInTaintedSubtree(node, state.opts.taint);
 }
 
 // Exclusion attribute ADDED to a live element (spec §4): its children leave

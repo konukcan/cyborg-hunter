@@ -105,6 +105,17 @@ export function createRecorder(userConfig) {
   var state = 'created';
   var listeners = [];
   var intervals = [];
+  // Channels with undelivered state to hand over before the recording closes
+  // (see addPreCloseFlush). Drained once, then emptied, so stop-then-destroy
+  // cannot run one twice.
+  var preCloseFlushes = [];
+  function runPreCloseFlushes() {
+    var pending = preCloseFlushes;
+    preCloseFlushes = [];
+    for (var i = 0; i < pending.length; i++) {
+      try { pending[i](); } catch (e) { recorder.captureFailure('pre_close_flush', e); }
+    }
+  }
   var trialCounter = 0;
   var trialStartHooks = [];   // capture modules subscribe (e.g. DOM snapshot)
   // Running byte estimate for the OPEN trial (reset per trial). Kept off the
@@ -369,6 +380,9 @@ export function createRecorder(userConfig) {
     },
 
     stopSession: function (reason) {
+      // BEFORE anything closes: a channel holding undelivered state gets to
+      // deliver it into the still-open trial (F-5).
+      runPreCloseFlushes();
       if (state === 'trial') {
         state = 'session';
       }
@@ -502,6 +516,25 @@ export function createRecorder(userConfig) {
       intervals.push(id);
     },
 
+    // Work a capture channel must do before the recording closes, because it
+    // holds state the browser has not delivered yet.
+    //
+    // The MutationObserver is the case that needs it: its callback is a
+    // microtask, so DOM changes made in the same task as `stopSession()` — the
+    // last thing a trial does before ending — sit in the observer's queue when
+    // the recording closes, and disconnecting drops them with no trace. A
+    // `takeRecords()` through the mapper turns that silent loss into the
+    // patches the participant actually caused (T3 final review, F-5).
+    //
+    // Runs before the state transition in `stopSession` (so the events are
+    // still accepted) and at the top of `destroy` (for a caller that tears down
+    // without stopping — the buffer survives teardown either way). Each hook
+    // runs at most once, and a throwing hook is contained like any other
+    // capture channel.
+    addPreCloseFlush: function (fn) {
+      if (typeof fn === 'function') preCloseFlushes.push(fn);
+    },
+
     // Read-only view for serializer + tests. Trials array includes the open
     // trial so mid-session getRecording() sees everything so far.
     // Deliberately readable AFTER destroy(): the buffer survives teardown
@@ -515,6 +548,10 @@ export function createRecorder(userConfig) {
 
     destroy: function () {
       if (state === 'destroyed') return;
+      // A caller that tears down without stopping still gets its pending
+      // batch: the buffer survives destroy() by contract, so the patches are
+      // readable afterwards (F-5). A no-op after stopSession, which drained it.
+      runPreCloseFlushes();
       transition('destroyed');
       listeners.forEach(function (l) {
         if (l.options && l.options._isObserver) {

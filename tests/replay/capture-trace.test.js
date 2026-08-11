@@ -689,6 +689,28 @@ describe('the floors cross a shadow boundary (spec §8 has no exceptions)', () =
     assert.strictEqual(events()[0].redacted, true);
   });
 
+  it('says nothing about a file input inside a shadow root (§13 through the host)', () => {
+    // The composed half of the file-input guard, which the T3 final review
+    // found unbitten (F-2). The retargeted target is the HOST, so the direct
+    // half cannot see the file input at all; the leak needs a host that
+    // proxies `.value`, which is what a custom file-picker element does. The
+    // Chromium battery drives the real `setInputFiles` (case 14) but cannot
+    // build this shape, because a real host does not proxy the value.
+    const { root, host, inner } = shadowPage('<input id="pick" type="file">');
+    Object.defineProperty(host, 'value', {
+      configurable: true, get: () => 'C:\\fakepath\\' + SENTINEL + '.txt',
+    });
+    const span = keyframe(root);
+    const { doc, env, events } = harness({}, { span });
+
+    doc.fire('input', retargeted({}, host, inner));
+    env.flushRaf();
+
+    assert.deepStrictEqual(events(), [],
+      'the composed target is a file input, so no channel may describe it');
+    assert.strictEqual(scan(events()).includes(SENTINEL), false);
+  });
+
   it('leaves an ordinary shadow interaction alone apart from the flag', () => {
     const { root, host, inner } = shadowPage('<input id="open" type="text">');
     inner.value = 'visible';

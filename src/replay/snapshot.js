@@ -25,7 +25,7 @@
 // ends up naming a node the player never received.
 
 import {
-  isRedacted, isInRedactedSubtree, markRedacted, isRedactionTainted,
+  isRedacted, isInRedactedSubtree, markRedacted, isRedactionTainted, isInTaintedSubtree,
 } from './redaction.js';
 
 var ELEMENT_NODE = 1;
@@ -99,28 +99,16 @@ export function isExcluded(node, opts) {
   return legacy || node.id === LEGACY_EXCLUDE_ID;
 }
 
-/**
- * True when this node is an excluded element or lives inside one.
- *
- * The subtree reading is what event capture needs (capture-trace.js): a
- * keystroke or a scroll inside an excluded container is state of a subtree the
- * file holds nothing of, so no channel may report it. The snapshot walk asks
- * the per-node question instead, because it descends the tree itself and stops
- * at the placeholder.
- *
- * Mirrors `isInRedactedSubtree` (redaction.js) deliberately: the two floors are
- * different rules — §4 withholds an element's whole state, §8 withholds
- * content — and reading identically at the call site is what keeps a caller
- * from checking one and forgetting the other.
- */
-export function isInExcludedSubtree(node, opts) {
-  var cur = node;
-  while (cur) {
-    if (isExcluded(cur, opts)) return true;
-    cur = cur.parentNode;
-  }
-  return false;
-}
+// The SUBTREE reading of exclusion — "this node or any ancestor is excluded" —
+// used to live here as `isInExcludedSubtree`, mirroring `isInRedactedSubtree`
+// (redaction.js) so a caller could not check one floor and forget the other.
+// It has no callers left: capture-trace fused it into `floorsFor`, which walks
+// the chain once and answers all three floors from that walk, and the snapshot
+// walk never needed it (it descends the tree itself and stops at the
+// placeholder, so `isExcluded` per node is its question). Removed rather than
+// kept as a second, drifting statement of the same rule — the reason both
+// floors were written to read identically in the first place (T3 final review,
+// F-4).
 
 // Canvas bitmap size (spec §4). The width/height IDL properties are the
 // browser's authoritative numbers and are always present there — a bare
@@ -407,8 +395,15 @@ export function serializeTree(root, span, opts) {
   opts = opts || {};
   if (!root) return null;
   span.registry.assignTree(root);
-  // Ancestors above the root count: a redaction selector matching a wrapper
-  // outside the observed root still redacts everything inside it.
+  // Ancestors above the root count, for BOTH halves of the question: a
+  // redaction selector matching a wrapper outside the observed root redacts
+  // everything inside it, and so does a tainted ancestor — which is what makes
+  // a subtree serialized MID-SPAN (a `dom.add` payload, a reveal) agree with
+  // the keyframe that will describe the same nodes later. `emitNode` already
+  // inherits taint downward once the walk is inside; this is the seed that
+  // carries the answer in from above the root (T3 final review, F-1).
   return emitNode(root, span, opts,
-    isInRedactedSubtree(root, opts.redactSelector), root.parentNode || null);
+    isInRedactedSubtree(root, opts.redactSelector)
+      || isInTaintedSubtree(root, opts.taint),
+    root.parentNode || null);
 }
