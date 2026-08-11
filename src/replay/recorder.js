@@ -34,7 +34,15 @@ export const REPLAY_DEFAULTS = {
   // DOM subtree). The budget covers events AND the initial DOM snapshot. ~8M chars
   // is far above any normal trial yet bounds a runaway before it breaks the tab or
   // the DataPipe/localStorage upload. Set null to disable.
-  maxCharsPerTrial: 8000000
+  maxCharsPerTrial: 8000000,
+  // Ceiling for the SESSION-level viewport stream (spec §2 `viewport_changes`).
+  // Both caps above are per-trial, so the one stream that outlives trials is the
+  // one they never see: a desktop drag-resize, or a mobile scroll with URL-bar
+  // chrome, yields up to two entries per frame per channel for as long as it
+  // lasts (measured: 5000 coalesced resizes → 365 KB while the trial buffer held
+  // one event). Consecutive-identical states are dropped before this counts, so
+  // 2000 distinct geometries (~150 KB) is far past any real session.
+  maxViewportChanges: 2000
 };
 
 // States: created → session ⇄ trial → stopped; destroyed is terminal.
@@ -140,6 +148,27 @@ export function createRecorder(userConfig) {
         });
       }
     }
+  }
+
+  // Set once, when the viewport stream hits its ceiling, so the note about it
+  // is recorded once rather than per dropped entry.
+  var viewportCapped = false;
+
+  // Two viewport entries describe the same geometry when every field but `t`
+  // agrees. Written generically rather than against the six §2 field names: the
+  // recorder is the sink for whatever shape the spec's ViewportState grows into.
+  function sameViewportState(a, b) {
+    var seen = 0;
+    for (var k in b) {
+      if (k === 't' || !Object.prototype.hasOwnProperty.call(b, k)) continue;
+      if (a[k] !== b[k]) return false;
+      seen++;
+    }
+    for (var j in a) {
+      if (j === 't' || !Object.prototype.hasOwnProperty.call(a, j)) continue;
+      seen--;
+    }
+    return seen === 0;
   }
 
   // Spec §5.7's total-stop signal, replacing v1's `ch:capture_stopped`. The
@@ -280,22 +309,43 @@ export function createRecorder(userConfig) {
     // its `t`, because v2 payloads are per-type shapes with nested blocks
     // (`camera`, `anchor`, `mods`, `extensions`) rather than a flat bag merged
     // onto a `kind`. `type` leads the wire, `t` follows it, matching how the
-    // fixtures read.
+    // fixtures read — and `t` is written AFTER the merge, so the sink owns the
+    // timestamp even if a caller ever puts one in the record.
     pushRecord: function (record, tOverride) {
-      storeEvent(Object.assign(
-        { type: record.type, t: tOverride != null ? tOverride : performance.now() },
-        record));
+      var e = Object.assign({ type: record.type, t: null }, record);
+      e.t = tOverride != null ? tOverride : performance.now();
+      storeEvent(e);
     },
 
     // Session-level viewport stream (spec §2). Not a segment event: the format
     // keeps viewport geometry in one session-wide array, so a resize that
     // happens between trials still lands somewhere.
+    //
+    // Two guards the per-trial caps cannot give this stream. A state identical
+    // to the last one says nothing, and a drag-resize settles into repeated
+    // identical states between frames, which is the storm case. Past the
+    // ceiling the stream stops growing and says so ONCE, through the same
+    // capture-failure channel every other capture-side anomaly uses (spec §9's
+    // vendor namespace on the wire). It deliberately does NOT set
+    // `captureStopped`: spec §5.7's truncation means event capture stopped, and
+    // a bounded metadata stream is not that.
     pushViewportChange: function (entry, tOverride) {
       if (state === 'destroyed') {
         throw new Error('[cyborg-hunter-replay] viewport change pushed to a destroyed recorder');
       }
       if (state === 'created' || state === 'stopped') return;
-      session.viewportChanges.push(Object.assign({}, entry, {
+      var changes = session.viewportChanges;
+      if (changes.length && sameViewportState(changes[changes.length - 1], entry)) return;
+      var cap = config.maxViewportChanges;
+      if (cap != null && changes.length >= cap) {
+        if (!viewportCapped) {
+          viewportCapped = true;
+          recorder.captureFailure('viewport_changes', new Error(
+            'viewport_changes cap reached (' + cap + '); later viewport geometry is not recorded'));
+        }
+        return;
+      }
+      changes.push(Object.assign({}, entry, {
         t: tOverride != null ? tOverride : performance.now()
       }));
     },

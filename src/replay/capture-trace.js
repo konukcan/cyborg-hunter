@@ -51,6 +51,11 @@
 //      target resolves. On trace tier (no DOM capture at all) nothing resolves,
 //      and the recording is honestly node-free.
 //
+// Both floors are asked about the RETARGETED target and the composed one, so a
+// field inside an open shadow root cannot escape them (see `composedTarget`),
+// and both verdicts are computed once per event (see `targetFacts`) because
+// each one costs an ancestor walk and CH's studies are typing-heavy.
+//
 // Testability: the environment (doc/win/now/raf) is injectable, and so is the
 // capture span. In the browser, callers omit `env` and the real globals are
 // used.
@@ -143,8 +148,26 @@ export function attachTraceCapture(rec, env) {
     return !!el && isInExcludedSubtree(el, opts);
   }
 
-  // The node id to address this element by, or null when the file holds
-  // nothing on its ancestor path.
+  // The REAL target of an event that crossed a shadow boundary, or null.
+  //
+  // At a document-level listener the browser retargets `e.target` to the shadow
+  // HOST, and both floor predicates walk `parentNode`, which stops at the
+  // ShadowRoot. So a password field inside an open shadow root answered "not
+  // redacted" and shipped its keystrokes, and spec §8's floor admits no
+  // exception: password values are never recorded, in any channel. §13's
+  // shadow-DOM limit governs what can be RECONSTRUCTED and licenses nothing out
+  // of a redacted field. `composedPath()[0]` is the node the interaction
+  // actually reached; CLOSED roots hide it, which is the same limit §13 already
+  // records.
+  function composedTarget(e) {
+    try {
+      if (!e || typeof e.composedPath !== 'function') return null;
+      var path0 = e.composedPath()[0];
+      return path0 && path0 !== e.target ? path0 : null;
+    } catch (err) { return null; }  // composedPath unavailable
+  }
+
+  // The nearest ancestor-or-self the FILE holds, with its node id.
   //
   // The walk answers spec §7's three cases in one pass: a normal target
   // resolves to itself; a target inside an excluded subtree resolves to the
@@ -153,17 +176,42 @@ export function attachTraceCapture(rec, env) {
   // model rather than from re-deriving it off the live DOM, for the reason
   // initial-state.js gives: the DOM can have moved since the walk that produced
   // the file, and the file is what the player holds.
-  function nodeIdFor(el) {
-    if (!span) return null;
+  function heldAncestor(el) {
+    if (!span) return { id: null, el: null };
     var cur = el;
     while (cur) {
       if (span.delivery.holds(cur)) {
         var id = span.registry.peekId(cur);
-        return id == null ? null : id;
+        return { id: id == null ? null : id, el: cur };
       }
       cur = cur.parentNode;
     }
-    return null;
+    return { id: null, el: null };
+  }
+
+  function nodeIdFor(el) { return heldAncestor(el).id; }
+
+  // Everything a discrete handler needs to know about its target, asked ONCE.
+  //
+  // Each question is an ancestor walk, and CH's studies are typing-heavy: an
+  // aligned key.down used to ask both floors in the handler and again inside
+  // anchorFor, then resolve the node a third time, five walks of one chain with
+  // a `matches()` call at every step. The verdicts travel with the event
+  // instead. Both floors are evaluated against the retargeted target AND the
+  // composed one, fail-closed, and both sides are evaluated (no short-circuit)
+  // so each marks its own redaction taint.
+  function targetFacts(e) {
+    var el = e && e.target;
+    var composed = composedTarget(e);
+    var redacted = isRedactedTarget(el);
+    if (composed && isRedactedTarget(composed)) redacted = true;
+    var excluded = isExcludedTarget(el);
+    if (composed && isExcludedTarget(composed)) excluded = true;
+    var held = heldAncestor(el);
+    return {
+      el: el, composed: composed, redacted: redacted, excluded: excluded,
+      node: held.id, heldEl: held.el
+    };
   }
 
   function clientDims() {
@@ -212,47 +260,47 @@ export function attachTraceCapture(rec, env) {
   // the smoke fixture's Finish click was lost to exactly that).
   //
   // `tag` and `rect` describe the EVENT TARGET, `node` names the nearest node
-  // the file holds. They can differ (a click inside an excluded subtree names
-  // the placeholder), and the target's own geometry is still the truthful
-  // answer to "what was under the pointer" — the player's cross-check is free
-  // to read the disagreement as uncertainty, which is what it is for. The
-  // alternative, describing the resolved node instead, would misreport a click
-  // on an element inserted and clicked within one task, before the observer
-  // flushed.
+  // the file holds. They can differ, and the target's own geometry is still the
+  // truthful answer to "what was under the pointer" — the player's cross-check
+  // is free to read the disagreement as uncertainty, which is what it is for.
+  // Describing the resolved node in every case would misreport a click on an
+  // element inserted and clicked within one task, before the observer flushed.
+  //
+  // ONE case is clamped to the resolved node: a target strictly INSIDE an
+  // excluded subtree. There, `tag` and `rect` would describe the interior of a
+  // subtree spec §4 keeps out of the file, and the file holds nothing to
+  // compare them against anyway. A click ON the excluded element needs no
+  // clamp, since §4 puts that element's own tag in the tree.
   //
   // `id` is OMITTED (not nulled) when identity is withheld — spec §6 says
   // omitted for redacted targets, §4 says events inside an excluded subtree
   // carry no anchor identity — so "no id attribute" (null) stays
   // distinguishable from "withheld" (absent).
-  function anchorFor(e) {
-    var el = e && e.target;
+  function anchorFor(facts) {
+    var el = facts.el;
     if (!el || !el.tagName) return null;
-    var a = { tag: el.tagName.toLowerCase() };
-    if (!isRedactedTarget(el) && !isExcludedTarget(el)) a.id = el.id || null;
+    var described = (facts.excluded && facts.heldEl && facts.heldEl !== el)
+      ? facts.heldEl : el;
+    var a = { tag: (described.tagName || '').toLowerCase() };
+    if (!facts.redacted && !facts.excluded) a.id = described.id || null;
     try {
-      if (typeof el.getBoundingClientRect === 'function') {
-        var r = el.getBoundingClientRect();
+      if (typeof described.getBoundingClientRect === 'function') {
+        var r = described.getBoundingClientRect();
         a.rect = { x: r10(r.left), y: r10(r.top), w: r10(r.width), h: r10(r.height) };
       }
     } catch (err) { /* rect stays absent — viewer treats as unverifiable */ }
-    a.node = nodeIdFor(el);
+    a.node = facts.node;
     return a;
   }
 
-  // Shadow retargeting, detected at EVENT time: for OPEN shadow roots the
-  // composed path's first entry is the real (shadow-internal) target while
-  // e.target is the retargeted host — regardless of when attachShadow() ran (a
-  // post-snapshot attach leaves no mutation record). Shadow content is a known
-  // capture limit (spec §13), and "this interaction hit something the file
-  // cannot contain" is CH's own note about a standard event, so it rides in the
-  // vendor namespace (spec §9) rather than as an extra anchor field. CLOSED
-  // roots are undetectable from outside by design.
-  function noteShadowRetarget(record, e) {
-    try {
-      if (typeof e.composedPath !== 'function') return record;
-      var path0 = e.composedPath()[0];
-      if (path0 && path0 !== e.target) withVendorExtension(record, { shadow_retarget: true });
-    } catch (err) { /* composedPath unavailable — nothing to note */ }
+  // Shadow retargeting, noted for the player: the interaction reached a node no
+  // recording can contain (spec §13), so the anchor describes the host instead
+  // of what was really hit. That is CH's own note about a standard event, so it
+  // rides in the vendor namespace (spec §9) rather than as an extra anchor
+  // field. Open roots only; closed roots are undetectable from outside by
+  // design, which is the same limit §13 records.
+  function noteShadowRetarget(record, facts) {
+    if (facts.composed) withVendorExtension(record, { shadow_retarget: true });
     return record;
   }
 
@@ -315,18 +363,31 @@ export function attachTraceCapture(rec, env) {
     };
   }
 
-  function flushResize() {
-    resizeFlushQueued = false;
+  function emitResize() {
     if (!pendingResize) return;
     rec.pushViewportChange(viewportState(), pendingResize.t);
     pendingResize = null;
   }
 
-  function flushVv() {
-    vvFlushQueued = false;
+  function emitVv() {
     if (!pendingVv) return;
     rec.pushViewportChange(viewportState(), pendingVv.t);
     pendingVv = null;
+  }
+
+  // Both viewport channels write into ONE array (spec §2) whose entries keep
+  // their original timestamps, so the order they are emitted in IS the order
+  // the file carries — and `viewport_changes` must be time-sorted (spec §7).
+  // A fixed resize-then-vv order wrote [1001, 1000] whenever a pinch preceded a
+  // resize in the same flush, which mobile keyboard-open and URL-bar
+  // transitions produce as an ordinary path. RAF coalescing makes the two
+  // channels' flush callbacks arrive in registration order rather than
+  // timestamp order, so BOTH callbacks drain through here.
+  function flushViewport() {
+    resizeFlushQueued = false;
+    vvFlushQueued = false;
+    var vvFirst = pendingVv && pendingResize && pendingVv.t < pendingResize.t;
+    if (vvFirst) { emitVv(); emitResize(); } else { emitResize(); emitVv(); }
   }
 
   // Synchronous camera flush — called at the top of every discrete-event
@@ -338,15 +399,14 @@ export function attachTraceCapture(rec, env) {
   // this and flush late the same way.
   function flushCameraNow() {
     flushScrolls();
-    flushResize();
-    flushVv();
+    flushViewport();
   }
 
   // Every discrete interaction carries both alignment blocks or neither (spec
   // §6: complete blocks, no delta encoding).
-  function withAlignment(record, e) {
+  function withAlignment(record, facts) {
     record.camera = cameraBlock();
-    var anchor = anchorFor(e);
+    var anchor = anchorFor(facts);
     if (anchor) record.anchor = anchor;
     return record;
   }
@@ -369,13 +429,14 @@ export function attachTraceCapture(rec, env) {
     .forEach(function (pair) {
       rec.addListener(doc, pair[0], guard(rec, 'mouse', function (e) {
         flushCameraNow();
+        var facts = targetFacts(e);
         var record = withAlignment({
           type: pair[1],
           x: clientX(e), y: clientY(e),
           button: typeof e.button === 'number' ? e.button : 0,
-          target: nodeIdFor(e.target)
-        }, e);
-        rec.pushRecord(noteShadowRetarget(record, e), now());
+          target: facts.node
+        }, facts);
+        rec.pushRecord(noteShadowRetarget(record, facts), now());
       }), { passive: true, capture: true });
     });
 
@@ -391,9 +452,10 @@ export function attachTraceCapture(rec, env) {
   if (config.keys !== 'off') {
     [['keydown', 'key.down'], ['keyup', 'key.up']].forEach(function (pair) {
       rec.addListener(doc, pair[0], guard(rec, 'keys', function (e) {
-        var el = e.target;
-        if (isRedactedTarget(el) || isExcludedTarget(el)) {
-          rec.pushRecord({ type: pair[1], redacted: true }, now());
+        var facts = targetFacts(e);
+        if (facts.redacted || facts.excluded) {
+          rec.pushRecord(
+            noteShadowRetarget({ type: pair[1], redacted: true }, facts), now());
           return;
         }
         var aligned = pair[1] === 'key.down' && !e.repeat;
@@ -406,10 +468,10 @@ export function attachTraceCapture(rec, env) {
             alt: !!e.altKey, meta: !!e.metaKey
           },
           repeat: !!e.repeat,
-          target: nodeIdFor(el)
+          target: facts.node
         };
-        if (aligned) withAlignment(record, e);
-        rec.pushRecord(record, now());
+        if (aligned) withAlignment(record, facts);
+        rec.pushRecord(noteShadowRetarget(record, facts), now());
       }), true); // capture phase — before frameworks can stopPropagation
     });
   }
@@ -432,47 +494,49 @@ export function attachTraceCapture(rec, env) {
     return { text: typeof text === 'string' ? text : null, html: html };
   }
 
-  function clipboardRecord(type, target, read) {
+  function clipboardRecord(type, facts, read) {
     var record = {
       type: type,
-      target: nodeIdFor(target),
+      target: facts.node,
       text: null, html: null,
       len: read && read.text != null ? read.text.length : null
     };
-    // Redacted target: content withheld, length allowed (spec §5.3). An
-    // EXCLUDED target reaches the same wire shape without the marker — §5.3's
-    // marker names redaction, and length-only is a conforming mode in its own
-    // right, so content mode simply degrades there.
-    var redacted = isRedactedTarget(target);
-    if (redacted) record.redacted = true;
-    var withheld = redacted || isExcludedTarget(target);
-    if (config.clipboardContent && !withheld && read) {
+    // Redacted target: content withheld, length allowed (spec §5.3, which
+    // permits `len` under the marker). An EXCLUDED target loses the length too:
+    // this module's floor #2 withholds an excluded element's state whole, and
+    // `input.value` already refuses even `value_len` for that same element, so
+    // a surviving clipboard length would be the one number that escaped.
+    if (facts.redacted) record.redacted = true;
+    if (facts.excluded) record.len = null;
+    if (config.clipboardContent && !facts.redacted && !facts.excluded && read) {
       record.text = read.text;
       record.html = read.html;
       record.len = null;
     }
-    return record;
+    return noteShadowRetarget(record, facts);
   }
 
   rec.addListener(doc, 'paste', guard(rec, 'clipboard', function (e) {
     flushCameraNow();
+    var facts = targetFacts(e);
     var data = e.clipboardData;
     var read = readClipboard(function (fmt) { return data.getData(fmt); });
-    rec.pushRecord(clipboardRecord('clipboard.paste', e.target, read), now());
+    rec.pushRecord(clipboardRecord('clipboard.paste', facts, read), now());
   }), true);
   rec.addListener(doc, 'copy', guard(rec, 'clipboard', function (e) {
     flushCameraNow();
-    rec.pushRecord(clipboardRecord('clipboard.copy', e && e.target, null), now());
+    rec.pushRecord(clipboardRecord('clipboard.copy', targetFacts(e), null), now());
   }), true);
   rec.addListener(doc, 'cut', guard(rec, 'clipboard', function (e) {
     flushCameraNow();
-    rec.pushRecord(clipboardRecord('clipboard.cut', e && e.target, null), now());
+    rec.pushRecord(clipboardRecord('clipboard.cut', targetFacts(e), null), now());
   }), true);
   rec.addListener(doc, 'drop', guard(rec, 'clipboard', function (e) {
     flushCameraNow();
+    var facts = targetFacts(e);
     var data = e.dataTransfer;
     var read = readClipboard(function (fmt) { return data.getData(fmt); });
-    rec.pushRecord(clipboardRecord('clipboard.drop', e.target, read), now());
+    rec.pushRecord(clipboardRecord('clipboard.drop', facts, read), now());
   }), true);
 
   // ── Input values (RAF-coalesced per target) ──
@@ -504,12 +568,17 @@ export function attachTraceCapture(rec, env) {
     return out;
   }
 
-  function inputRecordFor(target) {
+  // `composed` is the shadow-internal target captured at DISPATCH time, since
+  // composedPath() is only meaningful during dispatch and this channel reads
+  // its value a frame later.
+  function inputRecordFor(target, composed) {
     // Spec §4: nothing about an excluded element's state, not even a length.
     if (isExcludedTarget(target)) return null;
+    if (composed && isExcludedTarget(composed)) return null;
     var node = nodeIdFor(target);
     if (node == null) return null;              // spec §5.2 requires a node id
     var redacted = isRedactedTarget(target);
+    if (composed && isRedactedTarget(composed)) redacted = true;
     var type = String(target.type || '').toLowerCase();
     if (target.tagName === 'SELECT') {
       // No redacted variant exists for input.select or input.checked (spec
@@ -534,15 +603,18 @@ export function attachTraceCapture(rec, env) {
 
   function flushInputs() {
     inputFlushQueued = false;
-    pendingInputs.forEach(function (t, target) {
-      var record = inputRecordFor(target);
-      if (record) rec.pushRecord(record, t);
+    pendingInputs.forEach(function (pending, target) {
+      var record = inputRecordFor(target, pending.composed);
+      if (record) {
+        if (pending.composed) withVendorExtension(record, { shadow_retarget: true });
+        rec.pushRecord(record, pending.t);
+      }
     });
     pendingInputs.clear();
   }
   rec.addListener(doc, 'input', guard(rec, 'input', function (e) {
     if (!e.target) return;
-    pendingInputs.set(e.target, now());
+    pendingInputs.set(e.target, { t: now(), composed: composedTarget(e) });
     if (!inputFlushQueued) {
       inputFlushQueued = true;
       raf(guard(rec, 'input', flushInputs));
@@ -610,9 +682,10 @@ export function attachTraceCapture(rec, env) {
 
   rec.addListener(doc, 'touchstart', guard(rec, 'touch', function (e) {
     flushCameraNow();
+    var facts = targetFacts(e);
     var record = withAlignment(
-      { type: 'touch.start', touches: touchList(e.touches) }, e);
-    rec.pushRecord(noteShadowRetarget(record, e), now());
+      { type: 'touch.start', touches: touchList(e.touches) }, facts);
+    rec.pushRecord(noteShadowRetarget(record, facts), now());
   }), { passive: true, capture: true });
   var touchPending = false;
   var lastTouches = null;
@@ -633,9 +706,10 @@ export function attachTraceCapture(rec, env) {
   }), { passive: true, capture: true });
   rec.addListener(doc, 'touchend', guard(rec, 'touch', function (e) {
     flushCameraNow();
+    var facts = targetFacts(e);
     var record = withAlignment(
-      { type: 'touch.end', touches: touchList(e.changedTouches) }, e);
-    rec.pushRecord(noteShadowRetarget(record, e), now());
+      { type: 'touch.end', touches: touchList(e.changedTouches) }, facts);
+    rec.pushRecord(noteShadowRetarget(record, facts), now());
   }), { passive: true, capture: true });
 
   // ── Focus / visibility ──
@@ -659,7 +733,7 @@ export function attachTraceCapture(rec, env) {
     pendingResize = { t: now() };
     if (!resizeFlushQueued) {
       resizeFlushQueued = true;
-      raf(guard(rec, 'viewport', flushResize));
+      raf(guard(rec, 'viewport', flushViewport));
     }
   }));
   // visualViewport: size/scale AND pan (scroll). Pinch-pan does not move the
@@ -672,7 +746,7 @@ export function attachTraceCapture(rec, env) {
         pendingVv = { t: now() };
         if (!vvFlushQueued) {
           vvFlushQueued = true;
-          raf(guard(rec, 'viewport', flushVv));
+          raf(guard(rec, 'viewport', flushViewport));
         }
       }));
     });

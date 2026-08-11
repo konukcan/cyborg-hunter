@@ -555,6 +555,88 @@ describe('redaction — the spec §5.2 variants, both directions', () => {
   });
 });
 
+describe('the floors cross a shadow boundary (spec §8 has no exceptions)', () => {
+  // At a document-level listener the browser retargets `e.target` to the HOST,
+  // and both floor predicates walk parentNode, which stops at the ShadowRoot.
+  // composedPath()[0] is the node the interaction actually reached.
+  function shadowPage(inner) {
+    const win = new Window({ url: 'https://example.org/exp/' });
+    win.document.body.innerHTML = '<div id="stage"><div id="host"></div></div>';
+    const host = win.document.getElementById('host');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = inner;
+    return {
+      root: win.document.body.firstElementChild, host, shadow,
+      inner: shadow.querySelector('input, div'),
+    };
+  }
+  const retargeted = (extra, host, real) =>
+    ({ ...extra, target: host, composedPath: () => [real, host] });
+
+  it('never records keystrokes typed into a password field inside a shadow root', () => {
+    const { root, host, inner } = shadowPage('<input id="pw" type="password">');
+    const span = keyframe(root);
+    const { doc, events } = harness({ keys: 'full', redactSelector: null }, { span });
+
+    doc.fire('keydown', retargeted({ key: 'S', code: 'KeyS' }, host, inner));
+
+    assert.deepStrictEqual(events()[0], {
+      type: 'key.down', t: 1000, redacted: true,
+      extensions: { 'cyborg-hunter': { shadow_retarget: true } },
+    }, 'spec §8: password values are never recorded, in any channel');
+  });
+
+  it('redacts input and clipboard for a shadow-internal redacted field', () => {
+    const { root, host, inner } = shadowPage(
+      '<input id="secret" type="text" data-ch-redact="">');
+    inner.value = SENTINEL;
+    const span = keyframe(root);
+    const { doc, env, events } = harness(
+      { redactSelector: '[data-ch-redact]', clipboardContent: true }, { span });
+
+    doc.fire('input', retargeted({}, host, inner));
+    doc.fire('paste', retargeted(
+      { clipboardData: { getData: () => SENTINEL } }, host, inner));
+    env.flushRaf();
+
+    assert.strictEqual(events()[0].redacted, true, 'clipboard.paste is redacted');
+    assert.strictEqual(events()[1].redacted, true, 'input.value is redacted');
+    assert.strictEqual(scan(events()).includes(SENTINEL), false);
+  });
+
+  it('withholds state for an excluded element inside a shadow root', () => {
+    const { root, host, inner } = shadowPage(
+      '<input id="bait" type="text" data-record-exclude="">');
+    inner.value = SENTINEL;
+    const span = keyframe(root);
+    const { doc, env, events } = harness({ keys: 'full' }, { span });
+
+    doc.fire('keydown', retargeted({ key: 'z', code: 'KeyZ' }, host, inner));
+    doc.fire('input', retargeted({}, host, inner));
+    env.flushRaf();
+
+    assert.deepStrictEqual(events().map(e => e.type), ['key.down'],
+      'the input event is subtracted; the keystroke keeps only its timing');
+    assert.strictEqual(events()[0].redacted, true);
+  });
+
+  it('leaves an ordinary shadow interaction alone apart from the flag', () => {
+    const { root, host, inner } = shadowPage('<input id="open" type="text">');
+    inner.value = 'visible';
+    const span = keyframe(root);
+    const { doc, env, events } = harness({ keys: 'full' }, { span });
+
+    doc.fire('keydown', retargeted({ key: 'a', code: 'KeyA' }, host, inner));
+    doc.fire('input', retargeted({}, host, inner));
+    env.flushRaf();
+
+    assert.strictEqual(events()[0].key, 'a');
+    assert.strictEqual(events()[1].type, 'input.value');
+    assert.strictEqual(events()[1].node, span.registry.peekId(host),
+      'the host is the only node the file holds (spec §13)');
+  });
+});
+
 // ── exclusion (spec §4) ────────────────────────────────────────────────────
 
 describe('exclusion floor (spec §4) — the guard-bait shape', () => {
@@ -643,6 +725,54 @@ describe('exclusion floor (spec §4) — the guard-bait shape', () => {
       tag: 'input', rect: { x: 5, y: 6, w: 7, h: 8 }, node: span.registry.peekId(bait),
     });
     assert.strictEqual(events()[0].target, span.registry.peekId(bait));
+  });
+
+  it('clamps anchor tag and rect to the placeholder for a descendant', () => {
+    // A click ON the excluded element needs no clamp: §4 puts that element's
+    // tag in the tree. A click on something INSIDE it would otherwise give the
+    // interior's tag and geometry, neither of which the file holds.
+    const { page: p, span } = baitPage();
+    const box = p.getElementById('baitbox');
+    const inner = p.getElementById('inner');
+    box.getBoundingClientRect = () => ({ left: 10, top: 20, width: 200, height: 100 });
+    inner.getBoundingClientRect = () => ({ left: 15, top: 25, width: 80, height: 20 });
+
+    const { doc, events } = harness({}, { span });
+    doc.fire('click', { clientX: 16, clientY: 26, button: 0, target: inner });
+    doc.fire('click', { clientX: 11, clientY: 21, button: 0, target: box });
+
+    assert.deepStrictEqual(events()[0].anchor, {
+      tag: 'div', rect: { x: 10, y: 20, w: 200, h: 100 }, node: span.registry.peekId(box),
+    }, 'the descendant is described by the node the file holds');
+    assert.deepStrictEqual(events()[1].anchor, {
+      tag: 'div', rect: { x: 10, y: 20, w: 200, h: 100 }, node: span.registry.peekId(box),
+    }, 'a click on the element itself is unchanged');
+  });
+
+  it('withholds the clipboard length too, in both modes', () => {
+    // The module's own floor: not a typed value, not its length. input.value
+    // refuses `value_len` for the same element, so a clipboard `len` would be
+    // the one number that escapes.
+    const { page: p, span } = baitPage();
+    const bait = p.getElementById('bait');
+    for (const clipboardContent of [false, true]) {
+      const { doc, events } = harness({ clipboardContent }, { span });
+      doc.fire('paste', { target: bait, clipboardData: { getData: () => SENTINEL } });
+      assert.deepStrictEqual(events()[0], {
+        type: 'clipboard.paste', t: 1000, target: span.registry.peekId(bait),
+        text: null, html: null, len: null,
+      }, 'clipboardContent=' + clipboardContent);
+    }
+    // The redacted counterpart KEEPS its length: spec §5.3 allows it there.
+    const { root, doc: p2 } = page(
+      '<div id="stage"><input id="s" type="text" data-ch-redact=""></div>');
+    const span2 = keyframe(root, { redactSelector: '[data-ch-redact]' });
+    const h = harness({ redactSelector: '[data-ch-redact]' }, { span: span2 });
+    h.doc.fire('paste', {
+      target: p2.getElementById('s'), clipboardData: { getData: () => SENTINEL },
+    });
+    assert.strictEqual(h.events()[0].len, SENTINEL.length);
+    assert.strictEqual(h.events()[0].redacted, true);
   });
 
   it('holds for the LEGACY honeypot markers, and keepBait turns those off', () => {
@@ -839,6 +969,69 @@ describe('viewport changes are session-level, not events (spec §2)', () => {
     env.flushRaf();
     assert.strictEqual(rec.getState().viewportChanges[0].t, 1000);
   });
+
+  it('drains both channels in timestamp order when they are pending together', () => {
+    // Both channels write into ONE array whose entries keep their original
+    // timestamps, and spec §7 requires it sorted (validator.js:107). A fixed
+    // resize-then-vv flush order wrote [1001, 1000]; mobile keyboard-open and
+    // URL-bar transitions fire the two together, so this is an ordinary path.
+    //
+    // Both emits read the state live, so the pair is field-identical and the
+    // dedup below collapses it — which means the flush ORDER now decides which
+    // timestamp survives. The earlier one is the right answer: it is when that
+    // geometry was first observable.
+    const { rec, doc, win, env } = harness({});
+    const vv = { scale: 1, offsetLeft: 0, offsetTop: 0, addEventListener() {} };
+    const vvHandlers = [];
+    vv.addEventListener = (ev, fn) => vvHandlers.push([ev, fn]);
+    win.visualViewport = vv;
+    attachTraceCapture(rec, { ...env, win });
+
+    vvHandlers.find(([ev]) => ev === 'scroll')[1]({});   // vv at t=1000
+    vv.scale = 2;
+    env.advance(1);
+    win.innerWidth = 640;
+    win.fire('resize', {});                              // resize at t=1001
+    env.advance(1);
+    doc.fire('click', { clientX: 1, clientY: 1, button: 0 });  // flushes both
+
+    const ts = rec.getState().viewportChanges.map(c => c.t);
+    assert.deepStrictEqual(ts, [...ts].sort((a, b) => a - b),
+      'viewport_changes must be time-sorted (spec §7): got ' + JSON.stringify(ts));
+    assert.deepStrictEqual(ts, [1000],
+      'the vv change is pending first, so it is emitted first');
+  });
+
+  it('drops a state identical to the one before it', () => {
+    // A drag-resize settles into repeated identical states between frames, and
+    // the stream is session-level, so the per-trial caps never see it: 5000
+    // coalesced resizes measured at 5002 entries / 365 KB before this.
+    const { rec, win, env } = harness({});
+    for (let i = 0; i < 50; i++) {
+      win.innerWidth = 800;                // same state every time
+      win.fire('resize', {});
+      env.flushRaf();
+      env.advance(16);
+    }
+    assert.strictEqual(rec.getState().viewportChanges.length, 1);
+  });
+
+  it('bounds the stream and records the drop once', () => {
+    const { rec, win, env } = harness({ maxViewportChanges: 3 });
+    for (let i = 0; i < 20; i++) {
+      win.innerWidth = 800 - i;            // a genuinely new state each time
+      win.fire('resize', {});
+      env.flushRaf();
+      env.advance(16);
+    }
+    const state = rec.getState();
+    assert.strictEqual(state.viewportChanges.length, 3);
+    assert.deepStrictEqual(
+      state.captureFailures.map(f => f.channel), ['viewport_changes'],
+      'the cap is recorded once, in the channel the vendor extension carries');
+    assert.strictEqual(state.captureStopped, false,
+      'a capped metadata stream is not a truncated recording (spec §5.7)');
+  });
 });
 
 // ── clipboard modes (spec §5.3) ────────────────────────────────────────────
@@ -904,6 +1097,58 @@ describe('recording lifecycle (spec §5.7)', () => {
       'the configured limit is CH diagnostics, so it rides in the vendor namespace');
     assert.strictEqual(rec.getState().captureStopped, true);
     assertStrict(events());
+  });
+});
+
+describe('one verdict per discrete event (per-keystroke cost)', () => {
+  // CH's studies are typing-heavy, and an aligned key.down used to ask both
+  // floors in the handler and again inside anchorFor: two ancestor walks of the
+  // same chain, each calling matches() at every step. Counting matches() calls
+  // pins the consolidation, since the redaction predicate is the only one that
+  // uses a selector.
+  function countingChain(depth) {
+    const win = new Window({ url: 'https://example.org/exp/' });
+    win.document.body.innerHTML =
+      '<div id="stage">' + '<div>'.repeat(depth) + '<input id="leaf" type="text">' +
+      '</div>'.repeat(depth) + '</div>';
+    const root = win.document.body.firstElementChild;
+    const span = keyframe(root, { redactSelector: '[data-ch-redact]' });
+    const leaf = win.document.getElementById('leaf');
+    let calls = 0;
+    let chainLength = 0;
+    for (let el = leaf; el; el = el.parentElement) {
+      const real = el.matches.bind(el);
+      el.matches = (sel) => { calls++; return real(sel); };
+      chainLength++;
+    }
+    return { span, leaf, calls: () => calls, chainLength };
+  }
+
+  it('walks the ancestor chain once per floor on an aligned key.down', () => {
+    const chain = countingChain(6);
+    const { doc } = harness({ keys: 'full', redactSelector: '[data-ch-redact]' },
+      { span: chain.span });
+    const before = chain.calls();
+    doc.fire('keydown', { key: 'a', code: 'KeyA', target: chain.leaf });
+    const walked = chain.calls() - before;
+    assert.ok(walked <= chain.chainLength,
+      `one redaction walk of the ${chain.chainLength}-element chain, got ` +
+      `${walked} matches() calls (${walked / chain.chainLength} walks)`);
+  });
+
+  it('resolves the node id once for the event and its anchor', () => {
+    const { root, doc: p } = page('<div id="stage"><button id="go">Go</button></div>');
+    const span = keyframe(root);
+    const go = p.getElementById('go');
+    let holds = 0;
+    const realHolds = span.delivery.holds;
+    span.delivery.holds = (n) => { holds++; return realHolds(n); };
+
+    const { doc, events } = harness({}, { span });
+    doc.fire('click', { clientX: 1, clientY: 1, button: 0, target: go });
+
+    assert.strictEqual(events()[0].target, events()[0].anchor.node);
+    assert.strictEqual(holds, 1, 'one delivery lookup, shared by target and anchor');
   });
 });
 

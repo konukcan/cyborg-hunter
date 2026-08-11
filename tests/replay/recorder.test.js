@@ -170,3 +170,51 @@ describe('recorder lifecycle', () => {
     assert.throws(() => rec.pushEvent('click', {}), /destroyed/);
   });
 });
+
+describe('v2 sinks: pushRecord and pushViewportChange', () => {
+  const VP = { w: 800, h: 600, dpr: 1, scale: 1, offset_x: 0, offset_y: 0 };
+
+  it('stamps the record time, even when the record carries one', () => {
+    // `type` and `t` lead the wire, so the caller's fields merge after them —
+    // which let a record carrying its own `t` silently override the stamp the
+    // capture channel passed. Records never carry `t`; the sink owns it.
+    const rec = freshRecorder();
+    rec.startSession();
+    rec.pushRecord({ type: 'mouse.move', x: 1, y: 2, t: 99999 }, 1234);
+    const e = rec.getState().trials[0].events[0];
+    assert.strictEqual(e.t, 1234);
+    assert.deepStrictEqual(Object.keys(e), ['type', 't', 'x', 'y']);
+  });
+
+  it('drops a viewport state identical to the one before it', () => {
+    const rec = freshRecorder();
+    rec.startSession();
+    rec.pushViewportChange(VP, 10);
+    rec.pushViewportChange({ ...VP }, 20);          // same state, later time
+    rec.pushViewportChange({ ...VP, scale: 2 }, 30); // a real change
+    assert.deepStrictEqual(rec.getState().viewportChanges.map(c => c.t), [10, 30]);
+  });
+
+  it('caps the stream and records the drop once, without claiming truncation', () => {
+    const rec = freshRecorder({ maxViewportChanges: 2 });
+    rec.startSession();
+    for (let i = 0; i < 10; i++) rec.pushViewportChange({ ...VP, w: 800 + i }, i);
+    const s = rec.getState();
+    assert.strictEqual(s.viewportChanges.length, 2);
+    assert.strictEqual(s.captureFailures.length, 1);
+    assert.match(s.captureFailures[0].message, /viewport/i);
+    assert.strictEqual(s.captureStopped, false);
+  });
+
+  it('refuses pushes outside the recording window and after destroy', () => {
+    const rec = freshRecorder();
+    rec.pushViewportChange(VP, 1);           // before startSession
+    rec.startSession();
+    rec.pushViewportChange(VP, 2);
+    rec.stopSession('finished');
+    rec.pushViewportChange({ ...VP, w: 999 }, 3);
+    assert.deepStrictEqual(rec.getState().viewportChanges.map(c => c.t), [2]);
+    rec.destroy();
+    assert.throws(() => rec.pushViewportChange(VP, 4), /destroyed/);
+  });
+});

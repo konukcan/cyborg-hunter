@@ -273,13 +273,19 @@ export function carriesChildren(el, excluded) {
  * null when nothing on the path to `root` does (including `node` being outside
  * the observed root entirely).
  *
- * Two callers, two readings of the same answer:
- *   - event targets and anchors (Task 5) take the returned node as their
- *     reference — a target inside an excluded subtree resolves to the
- *     placeholder, exactly as spec §7 requires;
- *   - `dom.remove` (mutations.js) emits only when the answer IS the node,
- *     because removing something the player never received is at best a
- *     no-op and at worst (resolved to a placeholder) deletes the wrong node.
+ * The caller is the mutation mapper (mutations.js), which emits a patch only
+ * when the answer IS the node: removing or re-describing something the player
+ * never received is at best a no-op and at worst (resolved to a placeholder)
+ * touches the wrong node.
+ *
+ * Event capture asks the same question a different way. capture-trace.js needs
+ * "the nearest node the FILE holds" for a target or an anchor, and reads it off
+ * the span's delivery model (delivery.js) rather than re-deriving it here: the
+ * live DOM can have moved since the walk that produced the file, and the file
+ * is what the player holds. This function stays the answer for callers that are
+ * looking at the tree as it is, and the two must agree about exclusion
+ * placeholders — which they do, because `emitNode` delivers the placeholder and
+ * not its children.
  *
  * `registry.peekId` answers "was it numbered", which is not the same question:
  * assignTree numbers unconditionally, so scripts and hidden subtrees peek
