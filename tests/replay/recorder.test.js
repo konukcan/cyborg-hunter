@@ -74,7 +74,7 @@ describe('recorder lifecycle', () => {
     assert.strictEqual(s.endReason, 'finished');
   });
 
-  it('event cap stops capture with one ch:capture_stopped marker', () => {
+  it('event cap stops capture with one recording.capture_stopped marker', () => {
     const rec = freshRecorder({ maxEventsPerTrial: 3 });
     rec.startSession();
     rec.startTrial({ trialId: 't1' });
@@ -83,7 +83,11 @@ describe('recorder lifecycle', () => {
     const s = rec.getState();
     const events = s.trials[0].events;
     assert.strictEqual(events.length, 4, '3 events + 1 stop marker');
-    assert.strictEqual(events[3].kind, 'ch:capture_stopped');
+    // Spec §5.7's standard total-stop signal; the configured limit that was
+    // crossed is CH diagnostics, so it rides in the vendor namespace (§9).
+    assert.strictEqual(events[3].type, 'recording.capture_stopped');
+    assert.strictEqual(events[3].reason, 'buffer_limit');
+    assert.deepStrictEqual(events[3].extensions, { 'cyborg-hunter': { limit_events: 3 } });
     assert.strictEqual(s.captureStopped, true);
   });
 

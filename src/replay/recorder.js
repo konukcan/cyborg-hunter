@@ -19,6 +19,10 @@ export const REPLAY_DEFAULTS = {
   mouseHz: 30,                 // mousemove sampling ceiling
   redactSelector: '[data-ch-redact]',
   keepBait: false,             // keep honeypot/decoy nodes in DOM snapshots
+  // Clipboard capture mode (spec §5.3). CH's default is LENGTH-ONLY on privacy
+  // grounds: pasted text routinely carries identifying material from outside
+  // the page. Set true for content mode (jsPsych-recorder behaviour).
+  clipboardContent: false,
   root: null,                  // capture root; resolved at startSession (default document.body)
   autoSave: { mode: 'none' },  // 'datapipe' | 'download' | 'none'
   maxEventsPerTrial: 50000,
@@ -74,6 +78,11 @@ export function createRecorder(userConfig) {
     stylesheets: [],           // filled by capture-dom at startSession (tier dom)
     trials: [],
     guardViolations: [],       // filled via GuardFriction.onViolation subscription
+    // Session-level viewport stream (spec §2 `viewport_changes`). Resize and
+    // visualViewport changes are NOT segment events in v2 — the format keeps
+    // them in one session-wide array, merged with the event streams by `t`
+    // (spec §7) — so capture-trace pushes them here rather than into a trial.
+    viewportChanges: [],
     captureFailures: [],
     captureStopped: false,
     endReason: null,
@@ -131,6 +140,65 @@ export function createRecorder(userConfig) {
         });
       }
     }
+  }
+
+  // Spec §5.7's total-stop signal, replacing v1's `ch:capture_stopped`. The
+  // configured limit that was actually crossed is CH's own diagnostic, not part
+  // of the standard event, so it rides in the vendor namespace (spec §9) rather
+  // than as an unknown top-level field.
+  function captureStoppedSentinel(t, detail) {
+    return {
+      type: 'recording.capture_stopped',
+      t: t,
+      reason: 'buffer_limit',
+      extensions: { 'cyborg-hunter': detail },
+    };
+  }
+
+  // The single path into the buffer, shared by `pushEvent` (v1 vocabulary,
+  // capture-dom until Task 6) and `pushRecord` (v2). Lifecycle gate, implicit
+  // trial opening and both per-trial caps live here, so the two vocabularies
+  // can never disagree about when a recording stops.
+  function storeEvent(e) {
+    if (state === 'destroyed') {
+      throw new Error('[cyborg-hunter-replay] event pushed to a destroyed recorder');
+    }
+    if (state === 'created' || state === 'stopped') return; // not recording
+    if (!currentTrial) {
+      currentTrial = newTrial(null, true);
+      fireTrialStart(currentTrial);
+    }
+    // Per-trial stop (not the session-wide flag): a trial that already hit a
+    // cap drops further events, but a fresh trial is unaffected.
+    if (stoppedTrials.has(currentTrial)) return;
+    if (currentTrial.events.length >= config.maxEventsPerTrial) {
+      stoppedTrials.add(currentTrial);
+      session.captureStopped = true;
+      currentTrial.events.push(
+        captureStoppedSentinel(e.t, { limit_events: config.maxEventsPerTrial }));
+      return;
+    }
+    // Size cap: stop capturing once the trial's estimated serialized length
+    // exceeds maxCharsPerTrial, so a few huge values can't blow up the payload
+    // while staying under the event-count cap. The budget is SEEDED with the
+    // initial DOM snapshot (stored on the trial, not pushed as an event) so a
+    // multi-megabyte snapshot counts too rather than bypassing the cap.
+    if (config.maxCharsPerTrial != null) {
+      var soFar = trialChars.get(currentTrial);
+      if (soFar == null) {
+        soFar = currentTrial.initialDom ? currentTrial.initialDom.length : 0;
+      }
+      soFar += estimateEventChars(e);
+      if (soFar > config.maxCharsPerTrial) {
+        stoppedTrials.add(currentTrial);
+        session.captureStopped = true;
+        currentTrial.events.push(
+          captureStoppedSentinel(e.t, { limit_chars: config.maxCharsPerTrial }));
+        return;
+      }
+      trialChars.set(currentTrial, soFar);
+    }
+    currentTrial.events.push(e);
   }
 
   var recorder = {
@@ -203,52 +271,33 @@ export function createRecorder(userConfig) {
     // Events land in the current trial; unbracketed events lazily open a
     // single implicit trial that spans the session (design §5).
     pushEvent: function (kind, payload, tOverride) {
-      if (state === 'destroyed') {
-        throw new Error('[cyborg-hunter-replay] pushEvent called on a destroyed recorder');
-      }
-      if (state === 'created' || state === 'stopped') return; // not recording
-      if (!currentTrial) {
-        currentTrial = newTrial(null, true);
-        fireTrialStart(currentTrial);
-      }
-      // Per-trial stop (not the session-wide flag): a trial that already hit a
-      // cap drops further events, but a fresh trial is unaffected.
-      if (stoppedTrials.has(currentTrial)) return;
-      if (currentTrial.events.length >= config.maxEventsPerTrial) {
-        stoppedTrials.add(currentTrial);
-        session.captureStopped = true;
-        currentTrial.events.push({
-          t: tOverride != null ? tOverride : performance.now(),
-          kind: 'ch:capture_stopped',
-          limit: config.maxEventsPerTrial
-        });
-        return;
-      }
-      var e = Object.assign(
+      storeEvent(Object.assign(
         { t: tOverride != null ? tOverride : performance.now(), kind: kind },
-        payload || {});
-      // Size cap: stop capturing once the trial's estimated serialized length
-      // exceeds maxCharsPerTrial, so a few huge values can't blow up the payload
-      // while staying under the event-count cap. The budget is SEEDED with the
-      // initial DOM snapshot (stored on the trial, not pushed as an event) so a
-      // multi-megabyte snapshot counts too rather than bypassing the cap.
-      if (config.maxCharsPerTrial != null) {
-        var soFar = trialChars.get(currentTrial);
-        if (soFar == null) {
-          soFar = currentTrial.initialDom ? currentTrial.initialDom.length : 0;
-        }
-        soFar += estimateEventChars(e);
-        if (soFar > config.maxCharsPerTrial) {
-          stoppedTrials.add(currentTrial);
-          session.captureStopped = true;
-          currentTrial.events.push({
-            t: e.t, kind: 'ch:capture_stopped', limit_chars: config.maxCharsPerTrial
-          });
-          return;
-        }
-        trialChars.set(currentTrial, soFar);
+        payload || {}));
+    },
+
+    // v2 sink (spec §5): the caller hands over a complete RecordedEvent minus
+    // its `t`, because v2 payloads are per-type shapes with nested blocks
+    // (`camera`, `anchor`, `mods`, `extensions`) rather than a flat bag merged
+    // onto a `kind`. `type` leads the wire, `t` follows it, matching how the
+    // fixtures read.
+    pushRecord: function (record, tOverride) {
+      storeEvent(Object.assign(
+        { type: record.type, t: tOverride != null ? tOverride : performance.now() },
+        record));
+    },
+
+    // Session-level viewport stream (spec §2). Not a segment event: the format
+    // keeps viewport geometry in one session-wide array, so a resize that
+    // happens between trials still lands somewhere.
+    pushViewportChange: function (entry, tOverride) {
+      if (state === 'destroyed') {
+        throw new Error('[cyborg-hunter-replay] viewport change pushed to a destroyed recorder');
       }
-      currentTrial.events.push(e);
+      if (state === 'created' || state === 'stopped') return;
+      session.viewportChanges.push(Object.assign({}, entry, {
+        t: tOverride != null ? tOverride : performance.now()
+      }));
     },
 
     // Capture-channel failure: record and keep going. Recording must never

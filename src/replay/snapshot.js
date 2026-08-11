@@ -100,6 +100,29 @@ export function isExcluded(node, opts) {
   return legacy || node.id === LEGACY_EXCLUDE_ID;
 }
 
+/**
+ * True when this node is an excluded element or lives inside one.
+ *
+ * The subtree reading is what event capture needs (capture-trace.js): a
+ * keystroke or a scroll inside an excluded container is state of a subtree the
+ * file holds nothing of, so no channel may report it. The snapshot walk asks
+ * the per-node question instead, because it descends the tree itself and stops
+ * at the placeholder.
+ *
+ * Mirrors `isInRedactedSubtree` (redaction.js) deliberately: the two floors are
+ * different rules — §4 withholds an element's whole state, §8 withholds
+ * content — and reading identically at the call site is what keeps a caller
+ * from checking one and forgetting the other.
+ */
+export function isInExcludedSubtree(node, opts) {
+  var cur = node;
+  while (cur) {
+    if (isExcluded(cur, opts)) return true;
+    cur = cur.parentNode;
+  }
+  return false;
+}
+
 // Canvas bitmap size (spec §4). The width/height IDL properties are the
 // browser's authoritative numbers and are always present there — a bare
 // <canvas> reports the spec default 300x150, which is its real bitmap size, so

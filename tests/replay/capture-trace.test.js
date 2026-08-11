@@ -1,28 +1,62 @@
 // tests/replay/capture-trace.test.js
-// Tier-1 capture listeners: throttling, key policy, redaction, coalescing.
-// All DOM dependencies are injected (doc/win/now/raf) so this runs in node.
+// Tier-1 capture in the SessionRecording v2 vocabulary (spec §5): event names
+// and payload shapes, the redaction and exclusion floors, node addressing,
+// clipboard modes, and the session-level viewport stream.
+//
+// Two oracles, deliberately outside this module's control:
+//   - `validateStrict` (tests/replay/schema-v2/validator.js), run over the
+//     captured events wrapped in a minimal recording — the same machine check
+//     the conformance suite applies, so a payload that would be rejected in CI
+//     is rejected here, at the channel that produced it;
+//   - `canonical-core.json`, hand-authored from the spec, for the shapes it
+//     pins (mouse.move, mouse.click with both alignment blocks).
+//
+// DOM dependencies are injected (doc/win/now/raf) so this runs in node. Event
+// TARGETS are real happy-dom elements wherever addressing, redaction or
+// exclusion is under test: those questions are answered against a serialized
+// keyframe, and a duck-typed fake would be free to agree with the
+// implementation about what the file contains.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Window } from 'happy-dom';
+
 import { createRecorder } from '../../src/replay/recorder.js';
 import { attachTraceCapture } from '../../src/replay/capture-trace.js';
+import { createSpan } from '../../src/replay/span.js';
+import { serializeTree } from '../../src/replay/snapshot.js';
+import { markRedacted } from '../../src/replay/redaction.js';
+import { validateStrict } from './schema-v2/validator.js';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const canonical = JSON.parse(
+  readFileSync(join(HERE, 'schema-v2', 'fixtures', 'canonical-core.json'), 'utf8'));
+
+// ── harness ────────────────────────────────────────────────────────────────
 
 // Fake EventTarget: records registrations, lets tests fire events manually.
 function fakeTarget() {
   return {
     handlers: {},
-    addEventListener(ev, fn) { this.handlers[ev] = fn; },
+    options: {},
+    addEventListener(ev, fn, opts) { this.handlers[ev] = fn; this.options[ev] = opts; },
     removeEventListener(ev) { delete this.handlers[ev]; },
     fire(ev, obj) { if (this.handlers[ev]) this.handlers[ev](obj || {}); },
   };
 }
 
-// Test harness: recorder + injected fakes + manual clocks.
-function harness(configOverrides) {
+// Test harness: recorder + injected fakes + manual clocks. `env` extras
+// (span, taint) pass straight through to the module under test.
+function harness(configOverrides, envExtras) {
   globalThis.window = { innerWidth: 1000, innerHeight: 700, devicePixelRatio: 1 };
   const rec = createRecorder({ participantId: 'P1', ...configOverrides });
   const doc = fakeTarget();
+  doc.documentElement = { clientWidth: 985, clientHeight: 700 };
   const win = fakeTarget();
+  win.innerWidth = 1000; win.innerHeight = 700; win.devicePixelRatio = 1;
   win.scrollX = 0; win.scrollY = 0;
   let t = 1000;
   const rafQueue = [];
@@ -32,189 +66,868 @@ function harness(configOverrides) {
     raf: (fn) => { rafQueue.push(fn); },
     advance: (ms) => { t += ms; },
     flushRaf: () => { const q = rafQueue.splice(0); q.forEach(f => f()); },
+    ...(envExtras || {}),
   };
   rec.startSession();
   attachTraceCapture(rec, env);
   const events = () => rec.getState().trials.flatMap(tr => tr.events);
-  return { rec, doc, win, env, events };
+  const types = () => events().map(e => e.type);
+  return { rec, doc, win, env, events, types };
 }
 
-describe('mouse capture', () => {
-  it('throttles mousemove to mouseHz but keeps clicks unthrottled', () => {
-    const { doc, env, events } = harness({ mouseHz: 20 });   // ≥50ms between moves
-    doc.fire('mousemove', { pageX: 1, pageY: 1 });
+// A real DOM plus the keyframe that puts it in the file: the span is what
+// makes elements addressable, exactly as the capture wiring will build it.
+function page(html, url = 'https://example.org/exp/') {
+  const win = new Window({ url });
+  win.document.body.innerHTML = html;
+  return { win, doc: win.document, root: win.document.body.firstElementChild };
+}
+function keyframe(root, opts = {}) {
+  const span = createSpan();
+  serializeTree(root, span, opts);
+  return span;
+}
+
+// The strict-profile check, run over captured events. Sorted first because the
+// buffer is not chronological by construction (RAF-coalesced channels flush
+// late with their original timestamps) — the serializer sorts, and §7's
+// time-sortedness is its job, not this module's.
+function assertStrict(events, note) {
+  const result = validateStrict({
+    schema_version: 2,
+    recorder: { name: 'cyborg-hunter-replay', version: '0.0.0-test' },
+    host: null,
+    participant_id: 'P1',
+    recording_started_at: '2026-08-10T00:00:00.000Z',
+    recording_started_at_perf: 0,
+    user_agent: 'node-test',
+    viewport: { w: 1000, h: 700, dpr: 1, scale: 1, offset_x: 0, offset_y: 0 },
+    observed_root: null,
+    segments: [{
+      index: 0, label: 't1', plugin: null,
+      t_start: null, t_dom_ready: null, t_load: 0, t_end: null,
+      initial_dom: null, initial_state: null,
+      events: [...events].sort((a, b) => a.t - b.t),
+      host_data: null, extensions: null,
+    }],
+  });
+  assert.deepStrictEqual(result.errors, [],
+    (note ? note + ': ' : '') + 'strict validation must accept every emitted event');
+  assert.strictEqual(result.ok, true);
+}
+
+const SENTINEL = 'zzq-sentinel-9137';
+const scan = (events) => JSON.stringify(events);
+
+// ── event vocabulary (spec §5) ─────────────────────────────────────────────
+
+describe('event vocabulary — dotted type names (spec §5)', () => {
+  it('names every mouse channel and throttles only the move', () => {
+    const { doc, env, events, types } = harness({ mouseHz: 20 });   // ≥50ms between moves
+    doc.fire('mousemove', { clientX: 1, clientY: 1 });
     env.advance(10);
-    doc.fire('mousemove', { pageX: 2, pageY: 2 });           // dropped (<50ms)
+    doc.fire('mousemove', { clientX: 2, clientY: 2 });              // dropped (<50ms)
     env.advance(50);
-    doc.fire('mousemove', { pageX: 3, pageY: 3 });           // kept
-    doc.fire('click', { pageX: 3, pageY: 3 });
-    doc.fire('click', { pageX: 3, pageY: 3 });               // clicks never throttled
-    const kinds = events().map(e => e.kind);
-    assert.deepStrictEqual(kinds, ['mousemove', 'mousemove', 'click', 'click']);
+    doc.fire('mousemove', { clientX: 3, clientY: 3 });              // kept
+    doc.fire('mousedown', { clientX: 3, clientY: 3, button: 0 });
+    doc.fire('mouseup', { clientX: 3, clientY: 3, button: 0 });
+    doc.fire('click', { clientX: 3, clientY: 3, button: 0 });
+    doc.fire('click', { clientX: 3, clientY: 3, button: 0 });       // never throttled
+
+    assert.deepStrictEqual(types(), [
+      'mouse.move', 'mouse.move', 'mouse.down', 'mouse.up', 'mouse.click', 'mouse.click']);
     assert.strictEqual(events()[1].x, 3);
-  });
-});
-
-describe('key capture policy', () => {
-  it('keys:"full" records key identity', () => {
-    const { doc, events } = harness({ keys: 'full' });
-    doc.fire('keydown', { key: 'a', code: 'KeyA', target: { tagName: 'BODY' } });
-    doc.fire('keyup',   { key: 'a', code: 'KeyA', target: { tagName: 'BODY' } });
-    assert.strictEqual(events().length, 2);
-    assert.strictEqual(events()[0].key, 'a');
-    assert.strictEqual(events()[1].kind, 'keyup');
+    assertStrict(events());
   });
 
-  it('keys:"off" records no key events at all', () => {
-    const { doc, events } = harness({ keys: 'off' });
-    doc.fire('keydown', { key: 'a', code: 'KeyA', target: { tagName: 'BODY' } });
-    assert.strictEqual(events().length, 0);
-  });
-
-  it('password fields never record key identity, even with keys:"full"', () => {
-    const { doc, events } = harness({ keys: 'full' });
-    doc.fire('keydown', { key: 's', code: 'KeyS',
-      target: { tagName: 'INPUT', type: 'password' } });
-    assert.strictEqual(events().length, 1);
-    assert.strictEqual(events()[0].kind, 'keydown');
-    assert.strictEqual(events()[0].key, undefined, 'no key identity for password');
-    assert.strictEqual(events()[0].redacted, true);
-  });
-});
-
-describe('clipboard capture', () => {
-  it('records paste/copy/cut/drop with text lengths only', () => {
+  it('emits mouse.move in exactly the canonical-core shape', () => {
     const { doc, events } = harness({});
+    doc.fire('mousemove', { clientX: 300, clientY: 200 });
+    const expected = canonical.segments[0].events[0];
+    assert.deepStrictEqual(events()[0], { ...expected, t: events()[0].t });
+    assert.strictEqual(events()[0].kind, undefined, 'v1 `kind` is retired');
+  });
+
+  it('names the key, touch, focus, visibility and scroll channels', () => {
+    const { doc, win, env, types, events } = harness({});
+    doc.fire('keydown', { key: 'a', code: 'KeyA', target: { tagName: 'BODY' } });
+    doc.fire('keyup', { key: 'a', code: 'KeyA', target: { tagName: 'BODY' } });
+    doc.fire('touchstart', { touches: [{ identifier: 0, clientX: 10, clientY: 20 }] });
+    doc.fire('touchmove', { touches: [{ identifier: 0, clientX: 11, clientY: 21 }] });
+    env.flushRaf();                       // touch.move is rAF-coalesced
+    doc.fire('touchend', { changedTouches: [{ identifier: 0, clientX: 11, clientY: 21 }] });
+    win.fire('blur', {});
+    doc.hidden = true; doc.fire('visibilitychange', {});
+    doc.hidden = false; doc.fire('visibilitychange', {});
+    win.fire('focus', {});
+    win.scrollY = 40; win.fire('scroll', { target: null });
+    env.flushRaf();
+
+    assert.deepStrictEqual(types(), [
+      'key.down', 'key.up', 'touch.start', 'touch.move', 'touch.end',
+      'blur', 'visibility.hidden', 'visibility.visible', 'focus', 'scroll.window']);
+    assertStrict(events());
+  });
+
+  it('names the four clipboard channels (drop included, spec §5.3)', () => {
+    const { doc, types, events } = harness({});
     doc.fire('paste', { clipboardData: { getData: () => 'hello world' } });
     doc.fire('copy', {});
     doc.fire('cut', {});
     doc.fire('drop', { dataTransfer: { getData: () => 'dropped text!' } });
-    const kinds = events().map(e => e.kind);
-    assert.deepStrictEqual(kinds, ['paste', 'copy', 'cut', 'ch:drop']);
-    assert.strictEqual(events()[0].len, 11);
-    assert.strictEqual(events()[3].len, 13);
-    assert.strictEqual(events()[0].text, undefined, 'content itself is never recorded');
-  });
-});
 
-describe('input value capture', () => {
-  it('coalesces per-target input values through rAF', () => {
-    const { doc, env, events } = harness({});
-    const field = { tagName: 'INPUT', type: 'text', id: 'answer', value: 'a' };
-    doc.fire('input', { target: field });
-    field.value = 'ab';
-    doc.fire('input', { target: field });      // same rAF window — coalesced
-    env.flushRaf();
-    assert.strictEqual(events().length, 1, 'two inputs in one frame coalesce');
-    assert.strictEqual(events()[0].kind, 'input');
-    assert.strictEqual(events()[0].value, 'ab', 'last value wins');
-    assert.strictEqual(events()[0].el, 'input#answer');
+    assert.deepStrictEqual(types(),
+      ['clipboard.paste', 'clipboard.copy', 'clipboard.cut', 'clipboard.drop']);
+    assertStrict(events());
   });
 
-  it('carries the raw element id separately (ids may not be selector-safe)', () => {
-    const { doc, env, events } = harness({});
-    const weird = { tagName: 'INPUT', type: 'text', id: 'a:b c', value: 'x' };
-    doc.fire('input', { target: weird });
-    env.flushRaf();
-    assert.strictEqual(events()[0].id, 'a:b c',
-      'viewer must resolve via getElementById, not a CSS selector');
-  });
-
-  it('records checked state for checkboxes and radios', () => {
-    const { doc, env, events } = harness({});
-    const box = { tagName: 'INPUT', type: 'checkbox', id: 'consent', value: 'on', checked: true };
-    doc.fire('input', { target: box });
-    env.flushRaf();
-    assert.strictEqual(events()[0].checked, true,
-      'checked is a property, not an attribute — mutations cannot carry it');
-  });
-
-  it('redacts password values unconditionally (length only)', () => {
-    const { doc, env, events } = harness({});
-    const pw = { tagName: 'INPUT', type: 'password', id: 'pw', value: 'hunter2' };
-    doc.fire('input', { target: pw });
-    env.flushRaf();
-    assert.strictEqual(events()[0].value, undefined);
-    assert.strictEqual(events()[0].value_len, 7);
-    assert.strictEqual(events()[0].redacted, true);
-  });
-
-  it('redacts elements matching redactSelector', () => {
-    const { doc, env, events } = harness({ redactSelector: '[data-ch-redact]' });
-    const field = {
-      tagName: 'TEXTAREA', id: 'notes', value: 'secret stuff',
-      matches: (sel) => sel === '[data-ch-redact]',
-    };
-    doc.fire('input', { target: field });
-    env.flushRaf();
-    assert.strictEqual(events()[0].value, undefined);
-    assert.strictEqual(events()[0].value_len, 12);
-  });
-});
-
-describe('scroll + viewport + focus capture', () => {
-  it('coalesces window scroll through rAF', () => {
+  it('no event carries a v1 `kind` and every type is spec-known', () => {
+    // The done-when grep, as an assertion: one pass over every channel this
+    // module owns, checked against the validator's own type table.
     const { doc, win, env, events } = harness({});
-    win.scrollX = 0; win.scrollY = 100;
+    doc.fire('mousemove', { clientX: 1, clientY: 1 });
+    doc.fire('click', { clientX: 1, clientY: 1, button: 0 });
+    doc.fire('keydown', { key: 'x', code: 'KeyX', target: { tagName: 'BODY' } });
+    doc.fire('paste', { clipboardData: { getData: () => '' } });
+    doc.fire('touchstart', { touches: [{ clientX: 1, clientY: 1 }] });
+    win.fire('scroll', { target: null });
+    win.fire('resize', {});
+    env.flushRaf();
+
+    assert.deepStrictEqual(events().filter(e => 'kind' in e), []);
+    assert.ok(events().every(e => typeof e.type === 'string' && e.type.includes('.')
+      || e.type === 'focus' || e.type === 'blur'));
+    assertStrict(events());
+  });
+});
+
+// ── coordinates (spec §7) ──────────────────────────────────────────────────
+
+describe('client-frame coordinates only (spec §7)', () => {
+  it('pointer events carry the client frame as x/y and drop the page pair', () => {
+    const { doc, events } = harness({});
+    doc.fire('mousemove', { pageX: 110, pageY: 700, clientX: 110, clientY: 200 });
+    doc.fire('click', { pageX: 300, pageY: 900, clientX: 300, clientY: 400, button: 0 });
+
+    assert.deepStrictEqual(
+      { x: events()[0].x, y: events()[0].y }, { x: 110, y: 200 });
+    assert.deepStrictEqual(
+      { x: events()[1].x, y: events()[1].y }, { x: 300, y: 400 });
+    assert.deepStrictEqual(events().filter(e => 'cx' in e || 'cy' in e), [],
+      'the v1 cx/cy pair is retired with the page frame');
+  });
+
+  it('touch points carry the client frame in a per-touch list', () => {
+    const { doc, env, events } = harness({});
+    doc.fire('touchstart', {
+      touches: [{ identifier: 7, pageX: 10, pageY: 820, clientX: 10, clientY: 20 }],
+    });
+    doc.fire('touchmove', {
+      touches: [
+        { identifier: 7, pageX: 15, pageY: 825, clientX: 15, clientY: 25 },
+        { identifier: 8, clientX: 90, clientY: 95 },
+      ],
+    });
+    env.flushRaf();
+
+    assert.deepStrictEqual(events()[0].touches, [{ id: 7, x: 10, y: 20 }]);
+    assert.deepStrictEqual(events()[1].touches,
+      [{ id: 7, x: 15, y: 25 }, { id: 8, x: 90, y: 95 }],
+      'multi-touch is what the touch list is for');
+  });
+
+  it('touch.end reports the touches that ENDED, not the ones still down', () => {
+    const { doc, events } = harness({});
+    doc.fire('touchend', {
+      touches: [{ identifier: 2, clientX: 5, clientY: 5 }],          // still down
+      changedTouches: [{ identifier: 1, clientX: 40, clientY: 60 }], // lifted
+    });
+    assert.deepStrictEqual(events()[0].touches, [{ id: 1, x: 40, y: 60 }]);
+  });
+});
+
+// ── camera (spec §6) ───────────────────────────────────────────────────────
+
+describe('camera block (spec §6)', () => {
+  it('carries all ten fields, dpr and vv completion included', () => {
+    const { doc, win, env, events } = harness({});
+    win.scrollX = 12; win.scrollY = 1733;
+    win.innerWidth = 900; win.innerHeight = 600;
+    win.devicePixelRatio = 2;
+    win.visualViewport = { scale: 1.5, offsetLeft: 20.44, offsetTop: 8.05 };
+    env.doc.documentElement.clientWidth = 885;
+    env.doc.documentElement.clientHeight = 600;
+
+    doc.fire('mousedown', { clientX: 450, clientY: 300, button: 0 });
+
+    assert.deepStrictEqual(events()[0].camera, {
+      scroll_x: 12, scroll_y: 1733,
+      viewport_w: 900, viewport_h: 600,
+      client_w: 885, client_h: 600,
+      dpr: 2, vv_scale: 1.5, vv_offset_x: 20.4, vv_offset_y: 8.1,
+    });
+  });
+
+  it('defaults the visualViewport fields when the API is absent', () => {
+    const { doc, events } = harness({});
+    doc.fire('click', { clientX: 1, clientY: 1, button: 0 });
+    const c = events()[0].camera;
+    assert.deepStrictEqual(
+      { dpr: c.dpr, vv_scale: c.vv_scale, vv_offset_x: c.vv_offset_x, vv_offset_y: c.vv_offset_y },
+      { dpr: 1, vv_scale: 1, vv_offset_x: 0, vv_offset_y: 0 },
+      'spec §6 types every camera field as a number');
+  });
+
+  it('reads the camera synchronously, ahead of the scroll notification', () => {
+    // Scroll NOTIFICATIONS are async after programmatic scrolls — a click can
+    // precede the scroll event describing its own state. The block is the
+    // authoritative observation at the interaction instant.
+    const { doc, win, events } = harness({});
+    win.scrollY = 1733;                       // scrolled, no event fired yet
+    doc.fire('mousedown', { clientX: 450, clientY: 300, button: 0 });
+    assert.strictEqual(events()[0].camera.scroll_y, 1733);
+  });
+
+  it('move channels carry no alignment blocks (payload discipline)', () => {
+    const { doc, env, events } = harness({});
+    doc.fire('mousemove', { clientX: 5, clientY: 5, target: { tagName: 'DIV' } });
+    doc.fire('touchmove', { touches: [{ clientX: 5, clientY: 5 }] });
+    env.flushRaf();
+    assert.deepStrictEqual(events().filter(e => 'camera' in e || 'anchor' in e), []);
+  });
+
+  it('omits alignment on key.up and on auto-repeats (spec §6 cost rule)', () => {
+    const { doc, events } = harness({});
+    const target = { tagName: 'BODY' };
+    doc.fire('keydown', { key: 'a', code: 'KeyA', target });
+    doc.fire('keydown', { key: 'a', code: 'KeyA', repeat: true, target });
+    doc.fire('keyup', { key: 'a', code: 'KeyA', target });
+
+    assert.ok(events()[0].camera, 'the first key.down is anchored');
+    assert.strictEqual(events()[1].camera, undefined, 'repeats are not');
+    assert.strictEqual(events()[1].repeat, true);
+    assert.strictEqual(events()[2].camera, undefined, 'key.up is not');
+    assert.strictEqual(events()[2].anchor, undefined);
+  });
+});
+
+// ── anchors (spec §6) ──────────────────────────────────────────────────────
+
+describe('anchors (spec §6)', () => {
+  it('reproduces the canonical-core click, anchor and camera included', () => {
+    // The fixture's own DOM, the fixture's own geometry: what CH emits for that
+    // interaction must be what the hand-authored contract says.
+    const { root, doc: page1 } = page(
+      '<div id="stage"><button id="go">Go</button><p id="msg">Hello</p></div>');
+    const span = keyframe(root);
+    const button = page1.getElementById('go');
+    button.getBoundingClientRect = () => ({ left: 310, top: 205, width: 64, height: 28 });
+
+    const { doc, win, env, events } = harness({}, { span });
+    win.innerWidth = 1280; win.innerHeight = 800;
+    env.doc.documentElement.clientWidth = 1280;
+    env.doc.documentElement.clientHeight = 800;
+    doc.fire('click', { clientX: 322, clientY: 214, button: 0, target: button });
+
+    const expected = canonical.segments[0].events[1];
+    assert.deepStrictEqual(events()[0], { ...expected, t: events()[0].t });
+  });
+
+  it('names the node the FILE holds, and null outside the observed root', () => {
+    const { root, doc: page1 } = page(
+      '<div id="stage"><button id="go">Go</button></div>');
+    const span = keyframe(root);
+    const outside = page1.createElement('button');   // never serialized
+
+    const { doc, events } = harness({}, { span });
+    doc.fire('click', { clientX: 1, clientY: 1, button: 0, target: page1.getElementById('go') });
+    doc.fire('click', { clientX: 1, clientY: 1, button: 0, target: outside });
+
+    assert.strictEqual(events()[0].target, span.registry.peekId(page1.getElementById('go')));
+    assert.strictEqual(events()[0].anchor.node, events()[0].target);
+    assert.strictEqual(events()[1].target, null, 'outside the root has no node');
+    assert.strictEqual(events()[1].anchor.node, null);
+  });
+
+  it('a never-emitted target resolves to the nearest node the file holds', () => {
+    // The exclusion placeholder is the case spec §7 names: the file carries
+    // {id, kind, tag} and nothing under it, so an interaction inside resolves
+    // UP to the placeholder rather than to a node the player never received.
+    const { root, doc: page1 } = page(
+      '<div id="stage"><div id="bait" data-record-exclude=""><button id="inner">x</button></div></div>');
+    const span = keyframe(root);
+    const bait = page1.getElementById('bait');
+    const inner = page1.getElementById('inner');
+
+    const { doc, events } = harness({}, { span });
+    doc.fire('click', { clientX: 1, clientY: 1, button: 0, target: inner });
+
+    assert.strictEqual(events()[0].target, span.registry.peekId(bait));
+    assert.notStrictEqual(span.registry.peekId(inner), null, 'still numbered, just not in the file');
+  });
+
+  it('with no span nothing is addressable and the anchor still works', () => {
+    // Trace tier: no DOM in the recording, so no node ids — and the alignment
+    // geometry, which needs none, is exactly what still helps there.
+    const { doc, events } = harness({});
+    doc.fire('mousedown', {
+      clientX: 1, clientY: 1, button: 0,
+      target: {
+        tagName: 'BUTTON', id: 'submit',
+        getBoundingClientRect: () => ({ left: 40.24, top: 60.51, width: 90, height: 30 }),
+      },
+    });
+    assert.deepStrictEqual(events()[0].anchor,
+      { tag: 'button', id: 'submit', rect: { x: 40.2, y: 60.5, w: 90, h: 30 }, node: null });
+    assert.strictEqual(events()[0].target, null);
+  });
+
+  it('carries id:null for an element without one (absent means withheld)', () => {
+    const { doc, events } = harness({});
+    doc.fire('click', {
+      clientX: 1, clientY: 1, button: 0,
+      target: { tagName: 'DIV', getBoundingClientRect: () => ({ left: 0, top: 0, width: 1, height: 1 }) },
+    });
+    assert.strictEqual(events()[0].anchor.id, null);
+  });
+
+  it('routes shadow retargeting through the vendor extension (spec §9)', () => {
+    // attachShadow() after the snapshot leaves no mutation record — the
+    // composed path is the only signal, and it works for OPEN roots regardless
+    // of when the root was attached. Shadow content is a capture limit (§13),
+    // and a CH-specific note about a standard event belongs in `extensions`.
+    const { doc, events } = harness({});
+    const host = {
+      tagName: 'DIV', id: 'late-host',
+      getBoundingClientRect: () => ({ left: 1, top: 2, width: 100, height: 40 }),
+    };
+    doc.fire('click', {
+      clientX: 5, clientY: 5, button: 0, target: host,
+      composedPath: () => [{ tagName: 'BUTTON' }, host],
+    });
+    doc.fire('click', {
+      clientX: 5, clientY: 5, button: 0, target: host,
+      composedPath: () => [host],
+    });
+
+    assert.deepStrictEqual(events()[0].extensions,
+      { 'cyborg-hunter': { shadow_retarget: true } });
+    assert.strictEqual(events()[1].extensions, undefined, 'no flag when the path starts at the target');
+    assertStrict(events());
+  });
+});
+
+// ── redaction (spec §5.2/§8) ───────────────────────────────────────────────
+
+describe('redaction — the spec §5.2 variants, both directions', () => {
+  function redactedPage() {
+    const { root, doc: page1 } = page(
+      '<div id="stage">' +
+      '<div id="private" data-ch-redact=""><input id="secret" type="text"></div>' +
+      '<input id="open" type="text"><input id="pw" type="password">' +
+      '</div>');
+    return { root, page: page1, span: keyframe(root, { redactSelector: '[data-ch-redact]' }) };
+  }
+
+  it('key events collapse to {type, t, redacted} and keep identity otherwise', () => {
+    const { page: p, span } = redactedPage();
+    const { doc, events } = harness({ keys: 'full', redactSelector: '[data-ch-redact]' }, { span });
+
+    doc.fire('keydown', { key: 'S', code: 'KeyS', target: p.getElementById('secret') });
+    doc.fire('keyup', { key: 'S', code: 'KeyS', target: p.getElementById('secret') });
+    doc.fire('keydown', { key: 'S', code: 'KeyS', target: p.getElementById('open') });
+
+    assert.deepStrictEqual(events()[0], { type: 'key.down', t: 1000, redacted: true });
+    assert.deepStrictEqual(events()[1], { type: 'key.up', t: 1000, redacted: true });
+    assert.strictEqual(events()[2].key, 'S', 'the open field is unaffected');
+    assert.strictEqual(events()[2].redacted, undefined);
+    assertStrict(events());
+  });
+
+  it('password fields are redacted with no selector at all (spec §8 floor)', () => {
+    const { page: p, span } = redactedPage();
+    const { doc, events } = harness({ keys: 'full', redactSelector: null }, { span });
+    doc.fire('keydown', { key: 's', code: 'KeyS', target: p.getElementById('pw') });
+    assert.deepStrictEqual(events()[0], { type: 'key.down', t: 1000, redacted: true });
+  });
+
+  it('input.value carries value_len and no value; the open field carries value', () => {
+    const { page: p, span } = redactedPage();
+    const secret = p.getElementById('secret');
+    const open = p.getElementById('open');
+    secret.value = SENTINEL;
+    open.value = 'visible';
+    const { doc, env, events } = harness({ redactSelector: '[data-ch-redact]' }, { span });
+
+    doc.fire('input', { target: secret });
+    doc.fire('input', { target: open });
+    env.flushRaf();
+
+    assert.deepStrictEqual(events()[0], {
+      type: 'input.value', t: 1000,
+      node: span.registry.peekId(secret), redacted: true, value_len: SENTINEL.length,
+    });
+    assert.deepStrictEqual(events()[1], {
+      type: 'input.value', t: 1000, node: span.registry.peekId(open), value: 'visible',
+    });
+    assert.strictEqual(scan(events()).includes(SENTINEL), false);
+    assertStrict(events());
+  });
+
+  it('drops input.checked and input.select for redacted controls (no variant exists)', () => {
+    const { root, doc: p } = page(
+      '<div id="stage"><div data-ch-redact="">' +
+      '<input id="box" type="checkbox"><select id="pick"><option value="a">a</option>' +
+      '<option value="b">b</option></select></div>' +
+      '<input id="openbox" type="checkbox"></div>');
+    const span = keyframe(root, { redactSelector: '[data-ch-redact]' });
+    const box = p.getElementById('box');
+    const pick = p.getElementById('pick');
+    const openBox = p.getElementById('openbox');
+    box.checked = true; openBox.checked = true; pick.options[1].selected = true;
+
+    const { doc, env, events } = harness({ redactSelector: '[data-ch-redact]' }, { span });
+    doc.fire('input', { target: box });
+    doc.fire('input', { target: pick });
+    doc.fire('input', { target: openBox });
+    env.flushRaf();
+
+    assert.deepStrictEqual(events(), [{
+      type: 'input.checked', t: 1000, node: span.registry.peekId(openBox), checked: true,
+    }], 'spec §5.2 defines a redacted variant for input.value only');
+  });
+
+  it('anchors omit id and keep geometry for redacted targets (spec §6/§8)', () => {
+    const { page: p, span } = redactedPage();
+    const secret = p.getElementById('secret');
+    secret.getBoundingClientRect = () => ({ left: 1, top: 2, width: 3, height: 4 });
+    const { doc, events } = harness({ redactSelector: '[data-ch-redact]' }, { span });
+
+    doc.fire('mousedown', { clientX: 2, clientY: 3, button: 0, target: secret });
+
+    assert.deepStrictEqual(events()[0].anchor, {
+      tag: 'input', rect: { x: 1, y: 2, w: 3, h: 4 }, node: span.registry.peekId(secret),
+    });
+    assert.strictEqual('id' in events()[0].anchor, false, 'identity omitted, not nulled');
+    assert.strictEqual(events()[0].target, span.registry.peekId(secret),
+      'spec §7: a redacted target keeps its node reference');
+  });
+
+  it('clipboard events on a redacted target keep len and withhold content', () => {
+    const { page: p, span } = redactedPage();
+    const { doc, events } = harness(
+      { redactSelector: '[data-ch-redact]', clipboardContent: true }, { span });
+
+    doc.fire('paste', {
+      target: p.getElementById('secret'),
+      clipboardData: { getData: () => SENTINEL },
+    });
+
+    assert.deepStrictEqual(events()[0], {
+      type: 'clipboard.paste', t: 1000,
+      target: span.registry.peekId(p.getElementById('secret')),
+      text: null, html: null, len: SENTINEL.length, redacted: true,
+    });
+    assert.strictEqual(scan(events()).includes(SENTINEL), false);
+    assertStrict(events());
+  });
+
+  it('keeps withholding after the page moves the field out of the container', () => {
+    // Redaction is a property of the FILE (spec §8): the taint set outlives the
+    // subtree the element was in when it was first withheld.
+    const { root, doc: p } = page(
+      '<div id="stage"><div id="private" data-ch-redact=""><input id="f" type="text"></div>' +
+      '<div id="open"></div></div>');
+    const span = keyframe(root, { redactSelector: '[data-ch-redact]' });
+    const field = p.getElementById('f');
+    field.value = SENTINEL;
+    const taint = new WeakSet();
+    markRedacted(field, taint);
+    p.getElementById('open').appendChild(field);   // no longer inside the container
+
+    const { doc, env, events } = harness(
+      { redactSelector: '[data-ch-redact]' }, { span, taint });
+    doc.fire('input', { target: field });
+    env.flushRaf();
+
+    assert.strictEqual(events()[0].redacted, true);
+    assert.strictEqual(scan(events()).includes(SENTINEL), false);
+  });
+});
+
+// ── exclusion (spec §4) ────────────────────────────────────────────────────
+
+describe('exclusion floor (spec §4) — the guard-bait shape', () => {
+  // The honeypot stamps its marker on the bait INPUT itself
+  // (extension-guard-honeypot.js), so the element under test IS the placeholder
+  // — the shape the v1 handler let through, since it checked redaction and
+  // never exclusion.
+  function baitPage(marker = 'data-record-exclude=""') {
+    const { root, doc: p } = page(
+      '<div id="stage">' +
+      `<input id="bait" type="text" ${marker}>` +
+      '<div id="baitbox" data-record-exclude=""><input id="inner" type="text"></div>' +
+      '<input id="open" type="text"></div>');
+    return { root, page: p, span: keyframe(root) };
+  }
+
+  it('never emits the typed value or its length for a bait field', () => {
+    const { page: p, span } = baitPage();
+    const bait = p.getElementById('bait');
+    const open = p.getElementById('open');
+    bait.value = SENTINEL; open.value = 'fine';
+    const { doc, env, events } = harness({}, { span });
+
+    doc.fire('input', { target: bait });
+    doc.fire('input', { target: open });
+    env.flushRaf();
+
+    assert.deepStrictEqual(events(), [{
+      type: 'input.value', t: 1000, node: span.registry.peekId(open), value: 'fine',
+    }], 'the bait field emits nothing at all — not even a length');
+    assert.strictEqual(scan(events()).includes(SENTINEL), false);
+  });
+
+  it('never emits values for a field INSIDE an excluded container', () => {
+    const { page: p, span } = baitPage();
+    p.getElementById('inner').value = SENTINEL;
+    const { doc, env, events } = harness({}, { span });
+    doc.fire('input', { target: p.getElementById('inner') });
+    env.flushRaf();
+    assert.deepStrictEqual(events(), []);
+  });
+
+  it('withholds key identity typed into bait (the sentinel is reconstructable otherwise)', () => {
+    const { page: p, span } = baitPage();
+    const bait = p.getElementById('bait');
+    const { doc, events } = harness({ keys: 'full' }, { span });
+
+    for (const ch of 'abc') doc.fire('keydown', { key: ch, code: 'Key' + ch.toUpperCase(), target: bait });
+
+    assert.deepStrictEqual(events(), [
+      { type: 'key.down', t: 1000, redacted: true },
+      { type: 'key.down', t: 1000, redacted: true },
+      { type: 'key.down', t: 1000, redacted: true },
+    ]);
+    assert.strictEqual(scan(events()).includes('KeyA'), false);
+  });
+
+  it('drops scroll.element for an excluded scroller and keeps a redacted one', () => {
+    const { root, doc: p } = page(
+      '<div id="stage"><div id="bait" data-record-exclude="">x</div>' +
+      '<div id="private" data-ch-redact="">y</div></div>');
+    const span = keyframe(root, { redactSelector: '[data-ch-redact]' });
+    const bait = p.getElementById('bait');
+    const priv = p.getElementById('private');
+    bait.scrollTop = 40; priv.scrollTop = 25;
+
+    const { win, env, events } = harness({ redactSelector: '[data-ch-redact]' }, { span });
+    win.fire('scroll', { target: bait });
+    win.fire('scroll', { target: priv });
+    env.flushRaf();
+
+    assert.deepStrictEqual(events(), [{
+      type: 'scroll.element', t: 1000, node: span.registry.peekId(priv), x: 0, y: 25,
+    }], 'an offset is not content (§8), but it IS state (§4)');
+  });
+
+  it('omits anchor identity and names the placeholder id (spec §4/§7)', () => {
+    const { page: p, span } = baitPage();
+    const bait = p.getElementById('bait');
+    bait.getBoundingClientRect = () => ({ left: 5, top: 6, width: 7, height: 8 });
+    const { doc, events } = harness({}, { span });
+
+    doc.fire('click', { clientX: 5, clientY: 6, button: 0, target: bait });
+
+    assert.deepStrictEqual(events()[0].anchor, {
+      tag: 'input', rect: { x: 5, y: 6, w: 7, h: 8 }, node: span.registry.peekId(bait),
+    });
+    assert.strictEqual(events()[0].target, span.registry.peekId(bait));
+  });
+
+  it('holds for the LEGACY honeypot markers, and keepBait turns those off', () => {
+    const { root, doc: p } = page(
+      '<div id="stage"><input id="bait" type="text" data-ch-role="honeypot"></div>');
+    const bait = p.getElementById('bait');
+    bait.value = SENTINEL;
+
+    const strictSpan = keyframe(root);
+    const h1 = harness({}, { span: strictSpan });
+    h1.doc.fire('input', { target: bait });
+    h1.env.flushRaf();
+    assert.deepStrictEqual(h1.events(), [], 'legacy markers exclude by default');
+    assert.strictEqual(scan(h1.events()).includes(SENTINEL), false);
+
+    const baitSpan = keyframe(root, { keepBait: true });
+    const h2 = harness({ keepBait: true }, { span: baitSpan });
+    h2.doc.fire('input', { target: bait });
+    h2.env.flushRaf();
+    assert.strictEqual(h2.events()[0].value, SENTINEL,
+      'keepBait is the analysis override, for the legacy markers only');
+  });
+
+  it('data-record-exclude has no opt-out, keepBait or not', () => {
+    const { page: p, span } = baitPage();   // primary attribute
+    const bait = p.getElementById('bait');
+    bait.value = SENTINEL;
+    const { doc, env, events } = harness({ keepBait: true }, { span });
+    doc.fire('input', { target: bait });
+    env.flushRaf();
+    assert.deepStrictEqual(events(), []);
+  });
+
+  it('whole-channel sentinel scan: typing into bait leaves nothing behind', () => {
+    const { page: p, span } = baitPage();
+    const bait = p.getElementById('bait');
+    const { doc, win, env, events } = harness({ keys: 'full', clipboardContent: true }, { span });
+
+    bait.value = SENTINEL;
+    bait.scrollTop = 12;
+    doc.fire('keydown', { key: SENTINEL[0], code: 'KeyZ', target: bait });
+    doc.fire('input', { target: bait });
+    doc.fire('paste', { target: bait, clipboardData: { getData: () => SENTINEL } });
+    win.fire('scroll', { target: bait });
+    doc.fire('click', { clientX: 1, clientY: 1, button: 0, target: bait });
+    env.flushRaf();
+
+    assert.strictEqual(scan(events()).includes(SENTINEL), false, scan(events()));
+    assertStrict(events());
+  });
+});
+
+// ── input channel (spec §5.2) ──────────────────────────────────────────────
+
+describe('input events — one type per kind of state (spec §5.2)', () => {
+  function formPage() {
+    const { root, doc: p } = page(
+      '<div id="stage"><input id="answer" type="text">' +
+      '<input id="box" type="checkbox"><select id="pick">' +
+      '<option value="a">a</option><option value="b">b</option></select>' +
+      '<div id="rich" contenteditable="true">start</div></div>');
+    return { page: p, span: keyframe(root) };
+  }
+
+  it('splits value, checked and select by what the control holds', () => {
+    const { page: p, span } = formPage();
+    const answer = p.getElementById('answer');
+    const box = p.getElementById('box');
+    const pick = p.getElementById('pick');
+    answer.value = 'hi'; box.checked = true; pick.options[1].selected = true;
+
+    const { doc, env, events } = harness({}, { span });
+    doc.fire('input', { target: answer });
+    doc.fire('input', { target: box });
+    doc.fire('input', { target: pick });
+    env.flushRaf();
+
+    assert.deepStrictEqual(events(), [
+      { type: 'input.value', t: 1000, node: span.registry.peekId(answer), value: 'hi' },
+      { type: 'input.checked', t: 1000, node: span.registry.peekId(box), checked: true },
+      { type: 'input.select', t: 1000, node: span.registry.peekId(pick), values: ['b'] },
+    ]);
+    assertStrict(events());
+  });
+
+  it('reads a contenteditable through its text content', () => {
+    const { page: p, span } = formPage();
+    const rich = p.getElementById('rich');
+    rich.textContent = 'typed here';
+    const { doc, env, events } = harness({}, { span });
+    doc.fire('input', { target: rich });
+    env.flushRaf();
+    assert.strictEqual(events()[0].value, 'typed here');
+  });
+
+  it('coalesces per target through rAF, last value winning', () => {
+    const { page: p, span } = formPage();
+    const answer = p.getElementById('answer');
+    const { doc, env, events } = harness({}, { span });
+
+    answer.value = 'a';
+    doc.fire('input', { target: answer });
+    answer.value = 'ab';
+    doc.fire('input', { target: answer });      // same rAF window — coalesced
+    env.flushRaf();
+
+    assert.strictEqual(events().length, 1, 'two inputs in one frame coalesce');
+    assert.strictEqual(events()[0].value, 'ab');
+  });
+
+  it('emits nothing for a target the file does not contain (spec §5.2 needs a node)', () => {
+    const { doc, env, events } = harness({});   // no span: trace tier
+    doc.fire('input', { target: { tagName: 'INPUT', type: 'text', id: 'x', value: 'v' } });
+    env.flushRaf();
+    assert.deepStrictEqual(events(), [],
+      'an input.value naming no node would be rejected by the format');
+  });
+});
+
+// ── scroll (spec §5.6) ─────────────────────────────────────────────────────
+
+describe('scroll (spec §5.6)', () => {
+  it('splits window and element scroll, addressing elements by node id', () => {
+    const { root, doc: p } = page(
+      '<div id="stage"><div id="a">a</div><div id="b">b</div></div>');
+    const span = keyframe(root);
+    const a = p.getElementById('a'); const b = p.getElementById('b');
+    a.scrollTop = 120; b.scrollLeft = 60;
+
+    const { win, env, events } = harness({}, { span });
+    win.scrollX = 0; win.scrollY = 250;
+    win.fire('scroll', { target: null });
+    win.fire('scroll', { target: a });
+    win.fire('scroll', { target: b });
+    env.flushRaf();
+
+    assert.deepStrictEqual(events(), [
+      { type: 'scroll.window', t: 1000, x: 0, y: 250 },
+      { type: 'scroll.element', t: 1000, node: span.registry.peekId(a), x: 0, y: 120 },
+      { type: 'scroll.element', t: 1000, node: span.registry.peekId(b), x: 60, y: 0 },
+    ]);
+    assertStrict(events());
+  });
+
+  it('coalesces window scroll through rAF, reading the final offsets', () => {
+    const { win, env, events } = harness({});
+    win.scrollY = 100;
     win.fire('scroll', { target: null });
     win.scrollY = 250;
     win.fire('scroll', { target: null });
     env.flushRaf();
-    assert.strictEqual(events().length, 1);
-    assert.deepStrictEqual(
-      { kind: events()[0].kind, y: events()[0].y }, { kind: 'scroll', y: 250 });
+    assert.deepStrictEqual(events(), [{ type: 'scroll.window', t: 1000, x: 0, y: 250 }]);
   });
+});
 
-  it('records focus/blur/visibility transitions', () => {
-    const { doc, win, events } = harness({});
-    win.fire('blur', {});
-    doc.hidden = true;
-    doc.fire('visibilitychange', {});
-    doc.hidden = false;
-    doc.fire('visibilitychange', {});
-    win.fire('focus', {});
-    const kinds = events().map(e => e.kind);
-    assert.deepStrictEqual(kinds, ['blur', 'visibility', 'visibility', 'focus']);
-    assert.strictEqual(events()[1].hidden, true);
-    assert.strictEqual(events()[2].hidden, false);
-  });
+// ── viewport changes (spec §2) ─────────────────────────────────────────────
 
-  it('coalesces resize through rAF with new dimensions', () => {
-    const { win, env, events } = harness({});
-    win.innerWidth = 800; win.innerHeight = 600;
+describe('viewport changes are session-level, not events (spec §2)', () => {
+  it('resize lands in viewport_changes as a complete ViewportState', () => {
+    const { rec, win, env, events } = harness({});
+    win.innerWidth = 800; win.innerHeight = 600; win.devicePixelRatio = 2;
     win.fire('resize', {});
     win.innerWidth = 640; win.innerHeight = 480;
     win.fire('resize', {});
     env.flushRaf();
-    assert.strictEqual(events().length, 1);
-    assert.deepStrictEqual(
-      { w: events()[0].w, h: events()[0].h }, { w: 640, h: 480 });
-  });
-});
 
-describe('touch capture', () => {
-  it('records touchstart/touchend and rAF-throttles touchmove', () => {
-    const { doc, env, events } = harness({});
-    doc.fire('touchstart', { touches: [{ pageX: 10, pageY: 20 }] });
-    doc.fire('touchmove', { touches: [{ pageX: 11, pageY: 21 }] });
-    doc.fire('touchmove', { touches: [{ pageX: 15, pageY: 25 }] });   // same frame
+    assert.deepStrictEqual(events(), [], 'no resize event in the segment stream');
+    assert.deepStrictEqual(rec.getState().viewportChanges, [
+      { w: 640, h: 480, dpr: 2, scale: 1, offset_x: 0, offset_y: 0, t: 1000 },
+    ], 'coalesced to one entry, stamped with the original time');
+  });
+
+  it('visualViewport changes push the same complete state', () => {
+    const { rec, win, env } = harness({});
+    const vv = { scale: 2.5, offsetLeft: 30.06, offsetTop: 10, addEventListener() {} };
+    win.visualViewport = vv;
+    // Re-attach so the visualViewport listener registration sees the API.
+    const scrollHandler = [];
+    vv.addEventListener = (ev, fn) => scrollHandler.push([ev, fn]);
+    attachTraceCapture(rec, { ...env, win });
+    scrollHandler.find(([ev]) => ev === 'scroll')[1]({});
     env.flushRaf();
-    doc.fire('touchend', { changedTouches: [{ pageX: 15, pageY: 25 }] });
-    const kinds = events().map(e => e.kind);
-    assert.deepStrictEqual(kinds, ['touchstart', 'touchmove', 'touchend']);
-    assert.strictEqual(events()[1].x, 15, 'last position in the frame wins');
+
+    const changes = rec.getState().viewportChanges;
+    assert.deepStrictEqual(changes[changes.length - 1],
+      { w: 1000, h: 700, dpr: 1, scale: 2.5, offset_x: 30.1, offset_y: 10, t: 1000 });
+  });
+
+  it('carries the ORIGINAL time, not the flush time', () => {
+    const { rec, win, env } = harness({});
+    win.innerWidth = 640;
+    win.fire('resize', {});
+    env.advance(48);                       // three frames pass before the flush
+    env.flushRaf();
+    assert.strictEqual(rec.getState().viewportChanges[0].t, 1000);
   });
 });
 
-describe('failure containment', () => {
+// ── clipboard modes (spec §5.3) ────────────────────────────────────────────
+
+describe('clipboard modes (spec §5.3)', () => {
+  it('length-only by default: no content, in any channel', () => {
+    const { doc, events } = harness({});
+    doc.fire('paste', { clipboardData: { getData: () => SENTINEL } });
+    doc.fire('drop', { dataTransfer: { getData: () => SENTINEL + '!' } });
+
+    assert.deepStrictEqual(events()[0], {
+      type: 'clipboard.paste', t: 1000, target: null,
+      text: null, html: null, len: SENTINEL.length,
+    });
+    assert.strictEqual(events()[1].len, SENTINEL.length + 1);
+    assert.strictEqual(scan(events()).includes(SENTINEL), false);
+    assertStrict(events());
+  });
+
+  it('clipboardContent:true records text and html instead of a length', () => {
+    const { doc, events } = harness({ clipboardContent: true });
+    doc.fire('paste', {
+      clipboardData: {
+        getData: (fmt) => (fmt === 'text/html' ? '<b>hi</b>' : 'hi'),
+      },
+    });
+    assert.deepStrictEqual(events()[0], {
+      type: 'clipboard.paste', t: 1000, target: null,
+      text: 'hi', html: '<b>hi</b>', len: null,
+    });
+    assertStrict(events());
+  });
+
+  it('copy and cut carry no length (the clipboard is not populated yet)', () => {
+    const { doc, events } = harness({ clipboardContent: true });
+    doc.fire('copy', {});
+    doc.fire('cut', {});
+    assert.deepStrictEqual(events().map(e => [e.type, e.len]),
+      [['clipboard.copy', null], ['clipboard.cut', null]]);
+  });
+
+  it('addresses the clipboard target by node id (spec §5.3)', () => {
+    const { root, doc: p } = page('<div id="stage"><textarea id="notes"></textarea></div>');
+    const span = keyframe(root);
+    const notes = p.getElementById('notes');
+    const { doc, events } = harness({}, { span });
+    doc.fire('paste', { target: notes, clipboardData: { getData: () => 'abc' } });
+    assert.strictEqual(events()[0].target, span.registry.peekId(notes));
+  });
+});
+
+// ── lifecycle + containment ────────────────────────────────────────────────
+
+describe('recording lifecycle (spec §5.7)', () => {
+  it('the buffer cap emits recording.capture_stopped, not the v1 marker', () => {
+    const { rec, doc, events } = harness({ maxEventsPerTrial: 2 });
+    for (let i = 0; i < 5; i++) doc.fire('click', { clientX: i, clientY: i, button: 0 });
+
+    const stop = events()[events().length - 1];
+    assert.strictEqual(stop.type, 'recording.capture_stopped');
+    assert.strictEqual(stop.reason, 'buffer_limit');
+    assert.deepStrictEqual(stop.extensions, { 'cyborg-hunter': { limit_events: 2 } },
+      'the configured limit is CH diagnostics, so it rides in the vendor namespace');
+    assert.strictEqual(rec.getState().captureStopped, true);
+    assertStrict(events());
+  });
+});
+
+describe('capture-phase registration and failure containment', () => {
+  it('discrete pointer listeners register at capture phase', () => {
+    const { doc } = harness({});
+    for (const kind of ['mousedown', 'mouseup', 'click']) {
+      const o = doc.options[kind];
+      assert.ok(o === true || (o && o.capture === true),
+        kind + ' must be capture-phase (handlers that stop recording run later)');
+    }
+  });
+
   it('a throwing listener body records a captureFailure and keeps recording', () => {
     const { rec, doc, events } = harness({});
-    // paste with a clipboardData whose getData throws
     doc.fire('paste', { clipboardData: { getData: () => { throw new Error('denied'); } } });
-    doc.fire('click', { pageX: 1, pageY: 1 });
-    const s = rec.getState();
-    // paste is still recorded (len null) OR a captureFailure is logged — but
-    // the subsequent click MUST be recorded either way.
-    assert.strictEqual(events()[events().length - 1].kind, 'click');
+    doc.fire('click', { clientX: 1, clientY: 1, button: 0 });
+    assert.strictEqual(events()[events().length - 1].type, 'mouse.click');
+    assert.ok(rec.getState().captureFailures.length <= 1);
+  });
+
+  it('keys:"off" attaches no key listeners at all', () => {
+    const { doc, events } = harness({ keys: 'off' });
+    doc.fire('keydown', { key: 'a', code: 'KeyA', target: { tagName: 'BODY' } });
+    assert.deepStrictEqual(events(), []);
   });
 });

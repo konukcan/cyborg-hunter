@@ -35,9 +35,11 @@ function harness(configOverrides) {
   return { rec, doc, win, env, events };
 }
 // A DOM element that matches a redact selector (only '[data-ch-redact]' here).
+// `nodeType` is load-bearing: the shared redaction predicate (redaction.js)
+// asks about ELEMENTS, so a fake that does not declare itself one is not one.
 function redactableTarget(tagName, value) {
   return {
-    tagName, value,
+    nodeType: 1, tagName, value,
     matches: (sel) => sel === '[data-ch-redact]',
   };
 }
@@ -136,7 +138,8 @@ describe('F4 — recorder must cap total payload size, not just event count', ()
     const st = rec.getState();
     assert.equal(st.captureStopped, true, 'size budget must stop capture');
     const evs = st.trials.flatMap(tr => tr.events);
-    assert.ok(evs.some(e => e.kind === 'ch:capture_stopped'), 'a capture_stopped marker is recorded');
+    assert.ok(evs.some(e => e.type === 'recording.capture_stopped'),
+      'a capture_stopped marker is recorded (spec §5.7)');
     // Far fewer than 20 events land — the size cap bit well before 100k events.
     assert.ok(evs.filter(e => e.kind === 'input').length < 20);
   });

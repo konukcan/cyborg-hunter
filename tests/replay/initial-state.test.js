@@ -624,7 +624,7 @@ function fakeTarget() {
   };
 }
 
-function traceHarness(configOverrides) {
+function traceHarness(configOverrides, envExtras) {
   globalThis.window = { innerWidth: 1000, innerHeight: 700, devicePixelRatio: 1 };
   const rec = createRecorder({ participantId: 'P1', ...configOverrides });
   const doc = fakeTarget();
@@ -638,6 +638,7 @@ function traceHarness(configOverrides) {
     raf: (fn) => { rafQueue.push(fn); },
     advance: (ms) => { t += ms; },
     flushRaf: () => { const q = rafQueue.splice(0); q.forEach(f => f()); },
+    ...(envExtras || {}),
   };
   rec.startSession();
   const trace = attachTraceCapture(rec, env);
@@ -717,28 +718,26 @@ describe('scrolled-element tracker (capture-trace)', () => {
     assert.deepStrictEqual(trackedIds(trace.getScrolledElements()), ['fake']);
   });
 
-  it('leaves the v1 scroll events exactly as they were', () => {
-    // Task 4 is additive: the tracker rides along on the existing listener and
-    // changes nothing on the wire (capture-trace.test.js stays green untouched).
-    const { win, env, events } = traceHarness({});
-    const { doc: page } = build('<div id="stage"><div id="a">a</div></div>');
+  it('rides along on the scroll listener without changing what it emits', () => {
+    // The tracker is a side effect of the listener, not a channel of its own:
+    // the two scroll events are exactly spec §5.6's pair, and the element one
+    // needs the span the keyframe built (T3.5 rewrote the wire; the tracking
+    // behaviour above is unchanged by it).
+    const { root, doc: page } = build('<div id="stage"><div id="a">a</div></div>');
     const a = page.getElementById('a');
     a.scrollTop = 40; a.scrollLeft = 5;
+    const { span } = keyframe(root);
+    const { win, env, events } = traceHarness({}, { span });
 
     win.scrollX = 0; win.scrollY = 100;
     win.fire('scroll', { target: null });
     win.fire('scroll', { target: a });
     env.flushRaf();
 
-    assert.deepStrictEqual(events().map(e => e.kind), ['scroll', 'scroll']);
-    assert.deepStrictEqual(Object.keys(events()[0]).sort(), ['kind', 't', 'x', 'y']);
-    assert.deepStrictEqual(
-      { x: events()[0].x, y: events()[0].y }, { x: 0, y: 100 });
-    assert.deepStrictEqual(Object.keys(events()[1]).sort(),
-      ['el', 'id', 'kind', 't', 'x', 'y']);
-    assert.deepStrictEqual(
-      { el: events()[1].el, id: events()[1].id, x: events()[1].x, y: events()[1].y },
-      { el: 'div#a', id: 'a', x: 5, y: 40 });
+    assert.deepStrictEqual(events(), [
+      { type: 'scroll.window', t: 1000, x: 0, y: 100 },
+      { type: 'scroll.element', t: 1000, node: span.registry.peekId(a), x: 5, y: 40 },
+    ]);
   });
 
   it('feeds buildInitialState end to end', () => {
