@@ -18,6 +18,7 @@
 
 import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { Window } from 'happy-dom';
 
 import * as CHReplay from '../../src/replay/index.js';
@@ -41,12 +42,24 @@ const REDACTED_FORM_SENTINEL = 'ZQREDACTEDFORMSTATE55';    // IDL value → init
 const EXCLUDED_SENTINEL = 'ZQBAITTYPEDVALUE9999999999';    // bait IDL value
 const EXCLUDED_ATTR_SENTINEL = 'ZQBAITATTRIBUTE31';        // bait value ATTRIBUTE
 
+// The same two channels again, driven from inside a CONTINUATION segment. A
+// continuation is the one segment kind that takes no keyframe and resets
+// nothing, so every withholding decision it makes is carried by the mutation
+// and event paths alone — no fresh snapshot re-derives them. Separate strings
+// so a leak names the segment kind as well as the channel.
+const CONT_REDACTED_SENTINEL = 'ZQCONTREDACTED808';        // password IDL value
+const CONT_REDACTED_ATTR_SENTINEL = 'ZQCONTREDACTEDATTR909'; // value ATTRIBUTE
+const CONT_EXCLUDED_SENTINEL = 'ZQCONTBAITVALUE7070707070';  // bait IDL value
+
 const ALL_SENTINELS = [
   ['password IDL value', REDACTED_SENTINEL],
   ['value attribute in a redacted subtree', REDACTED_ATTR_SENTINEL],
   ['redacted form state (initial_state.form)', REDACTED_FORM_SENTINEL],
   ['excluded IDL value', EXCLUDED_SENTINEL],
   ['excluded value attribute', EXCLUDED_ATTR_SENTINEL],
+  ['password IDL value, in a continuation', CONT_REDACTED_SENTINEL],
+  ['value attribute in a redacted subtree, in a continuation', CONT_REDACTED_ATTR_SENTINEL],
+  ['excluded IDL value, in a continuation', CONT_EXCLUDED_SENTINEL],
 ];
 
 // The bait marker sits on the INPUT ITSELF, not on a wrapper: that is the shape
@@ -110,13 +123,19 @@ function key(el, type, k) {
   el.dispatchEvent(new win.KeyboardEvent(type, { bubbles: true, key: k, code: 'Key' + k }));
 }
 
-// A scripted session: two bracketed trials with DOM mutations, typing (plain,
-// redacted and excluded), a click, and an element scroll.
+// A scripted session: three bracketed trials with DOM mutations, typing (plain,
+// redacted and excluded), clicks, and an element scroll.
+//
+// `keyframeEvery: 2` fixes the cadence so the shape is a chain rather than an
+// accident of size: segment 0 keyframes (§3 requires the first one to), segment
+// 1 CONTINUES it, and segment 2 opens the next span. The scripted mutations are
+// far too small to trip the size trigger, and the assertions state the shape, so
+// a cadence change shows up as a failure here rather than as a quiet reshuffle.
 async function record() {
   const doc = win.document;
   const api = CHReplay.attach({
     participantId: 'P-E2E-01', tier: 'dom', root: '#stage',
-    autoSave: { mode: 'none' },
+    keyframeEvery: 2, autoSave: { mode: 'none' },
   });
   api.startSession();
 
@@ -171,8 +190,31 @@ async function record() {
   await settle();
 
   api.endTrial();
+
+  // ── segment 1: a CONTINUATION (spec §3) ──
+  // No keyframe, no seed, no span reset — everything below addresses the nodes
+  // segment 0's keyframe numbered, and every privacy floor has to hold with no
+  // fresh snapshot behind it.
   api.startTrial({ trialId: 'trial-2', plugin: 'ch:standalone' });
+
+  fire(doc.getElementById('go'), 'click');          // anchor into the old span
   doc.getElementById('stage').removeChild(feedback);
+  doc.getElementById('msg').firstChild.data = 'Next round';
+
+  secret.value = CONT_REDACTED_SENTINEL;
+  key(secret, 'keydown', 'Q');
+  fire(secret, 'input');
+
+  bait.value = CONT_EXCLUDED_SENTINEL;
+  key(bait, 'keydown', 'Q');
+  fire(bait, 'input');
+
+  privateText.setAttribute('value', CONT_REDACTED_ATTR_SENTINEL);
+  await settle();
+  api.endTrial();
+
+  // ── segment 2: the next keyframe ──
+  api.startTrial({ trialId: 'trial-3', plugin: 'ch:standalone' });
   await settle();
   api.endTrial();
 
@@ -200,8 +242,9 @@ describe('end-to-end capture → v2 recording', () => {
     assert.equal(recording.schema_version, 2);
     assert.equal(recording.participant_id, 'P-E2E-01');
     assert.equal(recording.observed_root, '#stage');
-    assert.equal(recording.segments.length, 2);
-    assert.deepEqual(recording.segments.map(s => s.label), ['trial-1', 'trial-2']);
+    assert.equal(recording.segments.length, 3);
+    assert.deepEqual(recording.segments.map(s => s.label),
+      ['trial-1', 'trial-2', 'trial-3']);
     const types = new Set(recording.segments.flatMap(s => s.events).map(e => e.type));
     for (const expected of ['mouse.click', 'key.down', 'input.value',
                             'dom.add', 'dom.attr', 'dom.text', 'dom.remove',
@@ -210,11 +253,78 @@ describe('end-to-end capture → v2 recording', () => {
     }
   });
 
-  it('every segment is a keyframe, and the second one seeds the scroll it inherited', () => {
-    assert.ok(recording.segments.every(s => s.initial_dom && s.initial_dom.kind === 'element'));
-    // The pane scrolled during trial 1; a fresh tree cannot carry that, so
-    // trial 2's keyframe must say so (spec §3 element_scroll).
-    const seed = recording.segments[1].initial_state;
+  it('the cadence is keyframe → continuation → keyframe (spec §3)', () => {
+    assert.deepEqual(recording.segments.map(s => !!s.initial_dom),
+      [true, false, true]);
+    assert.equal(recording.segments[0].initial_dom.kind, 'element');
+    assert.equal(recording.segments[2].initial_dom.kind, 'element');
+    assert.equal(recording.segments[2].initial_dom.id, 1,
+      'the second keyframe opens a fresh span, numbering from 1 again');
+  });
+
+  it('reproduces the canonical fixture\'s chain, segment kind for segment kind', () => {
+    // canonical-core.json is hand-authored and predates every line of the
+    // capture rewrite, so it is the one oracle CH's own serializer cannot have
+    // influenced. Its three segments are keyframe / continuation / keyframe with
+    // a seed on the last, which is the chain the scripted session above drives —
+    // and a continuation's key set is the same key set as a keyframe's, which is
+    // what stops "continuation" from becoming a differently-shaped segment.
+    const canonical = JSON.parse(readFileSync(
+      new URL('./schema-v2/fixtures/canonical-core.json', import.meta.url), 'utf8'));
+    const kinds = (r) => r.segments.map(s => [
+      s.initial_dom == null ? 'continuation' : 'keyframe',
+      s.initial_state == null ? 'no-seed' : 'seeded',
+    ]);
+    assert.deepEqual(kinds(recording), kinds(canonical));
+    assert.deepEqual(Object.keys(recording.segments[1]),
+      Object.keys(canonical.segments[1]));
+    assert.deepEqual(Object.keys(recording.segments[1]),
+      Object.keys(recording.segments[0]),
+      'a continuation is a segment with a null field, not a different shape');
+  });
+
+  it('the continuation states nothing about the DOM — that is what makes it one', () => {
+    const cont = recording.segments[1];
+    assert.equal(cont.initial_dom, null);
+    assert.equal(cont.initial_state, null,
+      'a seed states what was true before a KEYFRAME (§3); a continuation has none');
+    assert.ok(cont.events.some(e => e.type.startsWith('dom.')),
+      'and it is a real continuation: it carries patches against the earlier span');
+  });
+
+  it('the continuation addresses the earlier keyframe: patches AND anchors', () => {
+    // The property the whole feature rests on. Node ids are scoped to a
+    // keyframe SPAN (spec §4), so a segment that takes no keyframe must keep
+    // naming the nodes the span's keyframe numbered — in `dom.*` patches and in
+    // the `anchor.node` of an ordinary interaction alike, since both read the
+    // same registry.
+    const keyframe = recording.segments[0].initial_dom;
+    const ids = new Map();
+    (function walk(n) {
+      if (n.attrs && n.attrs.id) ids.set(n.attrs.id, n.id);
+      (n.children || []).forEach(walk);
+    })(keyframe);
+
+    const cont = recording.segments[1];
+    const text = cont.events.find(e => e.type === 'dom.text');
+    assert.ok(text, 'the continuation changed text in the inherited tree');
+    assert.equal(text.text, 'Next round');
+
+    const remove = cont.events.find(e => e.type === 'dom.remove');
+    assert.ok(remove, 'and removed a node that was ADDED in the previous segment');
+
+    const click = cont.events.find(e => e.type === 'mouse.click');
+    assert.equal(click.target, ids.get('go'),
+      'the click names the id the earlier keyframe gave the button');
+    assert.equal(click.anchor.node, ids.get('go'));
+    assert.equal(click.anchor.tag, 'button');
+  });
+
+  it('the second keyframe seeds the scroll it inherited', () => {
+    // The pane scrolled during trial 1; a fresh tree cannot carry that, so the
+    // NEXT keyframe must say so (spec §3 element_scroll) — the continuation in
+    // between needs no seed because it inherits the state along with the ids.
+    const seed = recording.segments[2].initial_state;
     assert.ok(seed, 'the second keyframe needs a seed');
     assert.equal(seed.element_scroll.length, 1);
     assert.equal(seed.element_scroll[0].y, 60);
@@ -257,6 +367,24 @@ describe('end-to-end capture → v2 recording', () => {
       'the excluded field reports nothing at all, not even a length');
   });
 
+  it('the continuation\'s withheld channels are LIVE, not merely empty', () => {
+    // The other half of the sentinel scan, for the segment kind that has no
+    // keyframe behind it: these assert the continuation really drove the
+    // password, bait and redacted-attribute channels, so their sentinels are
+    // absent because something withheld them.
+    const cont = recording.segments[1];
+    assert.ok(cont.events.some(e => e.type === 'input.value' && e.redacted === true
+      && e.value_len === CONT_REDACTED_SENTINEL.length),
+      'the redacted field reports its new length and no content');
+    assert.ok(cont.events.some(e => e.type === 'key.down' && e.redacted === true),
+      'the redacted keystroke is recorded as redacted, not dropped');
+    assert.ok(!cont.events.some(e => e.type === 'input.value'
+      && e.value_len === CONT_EXCLUDED_SENTINEL.length),
+      'the excluded field reports nothing at all, not even a length');
+    assert.ok(!cont.events.some(e => e.type === 'dom.attr' && e.name === 'value'),
+      'and the redacted value attribute produced no patch');
+  });
+
   it('the excluded subtree is a placeholder, not content', () => {
     const stage = recording.segments[0].initial_dom;
     const wrapper = stage.children.find(c => c.attrs && c.attrs.id === 'bait');
@@ -270,7 +398,7 @@ describe('end-to-end capture → v2 recording', () => {
     // A scan proves nothing about a channel the session never drives. These
     // assert the channels exist and carry data, so the absence of the
     // sentinels above is withholding rather than emptiness.
-    const seed = recording.segments[1].initial_state;
+    const seed = recording.segments[2].initial_state;
     assert.ok(seed.form.some(f => f.value === 'ace of spades'),
       'initial_state.form is a live channel: the plain field is seeded');
     assert.equal(seed.form.length, 1,

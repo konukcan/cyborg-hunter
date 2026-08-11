@@ -24,6 +24,14 @@ export const REPLAY_DEFAULTS = {
   // the page. Set true for content mode (jsPsych-recorder behaviour).
   clipboardContent: false,
   root: null,                  // capture root; resolved at startSession (default document.body)
+  // Keyframe cadence (spec §3), read by capture-dom at every segment start.
+  // The size-aware trigger takes a keyframe as soon as the patches since the
+  // last one rival its size; this is the FALLBACK that bounds a span whose
+  // DOM barely changes — at most this many segments per keyframe, so at most
+  // this many segments a player must replay forward from a checkpoint. 1 =
+  // keyframe every segment, which is what a display-wiping host wants (the
+  // jsPsych adapter forces it). null disables the fallback, leaving only size.
+  keyframeEvery: 10,
   autoSave: { mode: 'none' },  // 'datapipe' | 'download' | 'none'
   maxEventsPerTrial: 50000,
   // Size ceiling per trial, measured in CHARACTERS (JS string length / UTF-16
@@ -56,7 +64,27 @@ export const REPLAY_DEFAULTS = {
   // which is worse, since a viewport stream is state and not deltas. 2000 kept
   // deliberately at the v2 switchover: dedup now absorbs the cheap case, so
   // these are 2000 REAL geometries (~150 KB), already far past any real session.
-  maxViewportChanges: 2000
+  maxViewportChanges: 2000,
+  // Ceiling for the SESSION-level guard-violation array (spec §9 vendor data).
+  // The third stream the per-trial caps cannot see, and the most expensive per
+  // entry: every `phase:'start'` violation carries a whole pre-scramble DOM
+  // tree. `maxCharsPerTrial` bounds each tree, nothing bounded how many.
+  //
+  // 40 entries = 20 start/end episodes, so at most ~20 trees. A v2 keyframe
+  // measures ~3.4x its v1 HTML (Task 2's measurement: 951 -> ~3.2 KB on the
+  // demo page, and a mid-sized experiment DOM lands nearer 50 KB), which puts
+  // the realistic ceiling around 1 MB of vendor payload — the same order the
+  // viewport cap allows, and reached only by a session that left fullscreen
+  // twenty times. CH's hard scoring has flagged such a participant long before
+  // the eleventh episode; the trees after that are evidence nobody reads.
+  //
+  // Cost of a COUNT cap rather than a trees-only one: past the ceiling a
+  // `phase:'end'` entry can be dropped while its `start` was kept, so the last
+  // episode may read as unclosed. Accepted, because the array is unbounded in
+  // both dimensions — a friction bug looping cheap violations grows it just as
+  // surely as the trees do — and the ceiling sits far past any honest count.
+  // Set null to disable.
+  maxGuardViolations: 40
 };
 
 // States: created → session ⇄ trial → stopped; destroyed is terminal.
@@ -175,6 +203,8 @@ export function createRecorder(userConfig) {
   // Set once, when the viewport stream hits its ceiling, so the note about it
   // is recorded once rather than per dropped entry.
   var viewportCapped = false;
+  // The same, for the guard-violation array.
+  var guardViolationsCapped = false;
 
   // Two viewport entries describe the same geometry when every field but `t`
   // agrees. Written generically rather than against the six §2 field names: the
@@ -377,11 +407,26 @@ export function createRecorder(userConfig) {
     // §5.8 forbids vendor types in the stream, and there is no standard event
     // for "the participant left fullscreen". The entry keeps its `t`, so a
     // viewer can still place it on the timeline beside the events.
+    //
+    // Capped like the viewport stream and for the same reason (a session-level
+    // array no per-trial cap can see), with the same forward-only bound and the
+    // same single note through captureFailure. Deliberately NOT captureStopped:
+    // §5.7's truncation means EVENT capture stopped, and this is vendor data.
     pushGuardViolation: function (entry, tOverride) {
       if (state === 'destroyed') {
         throw new Error('[cyborg-hunter-replay] guard violation pushed to a destroyed recorder');
       }
       if (state === 'created' || state === 'stopped') return;
+      var gcap = config.maxGuardViolations;
+      if (gcap != null && session.guardViolations.length >= gcap) {
+        if (!guardViolationsCapped) {
+          guardViolationsCapped = true;
+          recorder.captureFailure('guard_violations', new Error(
+            'guard_violations cap reached (' + gcap + '); later guard violations ' +
+            'are not recorded'));
+        }
+        return;
+      }
       session.guardViolations.push(Object.assign({}, entry, {
         t: tOverride != null ? tOverride : performance.now()
       }));

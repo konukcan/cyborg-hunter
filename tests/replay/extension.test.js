@@ -173,6 +173,51 @@ describe('jsPsych replay adapter', () => {
     assert.strictEqual(rec.extensions['cyborg-hunter'].tier, 'dom');
   });
 
+  it('EVERY jsPsych segment keyframes — the adapter overrides the cadence', async () => {
+    // jsPsych wipes the display between trials, so a continuation would carry
+    // ids for a DOM that no longer exists and force the player to reconstruct
+    // each trial by replaying the wipe as patches. The adapter forces
+    // keyframeEvery: 1 over whatever the researcher configured; passing 10 here
+    // is what makes the override observable (standalone, segments 2 and 3 would
+    // be continuations).
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (msg) => warnings.push(String(msg));
+    let rec;
+    try {
+      const { jsPsych } = mockJsPsych(true);
+      const ext = new CyborgHunterReplayExtension(jsPsych);
+      ext.initialize({ participantId: 'P5', tier: 'dom', keyframeEvery: 10,
+                       autoSave: { mode: 'none' } });
+      for (const id of ['a', 'b', 'c']) { ext.on_load({ trialId: id }); ext.on_finish({}); }
+      await ext.finalize();
+      rec = ext.getLastRecording();
+    } finally { console.warn = origWarn; }
+
+    assert.strictEqual(rec.segments.length, 3);
+    assert.ok(rec.segments.every(s => s.initial_dom),
+      'no continuations on a display-wiping host');
+    assert.ok(rec.segments.every(s => s.initial_dom.id === 1),
+      'each segment opens its own keyframe span');
+    assert.ok(warnings.some(w => /keyframeEvery/.test(w)),
+      'silently discarding a configured value would be worse than ignoring it');
+  });
+
+  it('the override is silent when nothing was configured', async () => {
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (msg) => warnings.push(String(msg));
+    try {
+      const { jsPsych } = mockJsPsych(true);
+      const ext = new CyborgHunterReplayExtension(jsPsych);
+      ext.initialize({ participantId: 'P6', tier: 'dom', autoSave: { mode: 'none' } });
+      ext.on_load({ trialId: 'a' });
+      ext.on_finish({});
+      await ext.finalize();
+    } finally { console.warn = origWarn; }
+    assert.ok(!warnings.some(w => /keyframeEvery/.test(w)));
+  });
+
   // ── host identity (spec §2) ──────────────────────────────────────────────
   // `recorder` says which library wrote the file; `host` says what it was
   // embedded in. Only the adapter knows the answer — the recorder core is

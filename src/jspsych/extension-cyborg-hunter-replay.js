@@ -47,9 +47,29 @@ class CyborgHunterReplayExtension {
     this._monitoring = false;
   }
 
+  // Keyframe cadence on a jsPsych host: EVERY segment, always.
+  //
+  // The standalone recorder keyframes adaptively (spec §3's size trigger plus a
+  // segment fallback) because a persistent DOM makes a continuation cheap: the
+  // player carries the previous segment's tree forward and applies deltas. A
+  // jsPsych trial wipes the display and builds a new one, so there is nothing
+  // to carry forward — a continuation would make the player reconstruct each
+  // trial by replaying the wipe as a removal of everything followed by an
+  // insertion of everything, and would leave a seek into any trial dependent on
+  // the trials before it. §3 says as much: wiping hosts SHOULD keyframe every
+  // segment, which is also jsPsych-v1's own behaviour.
+  //
+  // Forced over researcher config rather than merged under it: the reason is a
+  // property of the host, not a tuning preference, so a value passed here is a
+  // misunderstanding rather than a choice. It is not discarded silently.
   initialize(params) {
     this.params = params || {};
-    this.api = CHReplay.attach(this.params);
+    if (this.params.keyframeEvery != null && this.params.keyframeEvery !== 1) {
+      console.warn('[cyborg-hunter-replay] ignoring keyframeEvery: ' +
+        this.params.keyframeEvery + ' — jsPsych wipes the display between ' +
+        'trials, so every segment is recorded as a keyframe.');
+    }
+    this.api = CHReplay.attach(Object.assign({}, this.params, { keyframeEvery: 1 }));
     this.api.startSession();
     this._stashChMonitor();
   }

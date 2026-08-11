@@ -84,9 +84,67 @@ function payloadChars(value) {
 }
 
 /**
+ * Keyframe or continuation? (spec §3's cadence guidance.)
+ *
+ * Pure, so the boundaries a scripted DOM cannot hit on purpose are testable
+ * directly. `cadence` is the bookkeeping the attachment keeps per span:
+ *
+ *   `hasKeyframe`       has a keyframe of THIS span reached the file? False at
+ *                       the start of a recording and after a keyframe was
+ *                       dropped or threw — in both cases there is nothing for
+ *                       a continuation to continue from, and §3 requires the
+ *                       first DOM-bearing segment to be a keyframe.
+ *   `segments`          segments opened in this span, the keyframe included.
+ *   `patchChars`        the plan's `bytesSinceKeyframe`. See below.
+ *   `lastSnapshotChars` what the span's keyframe cost the file: the exact JSON
+ *                       length of its tree plus its `initial_state` seed (the
+ *                       same number `noteSnapshotChars` gets). 0 when no
+ *                       keyframe has been measured.
+ *
+ * WHAT `patchChars` COUNTS, exactly: the sum over every observer batch flushed
+ * since the keyframe of `JSON.stringify(patches).length`, where `patches` is
+ * the array of `dom.*` events that batch mapped to.
+ *
+ *   - CHARS, not bytes. The plan and design call it `bytesSinceKeyframe`; it is
+ *     measured in the same unit as `maxCharsPerTrial` (UTF-16 code units, which
+ *     UTF-8 byte size can exceed for non-ASCII), so it carries that config's
+ *     name for that config's reason. Both sides of the comparison use it, so
+ *     the ratio the trigger actually tests is unit-free.
+ *   - `dom.*` ONLY. The question the trigger asks is whether replaying the
+ *     deltas has become as expensive as re-stating the DOM. Trace events
+ *     (keystrokes, mouse moves) are in the file either way and reconstruct
+ *     nothing, so counting them would keyframe a typing-heavy, DOM-static
+ *     segment for no gain.
+ *   - AT EMISSION, before the recorder's per-trial caps can refuse a record, and
+ *     off the in-memory event (absolute `t`) rather than the wire event
+ *     (session-relative, usually shorter). Both make the count an over-estimate
+ *     by a little, which biases toward keyframing sooner — the direction that
+ *     shortens seek distance and shrinks the blast radius of a corrupt event.
+ *
+ * @param {{hasKeyframe: boolean, segments: number, patchChars: number,
+ *          lastSnapshotChars: number}} cadence
+ * @param {number|null} keyframeEvery  segment fallback (recorder config)
+ */
+export function shouldKeyframe(cadence, keyframeEvery) {
+  if (!cadence.hasKeyframe) return true;
+  // The fallback: at most `keyframeEvery` segments per span, so segment N of a
+  // span (counting the keyframe as 1) is where the next keyframe lands.
+  if (typeof keyframeEvery === 'number' && keyframeEvery >= 1 &&
+      cadence.segments >= keyframeEvery) return true;
+  // The size trigger: spec §3's self-tuning rule — take a keyframe once the
+  // accumulated mutation volume rivals a fresh snapshot's size, because at that
+  // point the keyframe is free in file size. `>=` so parity keyframes.
+  // Guarded on a measured keyframe: 0 would make the comparison vacuously true.
+  return cadence.lastSnapshotChars > 0 &&
+         cadence.patchChars >= cadence.lastSnapshotChars;
+}
+
+/**
  * Attaches tier-2 capture to a recorder:
- *  - a KEYFRAME at each trial start: the DomNode tree plus its `initial_state`
- *    seed, both taken on the shared capture span
+ *  - a KEYFRAME at the start of a segment the cadence asks for one at: the
+ *    DomNode tree plus its `initial_state` seed, both taken on the shared
+ *    capture span. Every other segment is a CONTINUATION of it (see
+ *    `shouldKeyframe`)
  *  - MutationObserver batches → `dom.*` patch events
  *  - initial stylesheet capture at attach
  *  - guard-friction cooperation: onViolation('start') fires synchronously
@@ -183,18 +241,37 @@ export function attachDomCapture(rec, env) {
     rec.setStylesheets(captureStylesheets(doc));
   } catch (e) { rec.captureFailure('stylesheets', e); }
 
-  // ── Keyframes (spec §3) ──
-  // A keyframe at the start of every trial, which is v1's cadence and the
-  // spec's advice for wiping hosts. Task 8 makes it size-aware for
-  // persistent-DOM hosts; until then every segment is a keyframe and no
-  // segment is a continuation, which is a legal recording either way.
+  // ── Keyframe cadence (spec §3) ──
   //
-  // The order is a contract, not a preference: reset, then walk, then seed.
-  // `span.reset()` restarts ids at 1 and empties the delivered picture in one
-  // call (span.js), the walk is the span's first allocation so the tree numbers
-  // 1..N, and the seed reads the ids that walk assigned. Taken in any other
-  // order the seed names nodes the file does not contain.
+  // A segment either opens a new keyframe span — a full snapshot, ids restarting
+  // at 1 — or CONTINUES the current one, carrying `initial_dom: null` and
+  // nothing else. `shouldKeyframe` above owns the decision and documents the
+  // trigger; this is the bookkeeping it reads, one object per attachment, which
+  // is one per recording.
+  var cadence = {
+    hasKeyframe: false, segments: 0, patchChars: 0, lastSnapshotChars: 0,
+  };
+
   rec.onTrialStart(function (trial) {
+    if (!shouldKeyframe(cadence, rec.config.keyframeEvery)) {
+      // A CONTINUATION. Nothing to do, and that is the point: the trial's
+      // `initialDom`/`initialState` are already null (recorder.js), the span is
+      // NOT reset, so every id the keyframe assigned stays valid and every node
+      // the player holds stays held. A seed here would be wrong rather than
+      // merely redundant — `initial_state` states what was true BEFORE a
+      // keyframe (spec §3), and a continuation has no keyframe to precede.
+      // The state it would re-state is already in the file as the patches and
+      // events of the segments since, which the player has replayed by the time
+      // it arrives here.
+      cadence.segments++;
+      return;
+    }
+    // A KEYFRAME. The order is a contract, not a preference: reset, then walk,
+    // then seed. `span.reset()` restarts ids at 1 and empties the delivered
+    // picture in one call (span.js — never `span.registry.resetSpan()` alone,
+    // which silently loses nodes), the walk is the span's FIRST allocation so
+    // the tree numbers 1..N, and the seed reads the ids that walk assigned.
+    // Taken in any other order the seed names nodes the file does not contain.
     try {
       span.reset();
       var tree = serializeTree(root, span, opts);
@@ -222,18 +299,44 @@ export function attachDomCapture(rec, env) {
         // the patches that follow address nothing and are dropped rather than
         // naming ids no player ever received.
         span.reset();
+        keyframeFailed();
       } else {
         trial.initialDom = tree;
         trial.initialState = seed;
         rec.noteSnapshotChars(trial, chars);
+        cadence.hasKeyframe = true;
+        cadence.segments = 1;
+        cadence.patchChars = 0;
+        cadence.lastSnapshotChars = chars;
       }
     } catch (e) {
       rec.captureFailure('dom_snapshot', e);
       trial.initialDom = null;
       trial.initialState = null;
       span.reset();
+      keyframeFailed();
     }
   });
+
+  // A keyframe that was dropped or threw leaves the file with no tree for this
+  // span, so the next segment must take one rather than continue from nothing:
+  // a continuation carrying dom.* patches before any keyframe is a recording no
+  // player can reconstruct, and strict validation rejects it (spec §3).
+  //
+  // Everything goes back to the pre-keyframe state, counters included, so that
+  // the retry has exactly ONE cause: `hasKeyframe` is false and §3 forces a
+  // keyframe. Leaving the counters at the values that asked for the keyframe
+  // would ALSO produce a retry — the request stands until a keyframe clears it
+  // — but by coincidence rather than by rule, and the state would describe a
+  // keyframe that is not in the file. Fault-injection consequence, worth
+  // knowing: because that second mechanism exists, deleting this call
+  // altogether is not observable; deleting the `hasKeyframe` line alone is.
+  function keyframeFailed() {
+    cadence.hasKeyframe = false;
+    cadence.segments = 0;
+    cadence.patchChars = 0;
+    cadence.lastSnapshotChars = 0;
+  }
 
   // ── Mutations (spec §5.1) ──
   if (MutationObserverImpl) {
@@ -257,6 +360,11 @@ export function attachDomCapture(rec, env) {
         for (var i = 0; i < events.length; i++) {
           rec.pushRecord(events[i], events[i].t);
         }
+        // What the span has cost in deltas so far (see `shouldKeyframe`).
+        // Measured once per batch rather than once per patch: one stringify of
+        // the array is the cheaper call and the closer estimate of what the
+        // events cost as a group on the wire.
+        if (events.length) cadence.patchChars += payloadChars(events);
       } catch (e) { rec.captureFailure('mutations', e); }
     });
     try {

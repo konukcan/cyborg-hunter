@@ -90,12 +90,16 @@ export function attach(userConfig) {
       // written: the tracker is a STRONG Set, so pruning once per trial bounds
       // its growth even across trials where nothing reads it.
       //
-      // What IS load-bearing is that the handle is a live function rather than
-      // a snapshot of the Set — elements that first scroll after this line
-      // must still be seeded. Pinned in capture-dom.test.js ("enumerates
-      // capture-trace's scrolled elements", which adds to the set after
-      // attach) and end to end in capture-e2e.test.js ("the second one seeds
-      // the scroll it inherited").
+      // The handle is passed as a live function rather than as a snapshot of
+      // the Set, so that elements which first scroll after this line are still
+      // seeded — see capture-dom.test.js ("enumerates capture-trace's scrolled
+      // elements", which adds to the set after attach) and end to end in
+      // capture-e2e.test.js ("the second keyframe seeds the scroll it
+      // inherited"). Neither test DISCRIMINATES, though: `getScrolledElements`
+      // returns the live Set by reference, so caching its result here would
+      // pass both. The function form buys independence from that — a tracker
+      // that returned a copy, or rebuilt its set, would still work — which is
+      // a property of the seam, not one today's tests can see.
       var trace = attachTraceCapture(rec, { span: span });
       if (rec.config.tier === 'dom' || rec.config.tier === 'canvas') {
         // 'canvas' is accepted for forward compat but captures at dom tier

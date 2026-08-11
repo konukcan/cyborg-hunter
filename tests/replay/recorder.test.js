@@ -277,6 +277,35 @@ describe('v2 sinks: pushRecord and pushViewportChange', () => {
     rec.pushGuardViolation({ reason: 'y', phase: 'start' }, 2);
     assert.deepStrictEqual(rec.getState().guardViolations, []);
   });
+
+  it('caps the guard-violation array and records the drop once, without claiming truncation', () => {
+    // Same shape as the viewport cap above, and for the same reason: this array
+    // outlives trials, so neither per-trial cap can see it — and every
+    // phase:'start' entry carries a whole DOM tree.
+    const rec = freshRecorder({ maxGuardViolations: 3 });
+    rec.startSession();
+    rec.startTrial({ trialId: 't1' });
+    for (let i = 0; i < 10; i++) {
+      rec.pushGuardViolation({ reason: 'not_fullscreen', phase: 'start' }, i);
+    }
+    const s = rec.getState();
+    assert.strictEqual(s.guardViolations.length, 3);
+    assert.deepStrictEqual(s.guardViolations.map(v => v.t), [0, 1, 2],
+      'forward-only: the early violations are the ones kept');
+    const failures = s.captureFailures.filter(f => f.channel === 'guard_violations');
+    assert.strictEqual(failures.length, 1, 'the ceiling is recorded once, not per drop');
+    assert.match(failures[0].message, /guard/i);
+    assert.strictEqual(s.captureStopped, false,
+      'a bounded vendor stream is not §5.7 truncation');
+  });
+
+  it('the guard-violation cap can be disabled', () => {
+    const rec = freshRecorder({ maxGuardViolations: null });
+    rec.startSession();
+    for (let i = 0; i < 60; i++) rec.pushGuardViolation({ reason: 'x', phase: 'start' }, i);
+    assert.strictEqual(rec.getState().guardViolations.length, 60);
+    assert.deepStrictEqual(rec.getState().captureFailures, []);
+  });
 });
 
 describe('capture stop and the keyframe size budget', () => {

@@ -22,7 +22,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
 
-import { attachDomCapture, captureStylesheets } from '../../src/replay/capture-dom.js';
+import {
+  attachDomCapture, captureStylesheets, shouldKeyframe,
+} from '../../src/replay/capture-dom.js';
 import { createRecorder } from '../../src/replay/recorder.js';
 import { createSpan } from '../../src/replay/span.js';
 
@@ -179,11 +181,12 @@ describe('keyframes at trial start (spec §3/§4)', () => {
     assert.deepEqual(trial.initialState.form, [{ node: inputId, value: 'typed' }]);
   });
 
-  it('every trial keyframes: ids restart at 1 and the seed comes with them', () => {
-    // Task 8 makes the cadence size-aware; until then this is v1's behaviour
-    // and the spec's advice for wiping hosts. What matters now is that the
-    // span RESETS with the keyframe — ids restarting is the observable half.
-    const h = harness('<div id="stage"><p>a</p></div>', { root: '#stage' });
+  it('a keyframe restarts the numbering at 1 and walks the tree afresh', () => {
+    // `keyframeEvery: 1` is the wiping-host cadence (v1's behaviour, and what
+    // the jsPsych adapter forces). The span RESETS with each keyframe, and ids
+    // restarting is the observable half of that.
+    const h = harness('<div id="stage"><p>a</p></div>',
+      { root: '#stage', keyframeEvery: 1 });
     h.rec.startTrial({ trialId: 't1' });
     h.rec.endTrial();
     h.rec.startTrial({ trialId: 't2' });
@@ -513,6 +516,242 @@ describe('guard-friction cooperation', () => {
     h.violate({ phase: 'end', reason: 'not_fullscreen', duration: 1200 });
     assert.deepEqual(h.rec.getState().guardViolations[0].duration_ms, 1200);
     assert.equal('pre_scramble_dom' in h.rec.getState().guardViolations[0], false);
+  });
+});
+
+describe('keyframe cadence — the trigger (spec §3)', () => {
+  // The decision itself, at exact boundaries a scripted DOM cannot hit on
+  // purpose. `state` is the cadence bookkeeping capture-dom keeps; the second
+  // argument is the configured segment fallback.
+  const at = (over) => Object.assign(
+    { hasKeyframe: true, segments: 1, patchChars: 0, lastSnapshotChars: 1000 }, over);
+
+  it('forces a keyframe while the span has none — whatever the counters say', () => {
+    // Spec §3: the first DOM-bearing segment MUST be a keyframe, and after a
+    // dropped one there is nothing for a continuation to continue from.
+    assert.equal(shouldKeyframe(at({ hasKeyframe: false, segments: 0 }), 10), true);
+    assert.equal(shouldKeyframe(
+      at({ hasKeyframe: false, patchChars: 0, lastSnapshotChars: 0 }), null), true);
+  });
+
+  it('takes a keyframe when the patches since the last one RIVAL its size', () => {
+    // The spec's self-tuning rule: at parity the keyframe is free in file size
+    // and resets both seek distance and corruption blast radius. The comparison
+    // is >=, so the boundary itself keyframes.
+    assert.equal(shouldKeyframe(at({ patchChars: 999 }), null), false);
+    assert.equal(shouldKeyframe(at({ patchChars: 1000 }), null), true);
+    assert.equal(shouldKeyframe(at({ patchChars: 1001 }), null), true);
+  });
+
+  it('never fires the size trigger off a keyframe of unknown size', () => {
+    // lastSnapshotChars is 0 only when no keyframe was measured (trace-tier
+    // wiring, a dropped one). Comparing against 0 would make every segment a
+    // keyframe on a technicality rather than because anything accumulated.
+    assert.equal(shouldKeyframe(at({ patchChars: 0, lastSnapshotChars: 0 }), null), false);
+  });
+
+  it('the segment fallback bounds the span at keyframeEvery segments', () => {
+    // keyframeEvery: 10 = one keyframe plus at most nine continuations, so the
+    // tenth segment of a span is the next keyframe.
+    assert.equal(shouldKeyframe(at({ segments: 9 }), 10), false);
+    assert.equal(shouldKeyframe(at({ segments: 10 }), 10), true);
+    assert.equal(shouldKeyframe(at({ segments: 11 }), 10), true);
+    assert.equal(shouldKeyframe(at({ segments: 1 }), 1), true, 'every segment');
+  });
+
+  it('a null or nonsensical keyframeEvery leaves only the size trigger', () => {
+    assert.equal(shouldKeyframe(at({ segments: 500 }), null), false);
+    assert.equal(shouldKeyframe(at({ segments: 500 }), 0), false);
+    assert.equal(shouldKeyframe(at({ segments: 500 }), -3), false);
+    assert.equal(shouldKeyframe(at({ segments: 500, patchChars: 1000 }), null), true);
+  });
+});
+
+describe('keyframe cadence — continuations end to end (spec §3)', () => {
+  it('the first segment is a keyframe even when nothing else would ask for one', () => {
+    const h = harness('<div id="stage"><p>a</p></div>',
+      { root: '#stage', keyframeEvery: null });
+    h.rec.startTrial({ trialId: 't1' });
+    assert.ok(h.trial(0).initialDom, 'a recording cannot open on a continuation');
+  });
+
+  it('a continuation carries no keyframe and no seed', () => {
+    const h = harness('<div id="stage"><input id="answer"></div>',
+      { root: '#stage', keyframeEvery: 10 });
+    h.doc.getElementById('answer').value = 'typed';
+    h.rec.startTrial({ trialId: 't1' });
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't2' });
+
+    assert.ok(h.trial(0).initialState, 'the keyframe seeds the typed value');
+    assert.equal(h.trial(1).initialDom, null, 'initial_dom null IS the continuation marker');
+    assert.equal(h.trial(1).initialState, null,
+      'seeding a continuation would re-state what the span already established');
+  });
+
+  it('a continuation does NOT reset the span: keyframe ids stay addressable', () => {
+    // The whole point of a continuation. A node the keyframe numbered must
+    // still be nameable by that id in a patch emitted a segment later.
+    const h = harness('<div id="stage"><p id="msg">a</p></div>',
+      { root: '#stage', keyframeEvery: 10 });
+    h.rec.startTrial({ trialId: 't1' });
+    const msgId = h.trial(0).initialDom.children[0].id;
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't2' });
+
+    h.doc.getElementById('msg').setAttribute('class', 'lit');
+    h.doc.getElementById('msg').firstChild.data = 'b';
+    h.flush();
+
+    assert.deepEqual(h.trial(1).events.map(e => [e.type, e.node]),
+      [['dom.attr', msgId], ['dom.text', h.trial(0).initialDom.children[0].children[0].id]]);
+  });
+
+  it('a mid-continuation insertion continues the numbering rather than restarting it', () => {
+    const h = harness('<div id="stage"><p>a</p></div>',
+      { root: '#stage', keyframeEvery: 10 });
+    h.rec.startTrial({ trialId: 't1' });
+    const keyframeIds = [];
+    (function walk(n) { keyframeIds.push(n.id); (n.children || []).forEach(walk); })(
+      h.trial(0).initialDom);
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't2' });
+
+    h.root().appendChild(h.doc.createElement('span'));
+    h.flush();
+    const added = h.trial(1).events[0];
+    assert.equal(added.type, 'dom.add');
+    assert.ok(!keyframeIds.includes(added.node.id),
+      'a continuation allocates fresh ids from where the keyframe stopped');
+    assert.equal(added.parent, keyframeIds[0], 'and names the keyframe root as parent');
+  });
+
+  it('the segment fallback keyframes every Nth segment, and ids restart there', () => {
+    const h = harness('<div id="stage"><p>a</p></div>',
+      { root: '#stage', keyframeEvery: 3 });
+    for (let i = 0; i < 7; i++) {
+      h.rec.startTrial({ trialId: 't' + i });
+      h.rec.endTrial();
+    }
+    assert.deepEqual(
+      [0, 1, 2, 3, 4, 5, 6].map(i => !!h.trial(i).initialDom),
+      [true, false, false, true, false, false, true]);
+    assert.equal(h.trial(3).initialDom.id, 1, 'the new span numbers from 1 again');
+  });
+
+  it('a patch volume that stays under the keyframe size keeps the span going', () => {
+    const h = harness(
+      '<div id="stage"><p id="msg">' + 'a stimulus sentence. '.repeat(40) + '</p></div>',
+      { root: '#stage', keyframeEvery: null });
+    h.rec.startTrial({ trialId: 't1' });
+    const snapshotChars = JSON.stringify(h.trial(0).initialDom).length;
+
+    h.doc.getElementById('msg').setAttribute('class', 'lit');
+    h.flush();
+    const emitted = JSON.stringify(h.trial(0).events).length;
+    assert.ok(emitted < snapshotChars, 'the fixture must stay under the threshold to test it');
+
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't2' });
+    assert.equal(h.trial(1).initialDom, null, 'one small patch does not earn a keyframe');
+  });
+
+  it('a patch volume that reaches the keyframe size earns a fresh one', () => {
+    // Text rewrites of a CONSTANT length, so the tree the next keyframe walks
+    // is the same size as the one before it. An append-only fixture cannot test
+    // the accumulator: each patch also grows the snapshot it is measured
+    // against, so a keyframe that forgot to zero the counter would still look
+    // right at the segment after.
+    const h = harness('<div id="stage"><p id="msg">' + 'x'.repeat(60) + '</p></div>',
+      { root: '#stage', keyframeEvery: null });
+    h.rec.startTrial({ trialId: 't1' });
+    const snapshotChars = JSON.stringify(h.trial(0).initialDom).length;
+
+    // Rewrite until the emitted patches rival the snapshot. Measured off the
+    // recorded events, so the test asserts the crossing rather than assuming it.
+    let emitted = 0;
+    for (let i = 0; emitted < snapshotChars && i < 200; i++) {
+      h.doc.getElementById('msg').firstChild.data = String.fromCharCode(97 + i % 26).repeat(60);
+      h.flush();
+      emitted = JSON.stringify(h.trial(0).events).length;
+    }
+    assert.ok(emitted >= snapshotChars, 'the loop must actually cross the threshold');
+
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't2' });
+    assert.ok(h.trial(1).initialDom, 'accumulated patches rivalling the snapshot keyframe');
+    assert.equal(h.trial(1).initialDom.id, 1);
+    assert.ok(Math.abs(JSON.stringify(h.trial(1).initialDom).length - snapshotChars) < 10,
+      'the second keyframe is the same size as the first — nothing grew');
+
+    // …and the counter starts over with it: the next segment continues again.
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't3' });
+    assert.equal(h.trial(2).initialDom, null,
+      'the accumulator resets with the keyframe, or every later segment keyframes');
+  });
+
+  it('a DROPPED keyframe forces the next segment to try again', () => {
+    // The drop resets the span, so the file has no tree for it. §3's first
+    // rule applies again from here: continuing would leave the recording in a
+    // dead zone with no keyframe until the cadence happened to ask for one.
+    //
+    // The case that discriminates is a drop AFTER a keyframe has landed — the
+    // first segment of a recording is forced regardless, so a drop there proves
+    // nothing about the recovery.
+    const h = harness('<div id="stage"><p>a</p></div>',
+      { root: '#stage', keyframeEvery: 10, maxCharsPerTrial: 400 });
+    h.rec.startTrial({ trialId: 't1' });
+    assert.ok(h.trial(0).initialDom, 'the first keyframe fits and lands');
+
+    // Grow the DOM past the cap. The insertion also rivals the (small) keyframe
+    // it was measured against, so the size trigger asks for a fresh one at t2 —
+    // and that one no longer fits.
+    const big = h.doc.createElement('div');
+    big.textContent = 'z'.repeat(500);
+    h.root().appendChild(big);
+    h.flush();
+
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't2' });
+    assert.equal(h.trial(1).initialDom, null, 'dropped: over the character budget');
+
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't3' });
+    assert.equal(h.trial(2).initialDom, null, 'still over budget');
+    assert.equal(
+      h.rec.getState().captureFailures.filter(f => f.channel === 'dom_snapshot').length, 2,
+      'every segment tries again: a span with no keyframe never merely continues');
+
+    // …and it recovers the moment a keyframe fits.
+    h.rec.config.maxCharsPerTrial = 100000;
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't4' });
+    assert.ok(h.trial(3).initialDom, 'the span still owed the file a keyframe');
+    assert.equal(h.trial(3).initialDom.id, 1);
+  });
+
+  it('a THROWING keyframe forces the next segment to try again', () => {
+    const h = harness('<div id="stage"><p>a</p></div>',
+      { root: '#stage', keyframeEvery: 2 });
+    h.rec.startTrial({ trialId: 't1' });
+    assert.ok(h.trial(0).initialDom, 'lands');
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't2' });          // continuation
+    assert.equal(h.trial(1).initialDom, null);
+
+    let boom = false;
+    Object.defineProperty(h.root(), 'childNodes', {
+      get() { if (boom) throw new Error('boom'); return []; }, configurable: true,
+    });
+    boom = true;
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't3' });          // the fallback's keyframe: throws
+    h.rec.endTrial();
+    h.rec.startTrial({ trialId: 't4' });          // must try again, not continue
+    assert.equal(
+      h.rec.getState().captureFailures.filter(f => f.channel === 'dom_snapshot').length, 2,
+      'a failed keyframe is not a continuation');
   });
 });
 
