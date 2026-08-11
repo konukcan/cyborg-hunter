@@ -50,6 +50,18 @@
 // then carries this run's 127.0.0.1 origin, which is where the page genuinely
 // loaded it from.
 //
+// THE PRICE OF A RE-CUT. 460KB of that CSS is 32 base64 woff2 blobs
+// (@fontsource Open Sans); only ~10.6KB is layout rules. So every re-cut of the
+// fixture writes roughly 1.7MB of compressed, permanent git history across
+// three repos — the raw capture and the converted fixture here, plus the fork's
+// byte-identical copy. Re-cut deliberately, not to refresh timestamps. (The
+// guardian test in tests/tools/convert.test.js already forces the fixture and
+// the capture to move together, so a re-cut is never accidental.) If this
+// corpus is ever offered upstream or lifted into a shared package, re-cut with
+// the @font-face blocks dropped or ship the fixture gzipped: 460KB of embedded
+// fonts will draw a reviewer comment at a repo boundary that it does not draw
+// here.
+//
 // NETWORK: jsDelivr must be reachable. A preflight fetch fails fast with the
 // fallback instruction rather than leaving Playwright to time out.
 
@@ -333,8 +345,13 @@ const HANDLERS = {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(150);
     const arena = await page.locator('#jspsych-free-sort-arena').boundingBox();
-    // Inside the 600x400 square with a comfortable margin (the plugin accepts
-    // top-left coordinates in [40,560] x [40,360] for an 80px tile).
+    // Inside the 600x400 square with a comfortable margin. The plugin's own
+    // inside-test, for an 80px tile in a 600x400 square area, reduces to
+    // |left-260| <= 300 and |top-160| <= 200, i.e. top-left coordinates in
+    // [-40,560] x [-40,360]; these targets sit well inside that band on every
+    // side. (The plugin evaluates the test on the unclamped coordinate while
+    // clamping style.left/top, so an overshooting target could count as inside
+    // while rendering clamped — another reason to stay away from the edges.)
     const targets = [[100, 90], [250, 90], [400, 90], [100, 240], [250, 240], [400, 240]];
     for (let i = 0; i < targets.length; i++) {
       const tile = page.locator(`#jspsych-free-sort-draggable-${i}`);

@@ -44,12 +44,20 @@
     { "path": "segments.0.initial_state", "equals": null },
     { "path": "segments.0.initial_dom.tag", "equals": "body" },
     { "path": "segments.13.plugin", "equals": "fullscreen" },
+    { "path": "segments.0.host_data.trial_type", "equals": "instructions" },
+    { "path": "segments.12.host_data.trial_type", "equals": "survey-text" },
 
     { "path": "segments.8.events.0.type", "equals": "canvas.snapshot" },
     { "path": "segments.9.events.0.type", "equals": "canvas.snapshot" },
     { "path": "segments.9.events.5.type", "equals": "canvas.snapshot" },
     { "path": "segments.9.events.5.region", "equals": { "x": 59, "y": 74, "w": 12, "h": 15 } },
+    { "path": "segments.9.events.14.region", "equals": { "x": 59, "y": 74, "w": 79, "h": 106 } },
+    { "path": "segments.9.events.19.region", "equals": { "x": 59, "y": 74, "w": 113, "h": 141 } },
+    { "path": "segments.9.events.29.region", "equals": { "x": 59, "y": 74, "w": 189, "h": 141 } },
     { "path": "segments.9.events.40.region", "equals": { "x": 59, "y": 74, "w": 206, "h": 177 } },
+    { "path": "segments.9.events.50.region", "equals": { "x": 101, "y": 247, "w": 182, "h": 4 } },
+    { "path": "segments.9.events.59.region", "equals": { "x": 220, "y": 45, "w": 103, "h": 206 } },
+    { "path": "segments.9.events.69.region", "equals": { "x": 220, "y": 45, "w": 21, "h": 103 } },
     { "path": "segments.9.events.81.region", "equals": { "x": 220, "y": 45, "w": 24, "h": 123 } },
 
     { "path": "stylesheets.0.id", "equals": 1 },
@@ -77,8 +85,9 @@
     "regeneration": "The raw v1 input is committed at tests/tools/fixtures/jspsych-v1-full.json. extensions['cyborg-hunter'].converter.source_sha256 (spot-checked above) is the link between the two, and tests/tools/convert.test.js re-converts the committed raw file on every run to prove the link still holds. The whole converter stamp is asserted as one object rather than field by field, so the absence of a 'backfilled' key is asserted too: this capture carries both stylesheets and stylesheet_events, so the converter had nothing to backfill.",
     "checkpoints": "Empty by design. Checkpoint oracles over this fixture are T5's, executed by the fork player; a value asserted here without an executor would be a claim nobody checks.",
     "no_redaction_leak": "Holds VACUOUSLY. jsPsych v1 has no redaction, so no event in this fixture carries a `redacted` marker and the typed survey answers sit in plaintext input.value. The invariant is listed because it is ALWAYS_ON in the runner, not because this fixture exercises it — canonical-core is what proves the privacy floor bites.",
-    "media_gap": "KNOWN LIMITATION. This fixture carries zero media.* events: the vendored replay-test-suite timeline has no audio or video trial (the bench loads plugin-html-audio-response only for its own grafted trials, which the suite does not include). The media spot check the converter design sketches is therefore NOT satisfiable from this timeline, and media coverage needs a different timeline rather than a different driver. Tracked as a corpus gap for T7 or later.",
+    "media_gap": "KNOWN LIMITATION. This fixture carries zero media.* events: the vendored replay-test-suite timeline has no audio or video trial (the bench loads plugin-html-audio-response only for its own grafted trials, which the suite does not include). The media spot check the converter design sketches is therefore NOT satisfiable from this timeline, and media coverage needs a different timeline rather than a different driver. WHAT WOULD CLOSE IT, for whoever picks it up in T7 or later: add an audio trial to bench/harness/trials/replay-test-suite.js using plugin-html-audio-response (the bench already loads it, so the pin covers it) plus a video plugin alongside, then re-cut through the same harness; or, if a real timeline is not wanted, hand-author a synthetic media fixture as a separate corpus entry. Either way it is a new fixture, not an amendment to this one.",
+    "canvas_split": "The 2-full-baseline / 9-region-diff split is asserted in two places, neither of them here in full: all 9 region rectangles are spot-checked above by value, and tests/tools/convert.test.js asserts the exact 2/9 split, because the expectations format has no way to say a key is ABSENT and 'full baseline' means 'no region key'. The fork's smoke test asserts the same split on its copy.",
     "other_absent_event_types": "clipboard.*, touch.*, input.select, scroll.element, focus/blur, visibility.*, dom.text, recording.capture_stopped — all consequences of the timeline (no <select>, no touch device, no clipboard trial, the window never loses focus), not of the converter.",
-    "stylesheets": "stylesheets[0] is the pinned jsPsych stylesheet with its real CSS text (470,464 chars, most of it @fontsource Open Sans embedded as base64 woff2), because the recording harness serves the pinned CSS from its own origin — a cross-origin sheet has unreadable cssRules and the v1 recorder can then only write css: null. Its href accordingly carries the 127.0.0.1 origin and ephemeral port of the recording run, which is where the page genuinely loaded it from; the href is deliberately not spot-checked, since the port changes on every regeneration. The 703-char inline sheet added and removed by the sketchpad plugin is what makes stylesheet_events non-empty."
+    "stylesheets": "stylesheets[0] is the pinned jsPsych stylesheet with its real CSS text (470,464 chars, most of it @fontsource Open Sans embedded as base64 woff2), because the recording harness serves the pinned CSS from its own origin — a cross-origin sheet has unreadable cssRules and the v1 recorder can then only write css: null. Its href accordingly carries the 127.0.0.1 origin and ephemeral port of the recording run, which is where the page genuinely loaded it from; the href is deliberately not spot-checked, since the port changes on every regeneration. The 703-char inline sheet added and removed by the sketchpad plugin is what makes stylesheet_events non-empty. RE-CUT COST: 460KB of those chars are 32 base64 woff2 blobs, so re-cutting this fixture writes ~1.7MB of compressed, permanent git history across three repos (raw capture + this fixture + the fork's copy). Re-cuts should be deliberate; the guardian test already forces that."
   }
 }

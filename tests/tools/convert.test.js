@@ -542,6 +542,27 @@ test('converting the committed raw capture reproduces the jspsych-full fixture',
   assert.deepEqual(converted, JSON.parse(readFileSync(FULL_FIXTURE_PATH, 'utf8')));
 });
 
+test('the fixture keeps both canvas.snapshot shapes: 2 full baselines, 9 region diffs', () => {
+  // The adopted-vocabulary claim, asserted by the corpus that owns the fixture
+  // rather than only by the fork's copy. It lives here and not in
+  // expectations/jspsych-full.json because a full baseline is defined by the
+  // ABSENCE of a `region` key, and the expectations format is path-equality
+  // only: `{"equals": null}` is deliberately unsatisfiable by an absent key
+  // (the runner self-tests that), so absence cannot be written down there. The
+  // 9 region rectangles themselves ARE spot-checked in the expectations; this
+  // pins the split those spot checks cannot state.
+  const fixture = JSON.parse(readFileSync(FULL_FIXTURE_PATH, 'utf8'));
+  const snapshots = fixture.segments.flatMap(s => s.events.filter(e => e.type === 'canvas.snapshot'));
+  assert.equal(snapshots.length, 11);
+  assert.equal(snapshots.filter(e => !Object.hasOwn(e, 'region')).length, 2, 'full baselines');
+  assert.equal(snapshots.filter(e => Object.hasOwn(e, 'region')).length, 9, 'region diffs');
+  // Every diff carries a complete rectangle: a region with a missing dimension
+  // would be a partial update a replayer cannot place.
+  for (const e of snapshots.filter(e => Object.hasOwn(e, 'region'))) {
+    assert.deepEqual(Object.keys(e.region).sort(), ['h', 'w', 'x', 'y']);
+  }
+});
+
 test('the capture carries the pinned stylesheet as text, not a cross-origin null', () => {
   // The recording harness serves the pinned jsPsych CSS from its own origin
   // precisely so the recorder can read `cssRules`; loaded from the CDN the

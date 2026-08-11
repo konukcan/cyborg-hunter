@@ -164,11 +164,11 @@ for (const file of FIXTURES) {
     const byType = {};
     for (const s of rec.segments) for (const e of s.events) byType[e.type] = (byType[e.type] ?? 0) + 1;
     assert.deepEqual(byType, exp.counts.events_by_type);
-    // The two authored numbers must agree with each other as well, so an
-    // inconsistent pair is reported as such instead of as one opaque mismatch.
-    const summed = Object.values(exp.counts.events_by_type).reduce((n, k) => n + k, 0);
-    assert.equal(summed, exp.counts.events_total,
-      `counts.events_by_type sums to ${summed} but counts.events_total says ${exp.counts.events_total}`);
+    // No cross-check that the authored histogram sums to the authored
+    // events_total: with both sides recomputed from the same fixture (line
+    // 157 and the deepEqual above), that sum is a theorem, not an assertion.
+    // A test that cannot fail is worse than no test, because it gets credited
+    // with catching things the deepEqual caught.
     for (const sc of exp.spot_checks) {
       assert.deepEqual(getPath(rec, sc.path), sc.equals, `spot check ${sc.path}`);
     }
