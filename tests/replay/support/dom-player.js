@@ -37,6 +37,15 @@ const COMMENT_NODE = 8;
 // `svg > circle` landed in the XHTML namespace on BOTH sides, so the round-trip
 // oracle agreed about a tree neither could render. An oracle that shares the
 // implementation's blindness is not an oracle. Re-sync both when either moves.
+//
+// ONE KNOWN DIFFERENCE, recorded rather than fixed (T5 Task 3 review M-3): the
+// viewer lowercases a tag before creating the element, this player creates with
+// `domNode.tag` as written. SVG is case-sensitive, so `foreignObject` and
+// `foreignobject` are different elements there — and neither the differential
+// nor the round-trip can see it, because `readTree` reports
+// `tagName.toLowerCase()`. Unreachable today: capture lowercases every tag
+// (`snapshot.js:346`), which is exactly the spec-r3 item design §4 wants fixed.
+// Whoever fixes it upstream makes this bite, so re-sync the casing then too.
 const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MATHML_NS = 'http://www.w3.org/1998/Math/MathML';

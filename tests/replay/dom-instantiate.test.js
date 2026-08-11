@@ -271,8 +271,14 @@ describe('spec §12 player filters', () => {
   };
 
   it('drops on* handlers, javascript:/vbscript: URLs, and unnameable attributes', () => {
-    const { root } = instantiateTree(hostile, freshDoc());
+    const { root, skipped } = instantiateTree(hostile, freshDoc());
     const names = Array.from(root.attributes).map((a) => a.name);
+    // The two refusal classes are counted differently since fix round 1 (review
+    // I-4). The seven security refusals here — five `on*`/URL-scheme drops plus
+    // the two casings — move nothing, because the reconstruction is right
+    // without them. The one NAME-TOKEN refusal (`not a name`) moves `skipped`,
+    // because an attribute the page really had is gone.
+    assert.equal(skipped, 1);
     assert.deepEqual(names.slice().sort(), ['data-note', 'id', 'title']);
     for (const dropped of ['onclick', 'ONMOUSEOVER', 'onFocus', 'onmouseover', 'onfocus',
       'href', 'src', 'action', 'formaction', 'xlink:href', 'not a name']) {
@@ -590,11 +596,17 @@ describe('tolerant instantiation — a malformed node must not abort a mount', (
     assert.equal(doc.body.childNodes.length, 0);
   });
 
-  it('a well-formed tree reports zero skips', () => {
+  it('a well-formed tree reports zero skips, and the corpus has one bad name', () => {
+    // T5 Task 3 fix round 1 (review I-4) routed NAME-TOKEN refusals into the
+    // same counter, so the corpus's single malformed attribute — the `<` in
+    // jsPsych 8.2.3's free-sort arena, segment 10 — is now reported rather than
+    // dropped in silence. Everything else stays at zero, and the exception is
+    // tied to the one segment that earns it so a second one cannot hide.
     for (const name of ['canonical-core', 'jspsych-full']) {
       for (const seg of fixture(name).segments) {
         if (!seg.initial_dom) continue;
-        assert.equal(instantiateTree(seg.initial_dom, freshDoc()).skipped, 0,
+        assert.equal(instantiateTree(seg.initial_dom, freshDoc()).skipped,
+          name === 'jspsych-full' && seg.index === 10 ? 1 : 0,
           name + ' segment ' + seg.index);
       }
     }

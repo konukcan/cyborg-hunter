@@ -180,10 +180,18 @@ describe('moves and re-binding (T3 Task 3 pin M5)', () => {
     assert.ok(doc);
   });
 
-  it('a dom.add re-binding an id the map still holds OVERWRITES it', () => {
+  it('a dom.add re-binding an id the map still holds OVERWRITES it — in the MAP', () => {
     // The same pin without the removal: a producer that emits the add first
-    // must not leave two nodes claiming one id. Treating the second binding as
-    // a duplicate loses the node (design §4).
+    // must not leave two nodes claiming one id in the map. Treating the second
+    // binding as a duplicate loses the node (design §4).
+    //
+    // What "never a duplicate" does NOT claim, pinned here after review M-7
+    // read the phrase as a DOM-level guarantee: the old subtree stays in the
+    // DOCUMENT. Nothing asked for it to be removed — a bare re-add with no
+    // preceding `dom.remove` is a non-conforming shape capture never emits, and
+    // inventing a detach would be the viewer editing the reconstruction. The
+    // ghost's descendants stay resolvable, which is what keeps the map an exact
+    // inversion and a later patch addressing them harmless.
     const { mount } = stage();
     const first = mount.idMap.get(2);
     applyPatches([
@@ -194,6 +202,11 @@ describe('moves and re-binding (T3 Task 3 pin M5)', () => {
     assert.equal(second.tagName.toLowerCase(), 'b');
     assert.equal(mount.idOf.has(first), false, 'the stale reverse entry is dropped');
     assert.deepEqual(invert(mount.idMap), mount.idOf);
+
+    same(first.parentNode, mount.idMap.get(1), 'the ghost is still in the document');
+    assert.equal(mount.idMap.get(3).nodeValue, 'hi', 'and its child still resolves');
+    same(mount.idMap.get(3).parentNode, first, 'to a node inside the ghost');
+    assert.equal(mount.patchFailures, 0);
   });
 
   it('`before` resolves an existing sibling and inserts ahead of it', () => {
@@ -205,6 +218,162 @@ describe('moves and re-binding (T3 Task 3 pin M5)', () => {
     same(parent.firstChild, mount.idMap.get(9), 'inserted before node 2');
     same(parent.lastChild, mount.idMap.get(2), 'which kept its place');
     assert.equal(mount.patchFailures, 0);
+  });
+
+  it('inserts at every position of a multi-child parent, in the recorded order', () => {
+    // Review M-6: all 101 `dom.add` events in both fixtures carry
+    // `before: null`, so the corpus pin certifies nothing about positional
+    // insertion — the differential is the only other thing that does, and it is
+    // generated. One constructed case with a real middle position, asserted as
+    // an ordering rather than as three separate parent links.
+    const doc = freshDoc();
+    const dom = el(1, 'div', {}, [
+      el(2, 'i', { id: 'a' }, []), el(3, 'i', { id: 'b' }, []), el(4, 'i', { id: 'c' }, []),
+    ]);
+    const mount = mountTree(dom, doc.body, doc);
+
+    applyPatches([
+      { type: 'dom.add', t: 1, parent: 1, before: 2, node: el(9, 'i', { id: 'head' }, []) },
+      { type: 'dom.add', t: 2, parent: 1, before: 4, node: el(10, 'i', { id: 'middle' }, []) },
+      { type: 'dom.add', t: 3, parent: 1, before: null, node: el(11, 'i', { id: 'tail' }, []) },
+    ], mount);
+
+    assert.deepEqual(
+      Array.from(mount.idMap.get(1).childNodes).map((n) => n.getAttribute('id')),
+      ['head', 'a', 'b', 'middle', 'c', 'tail']);
+    assert.equal(mount.patchFailures, 0);
+  });
+
+  it('a dom.add with no `before` key at all appends, and counts nothing', () => {
+    // Guard pin (review I-2, H5): the `undefined` half of the `before` test.
+    // Every corpus `dom.add` states `before: null` explicitly, but §5.1's shape
+    // is what a producer must emit, not what a hand-edited file will carry, and
+    // without the `undefined` half a missing key counts a spurious failure.
+    const { mount } = stage();
+    applyPatches([{ type: 'dom.add', t: 1, parent: 1, node: el(9, 'i', {}, []) }], mount);
+    same(mount.idMap.get(1).lastChild, mount.idMap.get(9), 'appended');
+    assert.equal(mount.patchFailures, 0, 'a missing key is an append, not a lost position');
+  });
+});
+
+describe('the reconstruction root is not re-bindable (review I-1)', () => {
+  // `bind()` overwrites both directions by design (§4's MOVE rule), and fix
+  // round 1 is where that rule learns its one exception. A `dom.add` carrying
+  // the id the mount bound to the root moved the binding onto an
+  // attacker-chosen element with ZERO counted failures: the root id then
+  // answered about the impostor for Task 7's `exists`/`attr:<name>`, for every
+  // `anchor.node` naming it and for the §8 camera chain, and `mount.root` fell
+  // out of `idOf` so `readTree` — the shared reader the differential and Task
+  // 7's harness walk — threw one layer up. Unreachable from CH capture
+  // (`pullForwardMoves` keeps a move's remove ahead of its add, and the
+  // observed root is never re-added) and absent from both fixtures; reachable
+  // from any foreign or hand-edited file, which is the population §12's player
+  // duties exist for.
+  //
+  // The guard lives in `bind` rather than in `applyAdd` so it covers the
+  // buried case too, and a refused bind drops the node from the tree: leaving
+  // it in the DOM unbound breaks `readTree` exactly as the original defect did.
+
+  function rootStillSound(mount, expectedRoot, what) {
+    same(mount.idMap.get(1), expectedRoot, what + ': the root id still resolves');
+    same(mount.idOf.get(expectedRoot), 1, what + ': and the reverse index holds it');
+    assert.doesNotThrow(() => readTree(mount.root, mount.idOf),
+      what + ': the shared reader still walks the tree');
+  }
+
+  it('a dom.add carrying the body-root id is refused and counted', () => {
+    const doc = freshDoc();
+    const dom = el(1, 'body', { class: 'jspsych' }, [el(2, 'div', { id: 'display' }, [])]);
+    const mount = mountTree(dom, doc.body, doc);
+
+    applyPatches([
+      { type: 'dom.add', t: 1, parent: 1, before: null,
+        node: el(1, 'div', { id: 'impostor' }, []) },
+    ], mount);
+
+    rootStillSound(mount, doc.body, 'body root');
+    assert.equal(mount.patchFailures, 1);
+    assert.equal(doc.body.querySelectorAll('#impostor').length, 0,
+      'and the impostor never entered the reconstruction');
+  });
+
+  it('a dom.add carrying a non-body root id is refused and counted', () => {
+    const doc = freshDoc();
+    const dom = el(1, 'div', { id: 'stage' }, [el(2, 'p', {}, [])]);
+    const mount = mountTree(dom, doc.body, doc);
+    const root = mount.root;
+
+    applyPatches([
+      { type: 'dom.add', t: 1, parent: 2, before: null,
+        node: el(1, 'section', { id: 'impostor' }, []) },
+    ], mount);
+
+    rootStillSound(mount, root, 'non-body root');
+    assert.equal(mount.patchFailures, 1);
+    assert.equal(root.querySelectorAll('#impostor').length, 0);
+  });
+
+  it('the refusal reaches a root id buried inside the added subtree', () => {
+    // The reason the guard is in `bind` and not in `applyAdd`: a subtree whose
+    // DESCENDANT carries the root id unmaps it by the same route. The rest of
+    // the subtree still lands — the posture is skip-and-count, not
+    // abort-the-patch.
+    const doc = freshDoc();
+    const dom = el(1, 'div', { id: 'stage' }, []);
+    const mount = mountTree(dom, doc.body, doc);
+    const root = mount.root;
+
+    applyPatches([
+      { type: 'dom.add', t: 1, parent: 1, before: null,
+        node: el(9, 'section', {}, [
+          el(1, 'span', { id: 'impostor' }, [el(10, 'text-holder', {}, [])]),
+          el(11, 'em', {}, []),
+        ]) },
+    ], mount);
+
+    rootStillSound(mount, root, 'buried');
+    assert.equal(mount.patchFailures, 1);
+    assert.equal(root.querySelectorAll('#impostor').length, 0);
+    assert.equal(mount.idMap.has(10), false,
+      'the refused node takes its own descendants out of the map with it');
+    assert.equal(mount.idMap.get(9).childNodes.length, 1);
+    same(mount.idMap.get(9).firstChild, mount.idMap.get(11), 'the sibling survives');
+  });
+
+  it('a dom.remove naming the mounted root is refused for both root shapes', () => {
+    // The same invariant under the other verb. The body-root case is M-7 (a
+    // blind `.remove()` detaches the frame's own <body>); the non-body case is
+    // the reader's, and the two are now ONE predicate — `node === mount.root` —
+    // rather than a list of frame parts, so every disjunct is pinned.
+    for (const [shape, tag] of [['body root', 'body'], ['non-body root', 'div']]) {
+      const doc = freshDoc();
+      const dom = el(1, tag, {}, [el(2, 'p', {}, [])]);
+      const mount = mountTree(dom, doc.body, doc);
+      const root = mount.root;
+
+      applyPatches([{ type: 'dom.remove', t: 1, node: 1 }], mount);
+
+      assert.equal(mount.patchFailures, 1, shape);
+      rootStillSound(mount, root, shape);
+      assert.ok(root.parentNode, shape + ': the root is still attached');
+      assert.equal(mount.idMap.has(2), true, shape + ': its subtree is not purged');
+    }
+  });
+
+  it('a dom.add TARGETING the root as parent still works, both shapes', () => {
+    // The partner assertion, so the fix cannot be widened into "the root is
+    // untouchable". Adding into the root and patching it are ordinary.
+    for (const tag of ['body', 'div']) {
+      const doc = freshDoc();
+      const mount = mountTree(el(1, tag, {}, []), doc.body, doc);
+      applyPatches([
+        { type: 'dom.add', t: 1, parent: 1, before: null, node: el(2, 'p', {}, []) },
+        { type: 'dom.attr', t: 2, node: 1, name: 'class', value: 'live' },
+      ], mount);
+      same(mount.root.firstChild, mount.idMap.get(2), tag + ' root accepts children');
+      assert.equal(mount.root.getAttribute('class'), 'live');
+      assert.equal(mount.patchFailures, 0, tag);
+    }
   });
 });
 
@@ -306,6 +475,23 @@ describe('tolerant posture — unresolvable references are counted, never thrown
     same(mount.idMap.get(9).firstChild, mount.idMap.get(11), 'the well-formed child survives');
   });
 
+  it('a dom.add whose own node is malformed inserts nothing and counts a skip', () => {
+    // Guard pin (review I-2, H7a): the `if (!node) return` after
+    // `instantiateNode`. Without it the applier hands `null` to `insertBefore`,
+    // which the host refuses, so the failure reads as a hierarchy error and
+    // counts a `patchFailures` on top of the skip — two counters moving for one
+    // defect, in the bucket that means something else.
+    const { mount } = stage();
+    const childCount = mount.idMap.get(1).childNodes.length;
+    applyPatches([
+      { type: 'dom.add', t: 1, parent: 1, before: null, node: el(9, 'a b', {}, []) },
+      { type: 'dom.add', t: 2, parent: 1, before: null, node: null },
+    ], mount);
+    assert.equal(mount.skipped, 2);
+    assert.equal(mount.patchFailures, 0, 'the patch resolved; the node was unusable');
+    assert.equal(mount.idMap.get(1).childNodes.length, childCount);
+  });
+
   it('the strict player THROWS where the viewer counts — design §14 risk 2', () => {
     // The postures asserted against each other rather than described. The same
     // dangling patch: the test player raises, the viewer counts one failure and
@@ -331,27 +517,60 @@ describe('tolerant posture — unresolvable references are counted, never thrown
     ], mount);
     assert.equal(mount.idMap.get(3).nodeValue, 'still applied');
   });
+
+  it('a dom.attr with no `value` key removes, as a null value does', () => {
+    // Guard pin (review I-2, H4): the `undefined` half of the removal test.
+    // JSON cannot express `undefined`, so only a hand-constructed or
+    // programmatically built patch reaches it — and the tolerant reading is
+    // that an absent value is an absent attribute, not an empty one. Without
+    // the half, the same patch SETS `class=""`, which is a state the page never
+    // had.
+    const { mount } = stage();
+    applyPatches([
+      { type: 'dom.attr', t: 1, node: 2, name: 'id' },
+    ], mount);
+    assert.equal(mount.idMap.get(2).getAttribute('id'), null);
+    assert.equal(mount.idMap.get(2).hasAttribute('id'), false);
+  });
 });
 
 describe('spec §12 filters on the patch path', () => {
-  it('an on* attribute arriving by dom.attr is refused', () => {
+  it('an on* attribute arriving by dom.attr is refused, and moves no counter', () => {
     const { mount } = stage();
     applyPatches([
       { type: 'dom.attr', t: 1, node: 2, name: 'onclick', value: 'alert(1)' },
       { type: 'dom.attr', t: 2, node: 2, name: 'ONMOUSEOVER', value: 'alert(2)' },
-      { type: 'dom.attr', t: 3, node: 2, name: 'not a name', value: 'v' },
-      { type: 'dom.attr', t: 4, node: 2, name: 'class', value: 'kept' },
+      { type: 'dom.attr', t: 3, node: 2, name: 'class', value: 'kept' },
     ], mount);
     const p = mount.idMap.get(2);
     assert.equal(p.getAttribute('onclick'), null);
     assert.equal(p.getAttribute('onmouseover'), null);
-    assert.equal(p.getAttribute('not a name'), null);
     assert.equal(p.getAttribute('class'), 'kept');
-    // NOT counted, and the parity is the argument: instantiation drops the same
-    // names silently, so counting them here would make a hostile file light up
-    // the "changes could not be reapplied" chip for a filter working exactly as
-    // designed. The refusal is a security result, not a reconstruction failure.
+    // A SECURITY refusal moves nothing, and the parity is the argument:
+    // instantiation drops the same names silently, so counting them would make
+    // a hostile file light up the "changes could not be reapplied" chip for a
+    // filter working exactly as designed. The reconstruction is visually right
+    // without the handler; that is what the chip is about.
     assert.equal(mount.patchFailures, 0);
+    assert.equal(mount.skipped, 0);
+  });
+
+  it('a NAME-TOKEN refusal is counted, because the page really had it', () => {
+    // Review I-4: the same predicate covers two refusal classes with opposite
+    // consequences. `isNameToken` also drops names all three engines ACCEPT —
+    // `@click`, `[ngModel]`, `(click)`, `*ngIf`, `1x`, `café`, `<` (Task 2's
+    // tri-engine table) — which are page state the analyst loses to a
+    // realm-determinism decision. Those move `skipped`, the counter the report
+    // defines as "the file said something no DOM here could hold", so the loss
+    // has a surface instead of only a comment in the module header.
+    const { mount } = stage();
+    const angular = ['@click', '[ngModel]', '(click)', '*ngIf', '1x', 'café', '<'];
+    applyPatches(angular.map((name, i) => (
+      { type: 'dom.attr', t: i + 1, node: 2, name, value: 'v' })), mount);
+
+    for (const name of angular) assert.equal(mount.idMap.get(2).getAttribute(name), null);
+    assert.equal(mount.skipped, angular.length);
+    assert.equal(mount.patchFailures, 0, 'the patch resolved; the name was unusable here');
   });
 
   it('a javascript: URL arriving by dom.attr is refused, ordinary URLs are not', () => {
@@ -537,6 +756,28 @@ describe('carried duties from Task 2', () => {
       }
     }
   });
+
+  it('the purge deletes only the binding the node actually owns', () => {
+    // Guard pin (review I-2, H3), the one survivor with teeth rather than
+    // redundancy. Given the inversion the test above pins, `idMap.get(id) ===
+    // node` is always true — so the guard's only effect is on a map that is
+    // ALREADY broken, where deleting by id alone would unbind an innocent node
+    // and turn a loud inconsistency into a quiet one. The inconsistency is
+    // therefore injected: a node in the tree claiming, through `idOf` only, an
+    // id that belongs to the root.
+    const { mount } = stage();
+    const doc = mount.doc;
+    const ghost = doc.createElement('span');
+    mount.idMap.get(2).appendChild(ghost);
+    mount.idOf.set(ghost, 1);                    // 1 really belongs to the root
+
+    const root = mount.root;
+    applyPatches([{ type: 'dom.remove', t: 1, node: 2 }], mount);
+
+    same(mount.idMap.get(1), root, 'the root keeps its binding');
+    assert.equal(mount.idOf.has(ghost), false, 'the ghost loses its false claim');
+    assert.equal(mount.idMap.has(3), false, 'the honest descendants still purge');
+  });
 });
 
 describe('namespace inheritance on dom.add', () => {
@@ -648,7 +889,7 @@ describe('the real corpus — every committed segment applies its own patches', 
   // The fuzz explores shapes nobody thought of; this pins the shapes a real
   // foreign producer actually emitted. jspsych-full's 14 segments carry 100
   // `dom.add`, 136 `dom.remove` and 233 `dom.attr` between them.
-  it('applies cleanly with zero failures and zero skips', () => {
+  it('applies cleanly with zero failures, and skips only the known bad name', () => {
     let segments = 0;
     let patches = 0;
     for (const name of ['canonical-core', 'jspsych-full']) {
@@ -660,7 +901,13 @@ describe('the real corpus — every committed segment applies its own patches', 
         const doms = seg.events.filter((e) => /^dom\./.test(e.type));
         applyPatches(seg.events, mount);
         assert.equal(mount.patchFailures, 0, name + ' segment ' + seg.index);
-        assert.equal(mount.skipped, 0, name + ' segment ' + seg.index);
+        // Since fix round 1 a name-token refusal moves `skipped` (review I-4),
+        // so the corpus's one malformed attribute — jsPsych 8.2.3's free-sort
+        // arena, the `<` Task 2 found — now reports itself on mount instead of
+        // vanishing. Everything else is still zero, and the exception is tied
+        // to its segment so a second one cannot hide behind it.
+        assert.equal(mount.skipped, name === 'jspsych-full' && seg.index === 10 ? 1 : 0,
+          name + ' segment ' + seg.index);
         segments++;
         patches += doms.length;
       }

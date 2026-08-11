@@ -3,10 +3,16 @@
 // reconstruction frame, plus the `Map<number, Node>` every `dom.*` patch
 // (§5.1), every event `target`, and every `anchor.node` (§6) resolves through —
 // and, since T5 Task 3, the application of those four patches through that map.
-// Instantiation and patching live together because they are one reading of §4:
-// `dom.add` instantiates a subtree into the same maps a keyframe fills, and a
-// second module would have to import this one, which the concatenation contract
-// below forbids.
+//
+// Instantiation and patching live together because they are ONE READING OF §4.
+// `dom.add` instantiates a subtree into the same id map, reverse index and
+// canvas map a keyframe fills, and its namespace, its §12 filters and its
+// tolerance for malformed nodes are the keyframe walk's, not a second set that
+// happens to agree today. Splitting them would create the drift this migration
+// exists to remove. (The concatenation contract below is a second, weaker
+// reason: a separate module would have to import this one, and while an
+// assembler that strips one export line could strip two, the reading argument
+// stands on its own.)
 //
 // THIS IS WHERE THE HTML-STRING ERA ENDS, and that is a security result rather
 // than a refactor. v1 built the reconstruction by interpolating a captured HTML
@@ -144,10 +150,6 @@ function isNameToken(name) {
   return NAME_TOKEN_RE.test(name);
 }
 
-function isSafeAttrName(name) {
-  return isNameToken(name) && !/^on/i.test(name);
-}
-
 // The tag guard, applied at the instantiation boundary for keyframes and for
 // every `dom.add` subtree alike.
 function isUsableTag(tag) {
@@ -182,21 +184,44 @@ function isSafeUrl(value) {
   return probe.indexOf('javascript:') !== 0 && probe.indexOf('vbscript:') !== 0;
 }
 
-// Set one attribute through the §12 filters. Refused attributes are DROPPED,
-// not neutralised: a `javascript:` href rewritten to `#` would claim the page
-// had a link it did not have.
-function setFilteredAttr(el, name, value) {
-  if (!isSafeAttrName(name)) return;
+/**
+ * Set one attribute through the §12 filters. Refused attributes are DROPPED,
+ * not neutralised: a `javascript:` href rewritten to `#` would claim the page
+ * had a link it did not have.
+ *
+ * TWO refusal classes, counted differently (fix round 1, review I-4 — the first
+ * version of this counted neither, on an argument that only holds for one of
+ * them):
+ *
+ *   - **security** — an `on*` handler, or a `javascript:`/`vbscript:` value in
+ *     a URL attribute. Dropping these is the point, and the reconstruction is
+ *     visually right without them, so nothing is counted. Counting would light
+ *     the analyst's "recorded change(s) could not be reapplied" chip every time
+ *     a filter worked.
+ *   - **name token** — a name outside the XML `Name` production. Those are page
+ *     state that is LOST: chromium, firefox and webkit all accept `@click`,
+ *     `[ngModel]`, `(click)`, `*ngIf`, `1x`, `café` and `<` (Task 2's
+ *     tri-engine table), and this module drops them anyway, for the
+ *     realm-determinism reasons in the header. That loss gets a surface —
+ *     `skipped`, the counter for "the file said something no DOM here could
+ *     hold" — rather than only a comment.
+ */
+function setFilteredAttr(el, name, value, ctx) {
+  if (!isNameToken(name)) {
+    if (ctx) ctx.skipped++;
+    return;
+  }
+  if (/^on/i.test(name)) return;
   var text = value == null ? '' : String(value);
   if (URL_ATTRS[name.toLowerCase()] === true && !isSafeUrl(text)) return;
   el.setAttribute(name, text);
 }
 
-function applyAttrs(el, attrs, skip) {
+function applyAttrs(el, attrs, skip, ctx) {
   for (var name in attrs) {
     if (!Object.prototype.hasOwnProperty.call(attrs, name)) continue;
     if (skip && skip[name.toLowerCase()] === true) continue;
-    setFilteredAttr(el, name, attrs[name]);
+    setFilteredAttr(el, name, attrs[name], ctx);
   }
 }
 
@@ -245,7 +270,17 @@ function instantiateNode(domNode, ctx, parentNs) {
     }
     node = instantiateElement(domNode, ctx, tag, parentNs);
   }
-  bind(ctx, domNode.id, node);
+  if (!bind(ctx, domNode.id, node)) {
+    // The id belongs to the reconstruction root and `bind` refused to move it
+    // (see there). Refusing the binding means refusing the NODE: the walk
+    // already bound its children as it descended, and a node in the tree that
+    // no id resolves to breaks every reader that walks from the root —
+    // including `readTree`, the shared one — which is the same failure the
+    // refusal exists to prevent.
+    purgeSubtree(ctx, node);
+    ctx.patchFailures++;
+    return null;
+  }
   return node;
 }
 
@@ -265,7 +300,7 @@ function instantiateElement(domNode, ctx, tag, parentNs) {
     : ctx.doc.createElementNS(createdNs, created);
 
   var skip = skipSetFor(tag);
-  applyAttrs(el, domNode.attrs || {}, skip);
+  applyAttrs(el, domNode.attrs || {}, skip, ctx);
   // §4's `media_src` is the RESOLVED url the element actually loaded
   // (`currentSrc`), where the recorded `src` attribute is whatever the page
   // author wrote — routinely a relative path, which resolves to nothing in a
@@ -282,7 +317,7 @@ function instantiateElement(domNode, ctx, tag, parentNs) {
   // does not ship with, and three consumers build their own frames.
   if (!(skip && skip.src === true)
       && typeof domNode.media_src === 'string' && domNode.media_src) {
-    setFilteredAttr(el, 'src', domNode.media_src);
+    setFilteredAttr(el, 'src', domNode.media_src, ctx);
   }
   if (isFrame) el.setAttribute(PLACEHOLDER_ATTR, 'iframe');
 
@@ -329,20 +364,41 @@ function result(ctx, root) {
   return ctx;
 }
 
-// Bind an id to a node, overwriting whatever either side held.
-//
-// The overwrite IS the contract (design §4, T3 Task 3 pin M5): a `dom.remove` +
-// `dom.add` pair carrying the same id is a MOVE, and treating the second
-// binding as a duplicate loses the node. Both directions are cleared first, so
-// the two maps stay exact inverses of each other — the property the subtree
-// purge depends on and a test pins over both fixtures.
+/**
+ * Bind an id to a node, overwriting whatever either side held.
+ *
+ * The overwrite IS the contract (design §4, T3 Task 3 pin M5): a `dom.remove` +
+ * `dom.add` pair carrying the same id is a MOVE, and treating the second
+ * binding as a duplicate loses the node. Both directions are cleared first, so
+ * the two maps stay exact inverses of each other — the property the subtree
+ * purge depends on and a test pins over both fixtures. Note the guarantee is
+ * about the MAP: a bare re-add with no preceding remove leaves the old subtree
+ * in the document, still resolvable through its own ids, because nothing asked
+ * for it to be detached and inventing a detach would be the viewer editing the
+ * reconstruction.
+ *
+ * ONE EXCEPTION, added in fix round 1 (review I-1): the id the mount bound to
+ * the reconstruction ROOT is not movable. A `dom.add` carrying it — at the
+ * subtree's own root or buried in its children — otherwise pointed the root id
+ * at an attacker-chosen element with nothing counted, which decides what Task
+ * 7's `exists`/`attr:<name>` read, what an `anchor.node` naming the root
+ * resolves to, and what the §8 camera chain measures; and it dropped
+ * `mount.root` out of `idOf`, so every reader that walks from the root threw
+ * one layer up. Unreachable from CH capture, reachable from any foreign file.
+ *
+ * @returns {boolean} whether the binding was made
+ */
 function bind(ctx, id, node) {
   var prev = ctx.idMap.get(id);
-  if (prev !== undefined && prev !== node) ctx.idOf.delete(prev);
+  if (prev !== undefined && prev !== node) {
+    if (prev === ctx.root) return false;
+    ctx.idOf.delete(prev);
+  }
   var prevId = ctx.idOf.get(node);
   if (prevId !== undefined && prevId !== id) ctx.idMap.delete(prevId);
   ctx.idMap.set(id, node);
   ctx.idOf.set(node, id);
+  return true;
 }
 
 // Drop a node and every descendant from both maps.
@@ -353,12 +409,19 @@ function bind(ctx, id, node) {
 // in every realm, which is the same determinism argument the name filters rest
 // on. Deleting an id twice is a no-op, so the overlap costs nothing.
 function purgeSubtree(ctx, node) {
-  if (!node) return;
   var id = ctx.idOf.get(node);
   if (id !== undefined) {
     ctx.idOf.delete(node);
-    if (ctx.idMap.get(id) === node) ctx.idMap.delete(id);
-    ctx.canvases.delete(id);
+    // Delete only the binding this node actually OWNS. Given the inversion
+    // `bind` maintains, `idMap.get(id) === node` always holds — so the test is
+    // dead weight on a healthy map and the whole point on a broken one: without
+    // it, a node whose reverse entry disagrees takes an innocent node's binding
+    // down with it, turning a loud inconsistency into a quiet one. Pinned by
+    // injection rather than left as a defensive line (review I-2, H3).
+    if (ctx.idMap.get(id) === node) {
+      ctx.idMap.delete(id);
+      ctx.canvases.delete(id);
+    }
   }
   var kids = node.childNodes || [];
   for (var i = 0; i < kids.length; i++) purgeSubtree(ctx, kids[i]);
@@ -379,10 +442,20 @@ function purgeSubtree(ctx, node) {
  *            skipped: number, patchFailures: number}}
  *   the span state `applyPatch` extends. `canvases` is the §4 `canvas_size`
  *   annotation, which no DOM read can recover, keyed by the same ids as
- *   `idMap`. `skipped` counts the nodes no DOM could hold and `patchFailures`
- *   the patches that named something the map does not hold; both belong in the
+ *   `idMap`.
+ *
+ *   The two counters answer different questions and both belong in the
  *   `counters.patchFailures` surface that already drives the "recorded
- *   change(s) could not be reapplied" chip.
+ *   change(s) could not be reapplied" chip: `skipped` is *the file said
+ *   something no DOM here could hold* (a tag or attribute name outside the
+ *   Name production, a null child), `patchFailures` is *a reference the span
+ *   could not honour* (an id the map does not hold, a `before` that is not a
+ *   child, a target of the wrong kind, a refused re-bind of the root).
+ *
+ *   THE RETURNED OBJECT IS THE LIVE STATE, not a snapshot: `applyPatch` keeps
+ *   incrementing these counters on the same object, so read them as properties
+ *   (`mount.skipped`) at the moment you need them. Destructuring at mount time
+ *   captures the numbers as they were before any patch applied.
  */
 function instantiateTree(domNode, doc) {
   var ctx = newContext(doc);
@@ -440,8 +513,12 @@ function mountTree(domNode, body, doc) {
     return result(ctx, root);
   }
 
-  applyAttrs(body, domNode.attrs || {}, null);
+  applyAttrs(body, domNode.attrs || {}, null, ctx);
   bind(ctx, domNode.id, body);
+  // Recorded BEFORE the children walk, not just by `result()` at the end, so a
+  // keyframe whose descendant repeats the root's id cannot re-bind it away from
+  // the frame's own body mid-mount — the mount-time half of `bind`'s exception.
+  ctx.root = body;
   var kids = domNode.children || [];
   for (var j = 0; j < kids.length; j++) {
     var child = instantiateNode(kids[j], ctx, null);
@@ -467,23 +544,14 @@ function mountTree(domNode, body, doc) {
 // as designed. A dropped `on*` handler leaves the visual reconstruction right;
 // an unresolvable id means it is wrong.
 
+// Every caller tests the result for falsiness, so an id the map does not hold
+// arrives as `undefined` and reads the same as a missing node.
 function resolve(mount, id) {
-  var node = mount.idMap.get(id);
-  return node === undefined ? null : node;
+  return mount.idMap.get(id);
 }
 
 function tagNameOf(node) {
   return node && node.tagName ? String(node.tagName).toLowerCase() : '';
-}
-
-// The frame's own structure, which a recording must never be able to detach.
-// `mountTree` binds a `body` root to the frame's OWN `<body>` (design §4's
-// body-root split), so a `dom.remove` naming that id would otherwise call
-// `.remove()` on the element every later mount and patch depends on and leave
-// the reconstruction nowhere to go. Pinned at the mount in Task 2, enforced
-// here.
-function isFrameStructure(node, doc) {
-  return !!doc && (node === doc.body || node === doc.documentElement);
 }
 
 function applyAdd(patch, mount) {
@@ -529,7 +597,13 @@ function applyRemove(patch, mount) {
     mount.patchFailures++;
     return;
   }
-  if (isFrameStructure(node, mount.doc)) {
+  // The reconstruction root is not removable, under either root shape — the
+  // other half of the invariant `bind` protects. On the body-root path (design
+  // §4's split) the root IS the frame's own `<body>`, so a blind `.remove()`
+  // detaches the element every later mount and patch depends on; on any other
+  // path it is the node every reader walks from. One predicate for both, so
+  // there is no disjunct a test cannot reach.
+  if (node === mount.root) {
     mount.patchFailures++;
     return;
   }
@@ -556,7 +630,7 @@ function applyAttr(patch, mount) {
   }
   // ONE §12 gate on the set path, and it is the gate instantiation uses, so a
   // keyframe and a patch can never disagree about what an element may carry.
-  setFilteredAttr(el, name, patch.value);
+  setFilteredAttr(el, name, patch.value, mount);
 }
 
 function applyText(patch, mount) {
@@ -587,7 +661,7 @@ function applyText(patch, mount) {
  *   without needing its own list of the four types
  */
 function applyPatch(patch, mount) {
-  if (!patch || typeof patch !== 'object') return false;
+  if (!patch) return false;
   var type = patch.type;
   if (type === 'dom.add') applyAdd(patch, mount);
   else if (type === 'dom.remove') applyRemove(patch, mount);
