@@ -25,6 +25,10 @@
 //           This is the same-session CONTROL Task 9 interleaves against
 //           (T3's method correction: interleave, gate on the median, never on
 //           a stored absolute from another session).
+//           *** DARK since T5 Task 1: buildViewerModel is v2-only and
+//           SMOKE-19NRQR is v1, so this arm AND the FLOOR cells (which share
+//           its page) skip with a printed notice. Task 9 re-homes both from
+//           the v0.7.1 tag. See the note above the model build below. ***
 //   PRIM    restore cost primitives inside a script-less same-origin iframe
 //           under the production CSP: keyframe mount at three tree sizes,
 //           dom.attr/dom.text patch application, canvas composite + present.
@@ -128,7 +132,7 @@ const CFG = {
 const FIX = join(repoRoot, 'tests', 'replay', 'schema-v2', 'fixtures');
 const jspsychFull = JSON.parse(readFileSync(join(FIX, 'jspsych-full.json'), 'utf8'));
 const smokeV1 = JSON.parse(readFileSync(
-  join(repoRoot, 'tests', 'browser', 'replay', 'fixtures', 'SMOKE-19NRQR-replay.json'), 'utf8'));
+  join(repoRoot, 'tests', 'browser', 'replay', 'archive', 'SMOKE-19NRQR-replay.json'), 'utf8'));
 
 // ── fixture-derived inputs ─────────────────────────────────────────────────
 
@@ -665,6 +669,12 @@ async function runEngine(name, browser, origin) {
   page.on('pageerror', (e) => fail(`[${name}] pageerror: ${e.message}`));
 
   // ── FLOOR + V1 ──────────────────────────────────────────────────────────
+  // Both live on the v1 page, so both go dark when the v1 control model
+  // cannot be built (see the DECLARED note at the bottom of this file).
+  if (!v1Model) {
+    console.log('\n── FLOOR + V1 CONTROL: SKIPPED (no v1 model — see the note at startup) ──');
+    res.v1Skipped = 'buildViewerModel is v2-only as of T5 Task 1';
+  } else {
   await page.goto(`${origin}/v1.html`, { waitUntil: 'load' });
   const clock = await page.evaluate(() => window.__clockGranularity(200000));
   console.log(`\n── FLOOR ──`);
@@ -710,6 +720,7 @@ async function runEngine(name, browser, origin) {
     console.log(`  ${''.padEnd(20)} settled ${show(a.settled)}  [async ${a.asyncCount}/${a.n}]`);
   }
   console.log(`  (forward ${T_LO}->${T_HI} ms; backward ${T_HI}->${T_LO} ms; repeat = second seek to ${T_HI})`);
+  }
 
   // ── PRIM / ALIGN / SPAN ─────────────────────────────────────────────────
   await page.goto(`${origin}/model.html`, { waitUntil: 'load' });
@@ -898,18 +909,34 @@ const resolved = resolvePlaywright();
 if (!resolved) { console.log('SKIP: playwright-core not found'); process.exit(0); }
 console.log(`playwright-core ${resolved.version} (via ${resolved.from})`);
 
-const v1Model = buildViewerModel(smokeV1);
-console.log(`v1 control model: SMOKE-19NRQR, ${v1Model.trials.length} trials, ` +
-  `${v1Model.trials.map((t) => t.events.length).join('/')} events, legacy=${v1Model.legacy}`);
+// DECLARED, T5 (A2) Task 1: `buildViewerModel` is now v2-only (spec §11
+// rejects `schema_version !== 2`) and SMOKE-19NRQR is a v1 recording, so the
+// v1 CONTROL ARM AND THE FLOOR CELLS CANNOT RUN in this repo state. They are
+// not silently dropped: the harness says so, skips that page, and still
+// measures PRIM / ALIGN / SPAN — the cells Task 9's ratio is gated on.
+// Task 9 owns the re-homing, and must do it anyway: the v1 page also inlines
+// `src/cli/renderers/replay-viewer.client.js`, which Tasks 4–5 replace. The
+// control has to come from the `v0.7.1` tag (viewer client + model builder +
+// fixture together), which is also where design §12 puts v1-era playback.
+// The fixture itself now lives in tests/browser/replay/archive/.
+let v1Model = null;
+try {
+  v1Model = buildViewerModel(smokeV1);
+  console.log(`v1 control model: SMOKE-19NRQR, ${v1Model.trials.length} trials, ` +
+    `${v1Model.trials.map((t) => t.events.length).join('/')} events`);
+} catch (e) {
+  console.log(`\n!! V1 CONTROL + FLOOR SKIPPED (declared, T5 Task 1): ${e.message}`);
+  console.log('!! Re-home from the v0.7.1 tag at Task 9; PRIM/ALIGN/SPAN still measure below.\n');
+}
 console.log(`deep-span keyframe tree: jspsych-full segment 11, ${countNodes(jspsychFull.segments[11].initial_dom)} nodes`);
 const snaps = realCanvasSnapshots();
 console.log(`canvas payloads: baseline ${snaps.baseline.data_url.length} chars + ${snaps.regions.length} regions ` +
   `(${snaps.regions.map((r) => r.data_url.length).join(',')})`);
 
 const files = new Map([
-  ['/v1.html', v1PageHtml(v1Model)],
   ['/model.html', modelPageHtml()],
 ]);
+if (v1Model) files.set('/v1.html', v1PageHtml(v1Model));
 const server = await serveFiles(files, { isolate: CFG.isolate });
 
 const engines = await launchEngines(resolved.pw, { only: CFG.engines, headless: CFG.headless });

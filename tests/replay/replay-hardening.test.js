@@ -218,29 +218,56 @@ describe('F4 — recorder must cap total payload size, not just event count', ()
   });
 });
 
+// F5/F7 re-pointed at the v2 wire (T5 Task 1). The hardening claim is
+// unchanged — a hand-edited or truncated artifact must not abort a whole
+// cohort report — but v2 splits it in two: spec §11's four rejection
+// categories now fail LEGIBLY (a named reason, not a TypeError from deep
+// inside the fold), and everything outside that set still degrades silently.
+// The full conversion suite lives in tests/replay/viewer-model.test.js.
+const v2 = (over) => ({
+  schema_version: 2, recorder: { name: 'cyborg-hunter-replay', version: '0.7.5' },
+  segments: [], ...over,
+});
+const seg = (over) => ({ index: 0, events: [], ...over });
+
 describe('F5 — buildViewerModel must not crash on malformed artifacts', () => {
-  it('tolerates non-array trials', () => {
-    const model = buildViewerModel({ metadata: { participant_id: 'P' }, trials: {} });
-    assert.deepEqual(model.trials, []);
+  it('drops null and non-object event entries', () => {
+    const model = buildViewerModel(v2({ segments: [
+      seg({ index: 0, t_load: 0, events: [] }),
+      seg({ index: 1, t_load: 0, events: [null, { type: 'mouse.click', t: 5 }, 'junk'] }),
+    ] }));
+    assert.equal(model.segments[0].events.length, 0);
+    assert.equal(model.segments[1].events.length, 1);
+    assert.equal(model.segments[1].events[0].type, 'mouse.click');
   });
-  it('tolerates non-array events and null entries', () => {
-    const model = buildViewerModel({ metadata: {}, trials: [{ trial_index: 0, events: {} }, { trial_index: 1, events: [null, { t: 5, kind: 'click' }] }] });
-    assert.equal(model.trials[0].events.length, 0);
-    assert.equal(model.trials[1].events.length, 1);
-    assert.equal(model.trials[1].events[0].kind, 'click');
+  it('builds from a recording carrying nothing but the required fields', () => {
+    const model = buildViewerModel(v2({ segments: [seg({})] }));
+    assert.equal(model.viewport, null);
+    assert.equal(model.tier, 'trace');
+    assert.ok(Number.isFinite(model.segments[0].durMs));
+  });
+  it('fails a §11-rejected artifact with a NAMED reason, not a TypeError', () => {
+    // A CH-v1 file reaching the v2 viewer is the live case: there is no v1
+    // playback path (design §12), so it must say so rather than half-load.
+    assert.throws(() => buildViewerModel({ metadata: { participant_id: 'P' }, trials: {} }), (e) => {
+      assert.deepEqual(e.reasons, [
+        'schema_version must be the integer 2',
+        'recorder {name, version} strings are required',
+        'segments array is required',
+      ]);
+      return true;
+    });
   });
 });
 
 describe('F7 — buildViewerModel must sort events by time', () => {
   it('reorders out-of-order events (RAF-coalesced input can flush late)', () => {
-    const model = buildViewerModel({
-      metadata: {}, trials: [{ trial_index: 0, t_load: 0, events: [
-        { t: 100, kind: 'mutation' },
-        { t: 50, kind: 'input', value: 'x' },
-        { t: 75, kind: 'mousemove' },
-      ] }],
-    });
-    const ts = model.trials[0].events.map(e => e.t);
+    const model = buildViewerModel(v2({ segments: [seg({ t_load: 0, events: [
+      { type: 'dom.attr', t: 100 },
+      { type: 'input.value', t: 50, value: 'x' },
+      { type: 'mouse.move', t: 75 },
+    ] })] }));
+    const ts = model.segments[0].events.map(e => e.t);
     assert.deepEqual(ts, [50, 75, 100], `events must be time-ordered, got ${ts}`);
   });
 });

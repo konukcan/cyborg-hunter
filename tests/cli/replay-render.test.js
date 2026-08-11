@@ -12,61 +12,83 @@ import {
 } from '../../src/cli/renderers/replay-assets.js';
 import { renderHtmlIndex } from '../../src/cli/renderers/html-index.js';
 
+// SessionRecording v2 (spec r2). Re-pointed from the v1 wire in T5 Task 1,
+// when buildViewerModel became v2-only; Task 10 rewrites this file to cover
+// all four replay-section states against v2 input.
 function wireRecording() {
   return {
-    schema_version: 1,
-    metadata: {
-      participant_id: 'P1', tier: 'dom', keys: 'full',
-      start_time: new Date(1751600000000).toISOString(),
-      end_time: new Date(1751600060000).toISOString(),
-      end_reason: 'finished', recorder: 'cyborg-hunter-replay@0.7.0',
-    },
-    viewport: { width: 1280, height: 800, dpr: 2, visual_viewport: null },
-    stylesheets: { initial: [{ css: '.a{color:red}' }], events: [] },
-    rng_calls: [],
-    trials: [{
-      trial_index: 0, trial_id: 'rule-1', plugin: 'html-button-response',
+    schema_version: 2,
+    recorder: { name: 'cyborg-hunter-replay', version: '0.7.5' },
+    host: null,
+    participant_id: 'P1',
+    recording_started_at: new Date(1751600000000).toISOString(),
+    recording_started_at_perf: 0,
+    user_agent: 'test-agent',
+    viewport: { w: 1280, h: 800, dpr: 2, scale: 1, offset_x: 0, offset_y: 0 },
+    observed_root: null,
+    stylesheets: [{ id: 1, kind: 'inline', css: '.a{color:red}', media: null }],
+    stylesheet_events: [],
+    viewport_changes: [],
+    rng: null,
+    rng_calls: null,
+    ended_at_perf: 60000,
+    end_reason: 'finished',
+    truncated: false,
+    segments: [{
+      index: 0, label: 'rule-1', plugin: 'html-button-response',
       t_start: null, t_dom_ready: null, t_load: 1000, t_end: 6000,
-      initial_dom: '<div id="stim">Which card?</div>',
+      initial_dom: {
+        id: 1, kind: 'element', tag: 'body', attrs: {}, children: [
+          { id: 2, kind: 'element', tag: 'div', attrs: { id: 'stim' },
+            children: [{ id: 3, kind: 'text', text: 'Which card?' }] },
+        ],
+      },
+      initial_state: null,
       events: [
-        { t: 1500, kind: 'mousemove', x: 10, y: 20 },
-        { t: 2000, kind: 'paste', len: 42 },
-        { t: 5500, kind: 'mutation', op: 'childList', path: [], html: '<p>done</p>' },
+        { type: 'mouse.move', t: 1500, x: 10, y: 20 },
+        { type: 'clipboard.paste', t: 2000, target: 2, len: 42, redacted: true },
+        { type: 'dom.text', t: 5500, node: 3, text: 'done' },
       ],
-      trial_data: {},
+      host_data: {}, extensions: null,
     }],
-    ch_extensions: {
-      scoring: { soft_score: 3, any_hard_triggered: false },
-      capture_failures: [{ channel: 'scroll', message: 'x', t: 100 }],
-      capture_stopped: false,
-      guard_violations: [],
+    extensions: {
+      'cyborg-hunter': {
+        replay_version: '0.7.5', tier: 'dom', keys: 'full',
+        viewport_client: { w: 1265, h: 800 },
+        scoring: { soft_score: 3, any_hard_triggered: false },
+        capture_failures: [{ channel: 'scroll', message: 'x', t: 100 }],
+        capture_stopped: false,
+        guard_violations: [],
+      },
     },
   };
 }
 
 describe('buildViewerModel', () => {
-  it('converts event times to trial-relative and carries tier/scoring', () => {
+  it('converts event times to segment-relative and carries tier/scoring', () => {
     const m = buildViewerModel(wireRecording());
     assert.strictEqual(m.pid, 'P1');
     assert.strictEqual(m.tier, 'dom');
-    assert.strictEqual(m.trials.length, 1);
-    const t = m.trials[0];
-    assert.strictEqual(t.durMs, 5000);                    // t_end − t_load
-    assert.strictEqual(t.events[0].t, 500);               // 1500 − 1000
-    assert.strictEqual(t.events[1].kind, 'paste');
-    assert.strictEqual(t.initialDom, '<div id="stim">Which card?</div>');
+    assert.strictEqual(m.foreign, false);
+    assert.strictEqual(m.segments.length, 1);
+    const s = m.segments[0];
+    assert.strictEqual(s.durMs, 5000);                    // t_end − origin
+    assert.strictEqual(s.events[0].t, 500);               // 1500 − 1000
+    assert.strictEqual(s.events[1].type, 'clipboard.paste');
+    assert.strictEqual(s.initialDom.tag, 'body');         // a DomNode tree, not markup
     assert.strictEqual(m.scoring.soft_score, 3);
     assert.deepStrictEqual(m.captureFailures, ['scroll']);
     assert.strictEqual(m.stylesheets[0].css, '.a{color:red}');
   });
 
-  it('guards null t_load on standalone implicit trials', () => {
+  it('guards a segment stating no anchor at all', () => {
     const rec = wireRecording();
-    rec.trials[0].t_load = null;                          // hostile input
-    rec.trials[0].t_end = null;
+    rec.segments[0].t_load = null;                        // hostile input
+    rec.segments[0].t_end = null;
     const m = buildViewerModel(rec);
-    assert.ok(Number.isFinite(m.trials[0].durMs), 'durMs must never be NaN');
-    assert.ok(m.trials[0].events.every(e => Number.isFinite(e.t)));
+    assert.strictEqual(m.segments[0].origin, 1500, 'falls back to the first event');
+    assert.ok(Number.isFinite(m.segments[0].durMs), 'durMs must never be NaN');
+    assert.ok(m.segments[0].events.every(e => Number.isFinite(e.t)));
   });
 });
 
@@ -98,8 +120,8 @@ describe('renderReplayAssets', () => {
   it('disambiguates colliding sanitized filenames and stamps assetPath', () => {
     const sub = mkdtempSync(join(tmpdir(), 'ch-replay-collide-'));
     try {
-      const recA = wireRecording(); recA.metadata.participant_id = 'a/b';
-      const recB = wireRecording(); recB.metadata.participant_id = 'a_b';
+      const recA = wireRecording(); recA.participant_id = 'a/b';
+      const recB = wireRecording(); recB.participant_id = 'a_b';
       const participants = [
         { participantId: 'a/b', replay: { recording: recA, file: 'x', meta: null } },
         { participantId: 'a_b', replay: { recording: recB, file: 'y', meta: null } },
@@ -192,13 +214,19 @@ describe('viewer client file', () => {
     const sub = mkdtempSync(join(tmpdir(), 'ch-replay-esc-'));
     try {
       const rec = wireRecording();
-      rec.trials[0].initial_dom = '<div></script><script>alert(1)</script></div>';
+      // v2 carries the hostile string as DomNode TEXT, never as markup — the
+      // reconstruction is instantiated, not parsed. The JSONP escape is still
+      // required: the asset is a <script> in the report.
+      rec.segments[0].initial_dom.children[0].children[0].text =
+        '</script><script>alert(1)</script>';
       renderReplayAssets([{ participantId: 'PX', replay: { recording: rec, file: 'x', meta: null } }], sub);
       const src = readFileSync(join(sub, 'replay', 'PX.replay.js'), 'utf8');
       assert.ok(!src.includes('</script>'), 'no literal </script> in the asset');
       const w = {};
       new Function('window', src)(w);
-      assert.match(w.__chReplay['PX'].trials[0].initialDom, /<\/script>/ig ? /script/ : /script/,
+      assert.strictEqual(
+        w.__chReplay['PX'].segments[0].initialDom.children[0].children[0].text,
+        '</script><script>alert(1)</script>',
         'payload still decodes to the original content');
     } finally { rmSync(sub, { recursive: true, force: true }); }
   });

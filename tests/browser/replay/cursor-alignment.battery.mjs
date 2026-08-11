@@ -1,11 +1,12 @@
 // tests/browser/replay/cursor-alignment.battery.mjs
 // Cursor-alignment robustness battery.
 //
-// Three parts:
-//   A — ACCEPTANCE: a captured failing recording (SMOKE-19NRQR, committed
-//       under fixtures/) replays with the cursor ON every known target across
-//       scroll, sidebar squeeze, mid-session resize storm — via the LEGACY
-//       path (no anchors), with the legacy banner present.
+// Parts:
+//   A — RETIRED by T5 (A2) Task 1. It drove the viewer over a v1 model and
+//       asserted `model.legacy === true`, both of which the v2-only
+//       `buildViewerModel` abolishes. Code and fixture are kept verbatim in
+//       archive/ (see archive/README.md); its claims are re-homed into parts
+//       B–E plus Task 8's frozen-report check and literal v2 coordinates.
 //   B — SYNTHETIC GRID: a real recording made with the dist recorder against
 //       a hostile layout page (scroll, fixed, inner scroll, transforms,
 //       rotation, centered reflow + resize, parser-normalized tables,
@@ -172,73 +173,13 @@ function dotInTarget(m) {
 
 const browser = await chromium.launch({ headless: true });
 
-// ════════════════ PART A — acceptance fixture (legacy path) ════════════════
-console.log('▶ A — acceptance: the user\'s own failing recording (legacy path)');
-const fixture = JSON.parse(readFileSync(join(here, 'fixtures', 'SMOKE-19NRQR-replay.json'), 'utf8'));
-const fixtureModel = buildViewerModel(fixture);
-check(fixtureModel.legacy === true, 'fixture is a legacy recording (no view_state)');
-const t2cam = fixtureModel.trials[2].camera;
-check(t2cam.y === 176 && t2cam.w === 1424,
-  `trial-2 camera seed folded across trials (y=${t2cam.y}, w=${t2cam.w})`);
-
-{
-  const page = await openHarness(browser, fixtureModel, 'fixture');
-  const chips = await page.evaluate(() => window.__chips());
-  check(!!chips.legacy && /legacy/i.test(chips.legacy), 'legacy banner is shown unconditionally');
-
-  // Every interaction the user KNOWS they made (smoke-test script), incl.
-  // the trial-boundary click artifacts and the Finish mousedown that the old
-  // bubble-phase capture used to lose.
-  const SPECS = [
-    { trial: 0, tRel: 1,     target: 'btn-start',   label: 'trial0 click #btn-start' },
-    { trial: 0, tRel: 4165,  target: 'copy-source', label: 'trial0 selection end #copy-source' },
-    { trial: 0, tRel: 5426,  target: 'answer-1',    label: 'trial0 click #answer-1' },
-    { trial: 0, tRel: 7616,  target: 'btn-next-1',  label: 'trial0 mousedown #btn-next-1' },
-    { trial: 1, tRel: 1,     target: 'btn-next-1',  label: 'trial1 boundary click #btn-next-1' },
-    { trial: 1, tRel: 13485, target: 'btn-next-2',  label: 'trial1 mousedown #btn-next-2 (scrolled 176)' },
-    { trial: 2, tRel: 1,     target: 'btn-next-2',  label: 'trial2 boundary click #btn-next-2 (seeded scroll)' },
-    { trial: 2, tRel: 16806, target: 'btn-finish',  label: 'trial2 mousedown #btn-finish (post-squeeze, scrolled)' },
-  ];
-  let curTrial = -1;
-  for (const s of SPECS) {
-    if (s.trial !== curTrial) { await selectTrial(page, s.trial); curTrial = s.trial; }
-    const m = await page.evaluate(({ tRel, target }) => window.__measure(tRel, target), s);
-    check(dotInTarget(m), `${s.label}: cursor inside target ` +
-      (m.dot && m.target ? `(dot ${Math.round(m.dot.x)},${Math.round(m.dot.y)} target ${Math.round(m.target.x)},${Math.round(m.target.y)} ${Math.round(m.target.w)}×${Math.round(m.target.h)})` : '(missing)'));
-  }
-  // The background click during the squeeze storm: no element target, but it
-  // must land ON-stage now (it used to project off-stage entirely).
-  if (curTrial !== 2) { await selectTrial(page, 2); curTrial = 2; }
-  const bg = await page.evaluate(() => window.__measure(6771, null));
-  check(bg.dot && bg.dot.x >= 0 && bg.dot.x <= bg.stage.w && bg.dot.y >= 0 && bg.dot.y <= bg.stage.h,
-    `trial2 background click stays on-stage (dot ${bg.dot ? Math.round(bg.dot.x) + ',' + Math.round(bg.dot.y) : 'none'} in ${bg.stage.w}×${bg.stage.h})`);
-
-  // Resize-storm thrash bound: replaying across 240 resize events must fold
-  // to a handful of REAL iframe style writes, not hundreds.
-  const styleWrites = await page.evaluate(async () => {
-    const dbg = window.__dbg();
-    dbg.selectTrial(2);
-    await new Promise(r => setTimeout(r, 400));
-    const f = document.querySelector('.replay-frame');
-    let count = 0;
-    const mo = new MutationObserver(muts => {
-      muts.forEach(m => { if (m.attributeName === 'style') count++; });
-    });
-    mo.observe(f, { attributes: true });
-    dbg.seek(30000);   // one forward seek across the whole storm
-    await new Promise(r => setTimeout(r, 100));
-    mo.disconnect();
-    return count;
-  });
-  check(styleWrites <= 6, `resize storm folded (${styleWrites} iframe style writes for 240 resize events)`);
-  await page.close();
-}
-
 // ── T3-T5 red window: revived by A2 ────────────────────────────────────────
-// PART A above stays LIVE: it replays a committed v1-era recording through the
-// viewer, and old files still render — that is the half of the contract T3 did
-// not touch, and it is worth keeping green precisely because the other half is
-// moving.
+// PART A IS RETIRED, as of T5 (A2) Task 1, and this file therefore asserts
+// NOTHING until Task 8 revives parts B–E. That is a declared window, not an
+// accident: part A drove the viewer over a `schema_version: 1` recording and
+// asserted `model.legacy === true`, and Task 1 made `buildViewerModel` v2-only
+// with no `legacy` key, so it broke the moment the model landed rather than at
+// Task 8 where the plan first put it. Code + fixture: archive/ (README there).
 //
 // PARTS B–E are skipped. B RECORDS FRESH with the dist recorder and feeds the
 // result to `buildViewerModel`; T3 moved the recorder to SessionRecording v2
@@ -253,6 +194,7 @@ check(t2cam.y === 176 && t2cam.w === 1424,
 // pinned in tests/replay/capture-trace.test.js and
 // tests/replay/alignment-capture.test.js, and the whole-capture path in
 // tests/browser/replay/capture-fork-smoke.mjs.
+console.log('▶ A — RETIRED (v1-only; archived by T5 Task 1, re-homed by Task 8)');
 console.log('▶ B–E — SKIPPED (T3-T5 red window: revived by A2)');
 for (const item of [
   'B synthetic grid: record 14 trial shapes with the dist recorder, verify anchors + self-checks',
@@ -269,7 +211,8 @@ if (failures > 0) {
   console.error(`\n${failures} FAILURE(S)`);
   process.exit(1);
 }
-console.log('\nCursor-alignment battery: part A passed; parts B–E skipped (red window).');
+console.log('\nCursor-alignment battery: NO LIVE COVERAGE — part A retired (T5 Task 1), ' +
+  'parts B–E skipped (red window). Both close at T5 Task 8.');
 process.exit(0);
 
 // ════════════════ PART B — synthetic grid (new recordings) ════════════════

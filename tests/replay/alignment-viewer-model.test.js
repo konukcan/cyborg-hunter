@@ -1,148 +1,235 @@
 // tests/replay/alignment-viewer-model.test.js
-// buildViewerModel camera plumbing for the cursor-alignment fix: per-trial
-// camera seeds (view_state, or centrally folded for legacy recordings),
-// legacy detection, and marker-attribute passthrough.
+// buildViewerModel camera plumbing under v2 (T5 Task 1, design §8): the
+// per-segment camera seed folded from SESSION-level viewport_changes, the
+// three-level client-box chain, and the producer-identity `foreign` flag that
+// decides which CH panels the report may draw.
+//
+// v1 folded per-trial `view_state` seeds plus in-stream `resize` events. v2
+// has neither: `resize` is not an event type and viewport history is
+// session-level, so the fold changes shape rather than being ported.
+//
+// Level 1 of the client-box chain (per-event `camera.client_w`) is the
+// VIEWER's business at the moment of an anchored event, not the model's —
+// tests for it live with the five checks (T5 Task 6).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync } from 'fs';
 import { buildViewerModel } from '../../src/cli/renderers/replay-assets.js';
+
+const FIXTURES = new URL('./schema-v2/fixtures/', import.meta.url);
+const fixture = (name) =>
+  JSON.parse(readFileSync(new URL(name + '.json', FIXTURES), 'utf8'));
+
+const VIEWPORT = { w: 1424, h: 797, dpr: 1, scale: 1, offset_x: 0, offset_y: 0 };
 
 function baseRecording(overrides) {
   return {
-    schema_version: 1,
-    metadata: { participant_id: 'P1', tier: 'dom', keys: 'full',
-      start_time: '2026-07-13T00:00:00Z', end_reason: 'finished',
-      recorder: 'cyborg-hunter-replay@0.7.0' },
-    viewport: { width: 1424, height: 797, dpr: 1,
-      visual_viewport: { width: 1409, height: 797, scale: 1 } },
-    stylesheets: { initial: [], events: [] },
-    rng_calls: [],
-    trials: [],
-    ch_extensions: {},
+    schema_version: 2,
+    recorder: { name: 'cyborg-hunter-replay', version: '0.7.5' },
+    host: null,
+    participant_id: 'P1',
+    recording_started_at: '2026-08-11T00:00:00.000Z',
+    recording_started_at_perf: 0,
+    user_agent: 'test',
+    viewport: { ...VIEWPORT },
+    observed_root: null,
+    stylesheets: [],
+    stylesheet_events: [],
+    viewport_changes: [],
+    truncated: false,
+    end_reason: 'finished',
+    extensions: { 'cyborg-hunter': { tier: 'dom', viewport_client: { w: 1409, h: 797 } } },
+    segments: [],
     ...overrides,
   };
 }
 
-describe('camera seeds — new recordings (view_state present)', () => {
-  it('uses the recorded view_state verbatim and is not legacy', () => {
-    const rec = baseRecording({
-      viewport: { width: 1424, height: 797, dpr: 1, visual_viewport: null,
-        client_width: 1409, client_height: 797 },
-      trials: [{
-        trial_index: 0, trial_id: 't0', plugin: 'p',
-        t_load: 0, t_end: 100, initial_dom: '', events: [],
-        view_state: { x: 0, y: 176, w: 1424, h: 797, cw: 1409, ch: 797, dpr: 1 },
-      }],
-      ch_extensions: { marker_attr: 'data-chn-ab12' },
-    });
-    const model = buildViewerModel(rec);
-    assert.strictEqual(model.legacy, false);
-    assert.strictEqual(model.markerAttr, 'data-chn-ab12');
-    assert.deepStrictEqual(model.trials[0].camera,
-      { x: 0, y: 176, w: 1424, h: 797, cw: 1409, ch: 797, dpr: 1, source: 'view_state' });
-  });
-});
+function segment(overrides) {
+  return {
+    index: 0, label: null, plugin: null,
+    t_start: null, t_dom_ready: null, t_load: null, t_end: null,
+    initial_dom: null, initial_state: null, events: [],
+    host_data: null, extensions: null,
+    ...overrides,
+  };
+}
 
-describe('camera seeds — legacy recordings (central folding)', () => {
-  it('trial 0 seeds from the session viewport with assumed zero scroll', () => {
-    const rec = baseRecording({
-      trials: [{
-        trial_index: 0, trial_id: 't0', plugin: 'p',
-        t_load: 0, t_end: 100, initial_dom: '', events: [],
-      }],
-    });
-    const model = buildViewerModel(rec);
-    assert.strictEqual(model.legacy, true);
-    const cam = model.trials[0].camera;
+const keyframeTree = () => ({ id: 1, kind: 'element', tag: 'body', attrs: {}, children: [] });
+
+describe('camera seed — session viewport and the viewport_changes fold', () => {
+  it('seeds from the top-level viewport with zero scroll when nothing changed', () => {
+    const model = buildViewerModel(baseRecording({
+      segments: [segment({ t_load: 0, initial_dom: keyframeTree() })],
+    }));
+    const cam = model.segments[0].camera;
+    assert.strictEqual(cam.scroll_x, 0);
+    assert.strictEqual(cam.scroll_y, 0);
+    assert.strictEqual(cam.w, 1424);
+    assert.strictEqual(cam.h, 797);
+    assert.strictEqual(cam.dpr, 1);
+    assert.strictEqual(cam.scale, 1);
+    assert.strictEqual(cam.source, 'default');
+  });
+
+  it('folds only the viewport_changes at or before the segment origin', () => {
+    const model = buildViewerModel(baseRecording({
+      viewport_changes: [
+        { t: 50, ...VIEWPORT, w: 1015 },
+        { t: 500, ...VIEWPORT, w: 1200 },     // exactly at segment 1's origin
+        { t: 900, ...VIEWPORT, w: 900 },      // after it
+      ],
+      segments: [
+        segment({ index: 0, t_load: 0, initial_dom: keyframeTree() }),
+        segment({ index: 1, t_load: 500, initial_dom: keyframeTree() }),
+      ],
+    }));
+    assert.strictEqual(model.segments[0].camera.w, 1424, 'nothing has changed yet at t=0');
+    assert.strictEqual(model.segments[1].camera.w, 1200,
+      'a change stamped at the origin is part of the state the segment opens with');
+  });
+
+  it('folds pinch state (scale / offsets / dpr) the same way', () => {
+    const model = buildViewerModel(baseRecording({
+      viewport_changes: [{ t: 10, w: 1424, h: 797, dpr: 2, scale: 1.5, offset_x: 40, offset_y: 12 }],
+      segments: [segment({ t_load: 100, initial_dom: keyframeTree() })],
+    }));
+    const cam = model.segments[0].camera;
     assert.deepStrictEqual(
-      { x: cam.x, y: cam.y, w: cam.w, h: cam.h, cw: cam.cw, ch: cam.ch, source: cam.source },
-      // cw falls back to visual_viewport.width (layout width w/o scrollbar)
-      { x: 0, y: 0, w: 1424, h: 797, cw: 1409, ch: 797, source: 'folded' });
+      { dpr: cam.dpr, scale: cam.scale, offset_x: cam.offset_x, offset_y: cam.offset_y },
+      { dpr: 2, scale: 1.5, offset_x: 40, offset_y: 12 });
   });
 
-  it('later trials fold prior trials\' window scroll and resize events', () => {
-    // Mirrors the user fixture: trial 0 scrolls to 176 and resizes to 1015
-    // then back to 1424; trial 1 must therefore seed at scroll 176 and
-    // viewport 1424 even though it records neither itself.
-    const rec = baseRecording({
-      trials: [
-        {
-          trial_index: 0, trial_id: 't0', plugin: 'p',
-          t_load: 0, t_end: 100, initial_dom: '',
-          events: [
-            { t: 10, kind: 'scroll', x: 0, y: 176 },
-            { t: 20, kind: 'resize', w: 1015, h: 797 },
-            { t: 30, kind: 'resize', w: 1424, h: 797 },
-          ],
-        },
-        {
-          trial_index: 1, trial_id: 't1', plugin: 'p',
-          t_load: 100, t_end: 200, initial_dom: '', events: [],
-        },
-      ],
-    });
-    const model = buildViewerModel(rec);
-    const cam = model.trials[1].camera;
-    assert.strictEqual(cam.source, 'folded');
-    assert.strictEqual(cam.y, 176, 'window scroll folded across the trial boundary');
-    assert.strictEqual(cam.w, 1424, 'resize folded (last state wins)');
-    // legacy resize events carry no cw — estimated as w minus the session
-    // scrollbar delta (1424−1409 = 15)
-    assert.strictEqual(cam.cw, 1409);
-  });
-
-  it('element scrolls do NOT fold into the window camera', () => {
-    const rec = baseRecording({
-      trials: [
-        {
-          trial_index: 0, trial_id: 't0', plugin: 'p',
-          t_load: 0, t_end: 100, initial_dom: '',
-          events: [{ t: 10, kind: 'scroll', el: 'div#box', id: 'box', x: 0, y: 999 }],
-        },
-        { trial_index: 1, trial_id: 't1', plugin: 'p',
-          t_load: 100, t_end: 200, initial_dom: '', events: [] },
-      ],
-    });
-    const model = buildViewerModel(rec);
-    assert.strictEqual(model.trials[1].camera.y, 0,
-      'container scroll must not masquerade as window scroll');
+  it('survives a recording with no viewport block at all', () => {
+    const model = buildViewerModel(baseRecording({
+      viewport: null,
+      segments: [segment({ t_load: 0, initial_dom: keyframeTree() })],
+    }));
+    const cam = model.segments[0].camera;
+    assert.strictEqual(cam.w, null);
+    assert.strictEqual(cam.client_w, null);
+    assert.strictEqual(model.viewport, null);
   });
 });
 
-describe('mixed recordings (some trials seeded, some not)', () => {
-  it('resyncs the fold from available view_states and stays legacy-flagged', () => {
-    // Trial 0 starts pre-scrolled (y=500) with NO scroll events — only its
-    // view_state knows. Trial 1 (truncated/legacy) must inherit y=500, and
-    // the reduced-guarantees banner must still show for the unseeded trial.
-    const rec = baseRecording({
-      trials: [
-        {
-          trial_index: 0, trial_id: 't0', plugin: 'p',
-          t_load: 0, t_end: 100, initial_dom: '', events: [],
-          view_state: { x: 0, y: 500, w: 1424, h: 797, cw: 1409, ch: 797, dpr: 1 },
-        },
-        { trial_index: 1, trial_id: 't1', plugin: 'p',
-          t_load: 100, t_end: 200, initial_dom: '', events: [] },
+describe('camera seed — window scroll comes from the span keyframe', () => {
+  it('seeds scroll from the keyframe\'s initial_state', () => {
+    const model = buildViewerModel(baseRecording({
+      segments: [segment({
+        t_load: 0, initial_dom: keyframeTree(),
+        initial_state: { scroll: { x: 0, y: 176 }, element_scroll: [], media: [], form: [] },
+      })],
+    }));
+    assert.strictEqual(model.segments[0].camera.scroll_y, 176);
+    assert.strictEqual(model.segments[0].camera.source, 'initial_state');
+  });
+
+  it('a continuation inherits its SPAN KEYFRAME\'s seed, not its own null', () => {
+    const model = buildViewerModel(baseRecording({
+      segments: [
+        segment({
+          index: 0, t_load: 0, initial_dom: keyframeTree(),
+          initial_state: { scroll: { x: 5, y: 176 }, element_scroll: [], media: [], form: [] },
+        }),
+        segment({ index: 1, t_start: 100 }),
       ],
-    });
-    const model = buildViewerModel(rec);
-    assert.strictEqual(model.trials[1].camera.y, 500,
-      'fold resynced from the seeded trial\'s view_state');
-    assert.strictEqual(model.trials[1].camera.source, 'folded');
-    assert.strictEqual(model.legacy, true,
-      'any unseeded trial keeps the reduced-guarantees banner');
+    }));
+    // The restore mounts segments[spanStart] and seeds ITS initial_state, so
+    // the continuation's camera must open from the same place (design §5).
+    assert.strictEqual(model.segments[1].spanStart, 0);
+    assert.strictEqual(model.segments[1].camera.scroll_y, 176);
+    assert.strictEqual(model.segments[1].camera.scroll_x, 5);
+  });
+
+  it('a keyframe with no initial_state opens at scroll (0,0)', () => {
+    const model = buildViewerModel(baseRecording({
+      segments: [
+        segment({
+          index: 0, t_load: 0, initial_dom: keyframeTree(),
+          initial_state: { scroll: { x: 0, y: 176 }, element_scroll: [], media: [], form: [] },
+        }),
+        segment({ index: 1, t_load: 100, initial_dom: keyframeTree() }),
+      ],
+    }));
+    assert.strictEqual(model.segments[1].camera.scroll_y, 0,
+      'the frame survives segment changes, so a scrolled segment must not leak into the next');
+    assert.strictEqual(model.segments[1].camera.source, 'default');
   });
 });
 
-describe('degradation', () => {
-  it('a recording with no viewport at all still builds (nulls, not throws)', () => {
-    const rec = baseRecording({ viewport: null, trials: [{
-      trial_index: 0, trial_id: 't0', plugin: 'p',
-      t_load: 0, t_end: 1, initial_dom: '', events: [],
-    }] });
+describe('client-box chain (design §8, levels 2 and 3)', () => {
+  it('level 2 — the session viewport_client is the layout box at the top-level viewport', () => {
+    const model = buildViewerModel(baseRecording({
+      segments: [segment({ t_load: 0, initial_dom: keyframeTree() })],
+    }));
+    assert.deepStrictEqual(model.viewportClient, { w: 1409, h: 797 });
+    assert.deepStrictEqual(model.scrollbar, { w: 15, h: 0 });
+    assert.strictEqual(model.segments[0].camera.client_w, 1409);
+    assert.strictEqual(model.segments[0].camera.client_h, 797);
+  });
+
+  it('level 3 — a folded resize carries the same session scrollbar delta', () => {
+    const model = buildViewerModel(baseRecording({
+      viewport_changes: [{ t: 10, ...VIEWPORT, w: 1015, h: 600 }],
+      segments: [segment({ t_load: 100, initial_dom: keyframeTree() })],
+    }));
+    const cam = model.segments[0].camera;
+    assert.strictEqual(cam.w, 1015);
+    assert.strictEqual(cam.client_w, 1000, '1015 − (1424 − 1409)');
+    assert.strictEqual(cam.client_h, 600, 'the session h delta is 0');
+  });
+
+  it('an absent viewport_client is a delta of ZERO, never viewport.w − undefined.w', () => {
+    const model = buildViewerModel(baseRecording({
+      extensions: { 'cyborg-hunter': { tier: 'dom' } },   // CH-produced, no client box
+      segments: [segment({ t_load: 0, initial_dom: keyframeTree() })],
+    }));
+    assert.strictEqual(model.viewportClient, null);
+    assert.deepStrictEqual(model.scrollbar, { w: 0, h: 0 });
+    assert.strictEqual(model.segments[0].camera.client_w, 1424);
+    assert.ok(Number.isFinite(model.segments[0].camera.client_w));
+  });
+});
+
+describe('foreign — producer identity, not namespace presence', () => {
+  it('jspsych-full is foreign AND has a null viewportClient AND a zero scrollbar delta', () => {
+    // Asserted together on purpose. jspsych-full DOES carry
+    // extensions['cyborg-hunter'] (the T4 converter stamps its provenance
+    // there), so a namespace-presence test reports foreign:false for the one
+    // file that exists to prove foreignness — and §8's client-box chain then
+    // computes viewport.w − undefined.w on the fixture that matters most.
+    const rec = fixture('jspsych-full');
+    assert.ok(rec.extensions['cyborg-hunter'], 'the namespace IS present on the foreign fixture');
     const model = buildViewerModel(rec);
-    assert.strictEqual(model.trials[0].camera.w, null);
-    assert.strictEqual(model.legacy, true);
-    assert.strictEqual(model.markerAttr, null);
+    assert.strictEqual(model.foreign, true);
+    assert.strictEqual(model.viewportClient, null);
+    assert.deepStrictEqual(model.scrollbar, { w: 0, h: 0 });
+    assert.strictEqual(model.segments[0].camera.client_w, rec.viewport.w);
+    assert.ok(model.segments.every((s) => Number.isFinite(s.camera.client_w)));
+  });
+
+  it('a CH recording is not foreign', () => {
+    const model = buildViewerModel(baseRecording({
+      segments: [segment({ t_load: 0, initial_dom: keyframeTree() })],
+    }));
+    assert.strictEqual(model.foreign, false);
+  });
+
+  it('a hand-authored fixture is foreign', () => {
+    assert.strictEqual(buildViewerModel(fixture('canonical-core')).foreign, true);
+  });
+
+  it('CH panels key on their OWN field, never on foreign', () => {
+    // A converted CH-v1 file is CH-produced AND converter-stamped; a foreign
+    // file may still carry a CH block. Neither case may be decided by the
+    // `foreign` flag.
+    const model = buildViewerModel(baseRecording({
+      recorder: { name: 'jspsych', version: '8.2.3' },
+      extensions: { 'cyborg-hunter': { scoring: { soft_score: 2 }, viewport_client: { w: 1409, h: 797 } } },
+      segments: [segment({ t_load: 0, initial_dom: keyframeTree() })],
+    }));
+    assert.strictEqual(model.foreign, true);
+    assert.strictEqual(model.scoring.soft_score, 2, 'the panel follows its field, not the producer');
+    assert.strictEqual(model.segments[0].camera.client_w, 1409);
   });
 });

@@ -15,6 +15,13 @@
 //   (SMOKE-19NRQR), with targets known from the smoke-test script semantics.
 //
 // Run: npm run build && node tools/investigate/cursor-alignment-probe.mjs
+//
+// SUPERSEDED — this probe is the record of a closed investigation (the 0.7.3
+// cursor-alignment fix) and does not run in this repo state: experiment C
+// reads a v1 recording from a `.worktrees/` path outside the repo, and both
+// B and C feed `buildViewerModel`, which is v2-only as of T5 (A2) Task 1.
+// Kept for its method (arc interception, drawn-dot vs target measurement),
+// which the alignment battery and the T5 seek harness both inherit.
 
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';

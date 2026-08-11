@@ -1,125 +1,265 @@
 // src/replay/viewer-model.js
-// Wire SessionRecording → viewer model. Pure — no Node APIs — so a browser
-// demo can bundle it directly (0.7.2 extraction from
-// cli/renderers/replay-assets.js, which re-exports this for existing
-// callers).
+// SessionRecording v2 (spec r2) → viewer model. Pure — no Node APIs — so a
+// browser demo can bundle it directly (0.7.2 extraction from
+// cli/renderers/replay-assets.js, which re-exports this for existing callers).
 //
 // This is one of exactly two allowed wire→viewer time-conversion points (the
-// other lives in the CLI ingest path): SessionRecording carries ms since
-// session start; the viewer speaks trial-relative ms.
+// other lives in the CLI ingest path): a SessionRecording carries ms since
+// `recording_started_at_perf`; the viewer speaks segment-relative ms.
+//
+// Input is a parsed v2 recording from ANY producer, not just CH's recorder:
+// the shared format's whole point is that a conforming file plays in either
+// project's player. Everything CH-specific is read from
+// `extensions['cyborg-hunter']` and guarded on its own key.
+//
+// The model is a frozen wire format between two files that ship together
+// (renderReplayAssets writes it as JSONP; the report inlines its own copy of
+// the viewer client), so there is no back-compat problem here — and no
+// back-compat either. There is no CH-v1 playback path: v1 recordings are
+// rejected by the §11 tolerant profile below and are played with the v0.7.1
+// tag (design §12).
+
+// Spec §11, tolerant loader profile. Reject ONLY these four categories;
+// everything else loads with a warning-free documented default. Rationale:
+// recordings are unrepeatable participant data, so rejection at runtime is
+// data loss — strictness lives in CI (tests/replay/schema-v2/validator.js),
+// where it hits a developer instead of an analyst. The reason strings mirror
+// that validator's tolerant profile verbatim so the repo holds ONE reading of
+// the profile rather than two that can drift.
+function tolerantReasons(rec) {
+  const reasons = [];
+  if (typeof rec !== 'object' || rec === null || Array.isArray(rec)) {
+    return ['recording must be a JSON object'];
+  }
+  if (rec.schema_version !== 2) reasons.push('schema_version must be the integer 2');
+  if (!rec.recorder || typeof rec.recorder.name !== 'string' || typeof rec.recorder.version !== 'string') {
+    reasons.push('recorder {name, version} strings are required');
+  }
+  if (!Array.isArray(rec.segments)) {
+    reasons.push('segments array is required');
+  } else {
+    rec.segments.forEach((s, i) => {
+      if (!s || typeof s !== 'object' || !Array.isArray(s.events)) {
+        reasons.push('segments[' + i + '] must carry an events array');
+      }
+    });
+  }
+  return reasons;
+}
+
+const asArray = (v) => (Array.isArray(v) ? v : []);
+const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
+// The wire rounds to 0.1 ms (spec §7); rebasing two rounded floats
+// reintroduces binary noise (2100 − 2000 = 99.99999999999999), so every
+// derived time is re-rounded to the same precision.
+const round1 = (v) => Math.round(v * 10) / 10;
 
 /**
- * Wire SessionRecording → viewer model. Times become trial-relative
- * (t − t_load); null anchors (standalone implicit trials) degrade to the
- * first event's time so durations are always finite.
+ * @param {object} recording  a parsed SessionRecording v2, any producer
+ * @returns {object} the viewer model (design §9)
+ * @throws {Error} with `.reasons` when the §11 tolerant profile rejects it
  */
 export function buildViewerModel(recording) {
-  const md = recording.metadata || {};
-  const ext = recording.ch_extensions || {};
+  const reasons = tolerantReasons(recording);
+  if (reasons.length) {
+    const err = new Error('buildViewerModel: not a loadable SessionRecording v2 — ' + reasons.join('; '));
+    err.reasons = reasons;
+    throw err;
+  }
 
-  // ── Camera seeding (central, per Sol round-1 finding 8) ──
-  // New recordings carry a per-trial view_state seed. Legacy recordings
-  // don't — but the full event stream is present, so each trial's starting
-  // camera is reconstructed by folding all PRIOR trials' window-scroll and
-  // resize events over the session-start viewport. Initial scroll is assumed
-  // 0 (a recording that starts pre-scrolled with no scroll events is
-  // unrecoverable — that's what the viewer's legacy banner covers).
-  const vp = recording.viewport || {};
-  const vv = vp.visual_viewport || {};
-  // Scrollbar delta: legacy resize events carry only innerWidth/Height; the
-  // layout (client) width is estimated as w minus the session-start delta
-  // between innerWidth and the layout width (visual_viewport.width).
-  const sbW = (vp.width && (vp.client_width || vv.width))
-    ? vp.width - (vp.client_width || vv.width) : 0;
-  const sbH = (vp.height && (vp.client_height || vv.height))
-    ? vp.height - (vp.client_height || vv.height) : 0;
-  let foldState = {
-    x: 0, y: 0,
-    w: vp.width || null, h: vp.height || null,
-    cw: vp.client_width || vv.width || vp.width || null,
-    ch: vp.client_height || vv.height || vp.height || null,
-    dpr: vp.dpr || 1
-  };
-  const foldEvent = (state, e) => {
-    if (e.kind === 'scroll' && e.el == null && e.redacted == null) {
-      state.x = Number(e.x) || 0;
-      state.y = Number(e.y) || 0;
-    } else if (e.kind === 'resize') {
-      state.w = e.w != null ? e.w : state.w;
-      state.h = e.h != null ? e.h : state.h;
-      state.cw = e.cw != null ? e.cw : (e.w != null ? e.w - sbW : state.cw);
-      state.ch = e.ch != null ? e.ch : (e.h != null ? e.h - sbH : state.ch);
-      if (e.dpr != null) state.dpr = e.dpr;
-    }
-    return state;
+  const rec = recording;
+  // `extensions` is nullable at every level (spec §2/§9), and a foreign
+  // producer may carry the namespace for its own reasons — the T4 converter
+  // stamps provenance into it. Read individual keys; never treat presence of
+  // the namespace as evidence about the producer.
+  const ext = (rec.extensions && rec.extensions['cyborg-hunter']) || {};
+
+  // ── session viewport and the client (layout) box ────────────────────────
+  // Spec §2's ViewportState has no client-box room, so the layout box the page
+  // was formatted against travels as CH vendor data. The iframe must be sized
+  // to the LAYOUT width or every reconstruction is a scrollbar-width off.
+  // Chain (design §8): per-event `camera.client_w` (the viewer's business, at
+  // the moment of an anchored event) → `viewport_client` at session start →
+  // folded w/h minus the session scrollbar delta. The delta is computed from
+  // `viewport_client` ITSELF, so an absent one is a delta of zero rather than
+  // an arithmetic accident — which is exactly the foreign-file case.
+  const viewport = rec.viewport && typeof rec.viewport === 'object' ? rec.viewport : null;
+  const viewportClient = ext.viewport_client || null;
+  const scrollbar = {
+    w: viewport && viewportClient && num(viewport.w) != null && num(viewportClient.w) != null
+      ? viewport.w - viewportClient.w : 0,
+    h: viewport && viewportClient && num(viewport.h) != null && num(viewportClient.h) != null
+      ? viewport.h - viewportClient.h : 0,
   };
 
-  // Defensive against malformed/truncated artifacts (a hand-edited or
-  // partially-written recording): non-array trials/events and null entries must
-  // degrade to empty rather than throw and abort the whole cohort report.
-  const rawTrials = Array.isArray(recording.trials) ? recording.trials : [];
-  const trials = rawTrials.map((trial) => {
-    trial = trial || {};
-    // Sort by absolute time before anchoring. RAF-coalesced input events flush
-    // with an EARLIER timestamp than events pushed after they were enqueued, so
-    // the recorded array is not strictly time-ordered; the viewer scrubs by
-    // scanning until the first future event and would otherwise mis-apply an
-    // out-of-order event on a seek. Stable sort keeps equal-time order.
-    const events = (Array.isArray(trial.events) ? trial.events : [])
+  const viewportChanges = asArray(rec.viewport_changes)
+    .filter((c) => c && typeof c === 'object')
+    .slice()
+    .sort((a, b) => (num(a.t) || 0) - (num(b.t) || 0));
+
+  // ── segments ────────────────────────────────────────────────────────────
+  const rawSegments = rec.segments;
+  // A recording with no keyframe ANYWHERE is trace-only, which spec §3 states
+  // explicitly ("null before any keyframe = the recording (so far) is
+  // trace-only") and which is NOT the continuation-before-keyframe defect. The
+  // two are told apart by whether a keyframe exists at all.
+  const anyKeyframe = rawSegments.some((s) => s && s.initial_dom);
+
+  let spanStart = null;      // index of the keyframe the current span opens at
+  const segments = rawSegments.map((s, i) => {
+    const keyframe = !!s.initial_dom;
+    if (keyframe) spanStart = i;
+
+    const tStart = num(s.t_start);
+    const tDomReady = num(s.t_dom_ready);
+    const tLoad = num(s.t_load);
+    const tEnd = num(s.t_end);
+
+    // Events are sorted BEFORE the origin is taken, because the origin can
+    // fall back to the first event's time and the recorded array is not
+    // guaranteed ordered in practice: RAF-coalesced input flushes with an
+    // EARLIER timestamp than events pushed after it was enqueued. Spec §7
+    // requires producers to emit sorted arrays; the viewer scans forward and
+    // would mis-apply an out-of-order event on a seek, so a foreign producer's
+    // bug must not become CH's rendering bug. Stable sort keeps equal-t order,
+    // which §7 makes authoritative.
+    const events = asArray(s.events)
       .filter((e) => e && typeof e === 'object')
       .slice()
-      .sort((a, b) => (Number(a.t) || 0) - (Number(b.t) || 0));
-    const anchor = trial.t_load != null ? trial.t_load
-      : (events.length > 0 ? events[0].t : 0);
-    const lastT = events.length > 0 ? events[events.length - 1].t : anchor;
-    const end = trial.t_end != null ? trial.t_end : lastT;
-    // Camera seed for THIS trial: recorded view_state, else the folded state
-    // as of the end of the previous trial. A recorded view_state also
-    // RESYNCS the fold — in a mixed recording (some trials seeded, some
-    // not: truncation, version mixes) a later unseeded trial must inherit
-    // real observed state, not a fold that ignored every observation.
-    if (trial.view_state) foldState = Object.assign({}, foldState, trial.view_state);
-    const camera = trial.view_state
-      ? Object.assign({}, trial.view_state, { source: 'view_state' })
-      : Object.assign({}, foldState, { source: 'folded' });
-    // Advance the fold across this trial's events for the NEXT trial's seed.
-    events.forEach((e) => foldEvent(foldState, e));
+      .sort((a, b) => (num(a.t) || 0) - (num(b.t) || 0));
+
+    // Spec §3: "Segment time origin for per-segment clocks: first non-null of
+    // t_load, t_dom_ready, t_start; else the first event's t."
+    // Recorded because it was contested: the pre-design's carry paraphrased
+    // this as "t_dom_ready, then t_load, then t_start last", swapping the
+    // first two. The SPEC TEXT is the contract. The readings differ only for a
+    // segment stating both t_load and t_dom_ready with different values, where
+    // §3 says t_load wins — and that is also the no-change reading, since
+    // CH-v1's anchor was t_load. (The fork's PLAYER still rebases by
+    // `t_dom_ready ?? 0`; that divergence is a cross-repo rider, not T5 scope.)
+    const origin = tLoad != null ? tLoad
+      : tDomReady != null ? tDomReady
+        : tStart != null ? tStart
+          : (events.length > 0 && num(events[0].t) != null ? num(events[0].t) : 0);
+
+    const lastT = events.length > 0 ? (num(events[events.length - 1].t) || origin) : origin;
+    const end = tEnd != null ? tEnd : lastT;
+
     return {
-      index: trial.trial_index,
-      id: trial.trial_id,
-      plugin: trial.plugin,
-      durMs: Math.max(0, Math.round((end - anchor) * 10) / 10),
-      initialDom: trial.initial_dom || '',
-      camera,
+      // Spec §7: `index` MUST equal the array position, and tolerant loaders
+      // trust array order. Taking the position rather than the stated field
+      // means a producer's off-by-one cannot desync the model from the array
+      // every other part of the viewer indexes into.
+      index: i,
+      label: s.label != null ? s.label : null,
+      plugin: s.plugin != null ? s.plugin : null,
+      tStart, tDomReady, tLoad, tEnd,
+      origin,
+      durMs: Math.max(0, round1(end - origin)),
+      keyframe,
+      // The nearest earlier segment with a non-null initial_dom (itself if it
+      // is a keyframe): the segment a restore mounts before walking forward.
+      spanStart: anyKeyframe ? spanStart : null,
+      defect: anyKeyframe && spanStart === null ? 'continuation-before-keyframe' : null,
+      // v2's keyframe is a DomNode TREE, never an HTML string: the
+      // reconstruction is instantiated node by node and is never parsed from
+      // markup (design §4).
+      initialDom: s.initial_dom || null,
+      initialState: s.initial_state || null,
+      camera: null,          // filled below, once every span start is known
+      // Segment-relative times, as v1's were trial-relative. A pure
+      // subtraction, NOT clamped at zero: an event recorded before its
+      // segment's origin keeps a negative relative time so that
+      // `origin + t === the wire t` holds in both directions, which is what
+      // the checkpoint executor converts through (plan Task 7).
       events: events.map((e) => {
         const out = Object.assign({}, e);
-        out.t = Math.max(0, Math.round(((Number(e.t) || 0) - anchor) * 10) / 10);
+        out.t = round1((num(e.t) || 0) - origin);
         return out;
-      })
+      }),
     };
   });
 
+  // ── per-segment camera seed (design §8) ─────────────────────────────────
+  // v1 folded per-trial `view_state` seeds plus in-stream `resize` events. v2
+  // has neither: `resize` is not an event type and viewport history is
+  // session-level. So the seed is `viewport_changes` folded up to the
+  // segment's origin, over the top-level viewport, with window scroll taken
+  // from the SPAN KEYFRAME's `initial_state` — the state a restore actually
+  // opens with (design §5). Scroll is not folded across segments: the span
+  // walk replays `scroll.window` itself, and a segment with no initial_state
+  // opens at (0,0) because the frame survives segment changes.
+  for (const seg of segments) {
+    const folded = {
+      w: viewport ? num(viewport.w) : null,
+      h: viewport ? num(viewport.h) : null,
+      dpr: viewport && num(viewport.dpr) != null ? viewport.dpr : 1,
+      scale: viewport && num(viewport.scale) != null ? viewport.scale : 1,
+      offset_x: viewport && num(viewport.offset_x) != null ? viewport.offset_x : 0,
+      offset_y: viewport && num(viewport.offset_y) != null ? viewport.offset_y : 0,
+    };
+    for (const c of viewportChanges) {
+      if ((num(c.t) || 0) > seg.origin) break;
+      for (const k of Object.keys(folded)) if (num(c[k]) != null) folded[k] = c[k];
+    }
+    const keyframeSeg = seg.spanStart != null ? segments[seg.spanStart] : null;
+    const seedScroll = keyframeSeg && keyframeSeg.initialState && keyframeSeg.initialState.scroll;
+    seg.camera = Object.assign({}, folded, {
+      scroll_x: seedScroll && num(seedScroll.x) != null ? seedScroll.x : 0,
+      scroll_y: seedScroll && num(seedScroll.y) != null ? seedScroll.y : 0,
+      client_w: folded.w != null ? folded.w - scrollbar.w : null,
+      client_h: folded.h != null ? folded.h - scrollbar.h : null,
+      // Which of the two scroll sources produced this seed. Not spec — it is
+      // what makes a wrong seed legible in the viewer's own diagnostics.
+      source: seedScroll ? 'initial_state' : 'default',
+    });
+  }
+
   return {
-    pid: md.participant_id != null ? String(md.participant_id) : 'unknown',
-    tier: md.tier || 'trace',
-    keys: md.keys || null,
-    startTime: md.start_time || null,
-    endReason: md.end_reason || null,
-    recorder: md.recorder || null,
-    viewport: recording.viewport || null,
-    // Legacy = ANY trial lacks a view_state seed (all-legacy recordings and
-    // mixed/truncated ones alike): those trials replay on folded camera
-    // state, so the reduced-guarantees banner must show.
-    legacy: !rawTrials.every((t) => t && t.view_state),
-    markerAttr: ext.marker_attr || null,
-    // Session scrollbar delta (innerWidth − layout width): the viewer uses
-    // the same fallback chain as the folding above for legacy resize events.
-    scrollbar: { w: sbW, h: sbH },
-    stylesheets: (recording.stylesheets && recording.stylesheets.initial) || [],
+    schemaVersion: 2,
+    pid: rec.participant_id != null ? String(rec.participant_id) : null,
+    recorder: rec.recorder,
+    host: rec.host || null,
+    startTime: rec.recording_started_at || null,
+    startPerf: num(rec.recording_started_at_perf),
+    endReason: rec.end_reason || null,
+    truncated: !!rec.truncated,
+    userAgent: rec.user_agent || null,
+
+    // `foreign` keys on PRODUCER IDENTITY, never on the presence of the
+    // `extensions['cyborg-hunter']` namespace: the T4 converter stamps its
+    // provenance into that namespace, so a namespace test calls the
+    // designated foreign-producer fixture CH-produced. A converted CH-v1 file
+    // is the mirror case — CH-produced and converter-stamped. `foreign` says
+    // "the report should not pretend this file has CH panels"; it never
+    // decides whether a given panel is drawn. Every panel below is guarded on
+    // its OWN field's presence.
+    foreign: rec.recorder.name !== 'cyborg-hunter-replay',
+
+    // Stated tier wins; otherwise infer structurally so a foreign file gets an
+    // honest badge instead of "trace" (design §10).
+    tier: ext.tier || (anyKeyframe ? 'dom' : 'trace'),
+    keys: ext.keys || null,
+    chVersion: ext.ch_version || null,
+    preset: ext.preset || null,
+    inheritedTaint: !!ext.inherited_redaction_taint,
+
+    viewport,
+    viewportClient,
+    scrollbar,
+    // Session-level streams keep ABSOLUTE wire times and are rebased at use:
+    // one array serves every segment.
+    viewportChanges,
+    stylesheets: asArray(rec.stylesheets),
+    stylesheetEvents: asArray(rec.stylesheet_events),
+
     scoring: ext.scoring || null,
-    guardViolations: ext.guard_violations || [],
+    guardViolations: asArray(ext.guard_violations),
+    // Channel names only: the chip says which channel went dark, and the
+    // message/time detail has no surface in the report today.
+    captureFailures: asArray(ext.capture_failures).map((f) => f && f.channel).filter(Boolean),
     captureStopped: !!ext.capture_stopped,
-    captureFailures: (ext.capture_failures || []).map((f) => f.channel),
-    trials
+
+    segments,
   };
 }
