@@ -26,5 +26,8 @@
                                            { "node": 7, "prop": "text", "equals": "saved" } ] },
     { "t": 2350, "segment": 1, "assert": [ { "node": 6, "prop": "exists", "equals": false } ] },
     { "t": 4100, "segment": 2, "assert": [ { "node": 3, "prop": "value", "equals": "abc" } ] }
-  ]
+  ],
+  "notes": {
+    "checkpoints": "CROSS-VERIFIED, and the fork is the authoring side. These four were written and executed in jspsych-replay-fork (tests/checkpoints.test.ts, commit 66d45b5) before Cyborg Hunter had a checkpoint executor at all, so no expected value here can have come from CH's own viewer. CH executes the same four verbatim in tests/replay/schema-v2/checkpoints.test.js (T5 Task 7), which pins the array against an inline copy of the fork's literals so a one-sided edit turns red. What each is evidence for: t=500 the post-click dom.text landed on the text node; t=2250 dom.add mounted the new subtree before the remove; t=2350 dom.remove took it back out; t=4100 input.value applied in the second keyframe span, over the initial_state seed. NOT authored from: segment 0's one anchored mouse.click. Its hand-authored anchor.rect sits ~316-320 px from where an unstyled <button> lands in any real browser, so the alignment check reports `uncertain` there forever (T5.4/T5.6 finding, reproduced tri-engine and independently by a reviewer). That says nothing about reconstruction fidelity, and the four props do not read alignment state."
+  }
 }
