@@ -115,3 +115,6 @@ There is no CH-v1 playback path and no v1→v2 converter (T5 non-goals). To play
 `SMOKE-19NRQR-replay.json` as it originally played, check out the **`v0.7.1`**
 tag. Reports already generated on disk are unaffected by any of this: a CH
 report inlines its own viewer copy and its own models.
+
+
+Note (Task-8 confirmation): the frozen fixture holds NO discrete mouse event with `target: null` or a missing anchor (all 18 segments swept), so part P's `mouse.move` substitution for part A's no-target-click claim was FORCED by the corpus, not preferred; the `noAnchor` bucket half is pinned in `alignment-viewer-model.test.js` instead.
