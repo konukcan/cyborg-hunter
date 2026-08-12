@@ -16,6 +16,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { serialize } from '../../src/replay/serializer.js';
+import { createRecorder } from '../../src/replay/recorder.js';
+import { buildViewerModel } from '../../src/replay/viewer-model.js';
 import { VERSION } from '../../src/shared/constants.js';
 import { validateStrict } from './schema-v2/validator.js';
 
@@ -348,6 +350,35 @@ describe('serialize → truncation (spec §5.7)', () => {
     const stops = rec.segments.flatMap(x => x.events)
       .filter(e => e.type === 'recording.capture_stopped');
     assert.strictEqual(stops.length, 1, 'the stop signal is emitted once per recording');
+  });
+
+  it('carries the crossed cap from a REAL recorder run all the way to the model', () => {
+    // The §5.7 banner in the viewer quotes the configured cap out of this
+    // event's vendor namespace, so the copy-through is now load-bearing and
+    // needs a test that would notice a narrowing. The test above CONSTRUCTS the
+    // event and never asserts the namespace survives `serialize`; this one
+    // starts from the real recorder, at a cap it was really configured with,
+    // and follows the value to the object the viewer reads.
+    const rec = createRecorder({ participantId: 'P1', maxEventsPerTrial: 3 });
+    rec.startSession();
+    rec.startTrial({ trialId: 't1' });
+    for (let i = 0; i < 10; i++) rec.pushRecord({ type: 'mouse.move', x: i, y: i });
+    rec.endTrial();
+    rec.stopSession();
+
+    const wired = wire(rec.getState());
+    const stop = wired.segments.flatMap(x => x.events)
+      .find(e => e.type === 'recording.capture_stopped');
+    assert.ok(stop, 'the wire carries the §5.7 event');
+    assert.strictEqual(stop.reason, 'buffer_limit');
+    assert.deepStrictEqual(stop.extensions, { 'cyborg-hunter': { limit_events: 3 } },
+      'the configured cap survives serialization, in the §9 vendor namespace');
+
+    const model = buildViewerModel(wired);
+    const modelStop = model.segments.flatMap(s2 => s2.events)
+      .find(e => e.type === 'recording.capture_stopped');
+    assert.deepStrictEqual(modelStop.extensions, { 'cyborg-hunter': { limit_events: 3 } },
+      'and survives buildViewerModel, which is where the viewer reads it');
   });
 
   it('an untruncated recording says so explicitly', () => {

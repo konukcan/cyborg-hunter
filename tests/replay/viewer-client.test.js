@@ -769,14 +769,42 @@ const canvasKeyframe = (id, w, h, attrs) => bodyKeyframe([{
 // drive one test leaks into every test after it, and a stubbed `decode` that
 // never resolves turns the next five into 15-second timeouts. Patches go
 // through this.
-function withProto(win, ctor, name, descriptor, body) {
+//
+// ALWAYS `await withProto(...)`, and note that the helper AWAITS `body()`
+// rather than returning its promise. A synchronous `try { return body(); }
+// finally {…}` runs the `finally` the moment an async body returns its
+// promise — that is, at its first `await` — so the stub silently uninstalls
+// itself mid-test and everything after the first `await` runs against the real
+// prototype. That version was green here only because both call sites happened
+// to depend on the stub before their first suspension. Tasks 6–8 inherit this
+// helper, so the contract is: the patch is installed for the WHOLE body, sync
+// or async.
+async function withProto(win, ctor, name, descriptor, body) {
   const proto = win[ctor].prototype;
   const original = Object.getOwnPropertyDescriptor(proto, name);
   Object.defineProperty(proto, name, Object.assign({ configurable: true }, descriptor));
-  try { return body(); } finally {
+  try { return await body(); } finally {
     if (original) Object.defineProperty(proto, name, original); else delete proto[name];
   }
 }
+
+// The helper's own contract, pinned: a patch must survive an `await` inside the
+// body. Without this, `withProto` is a trap handed to three later tasks.
+describe('T5.5 — the prototype-patch helper', () => {
+  it('keeps the patch installed across an await inside the body', async () => {
+    const { Window } = await import('happy-dom');
+    const win = new Window({ url: 'https://report.test/' });
+    const seen = [];
+    await withProto(win, 'HTMLImageElement', 'decode', { value: () => 'STUB' }, async () => {
+      seen.push(win.document.createElement('img').decode());
+      await new Promise((r) => setTimeout(r, 0));
+      seen.push(win.document.createElement('img').decode());
+    });
+    assert.equal(seen[0], 'STUB');
+    assert.equal(seen[1], 'STUB', 'the stub survived the await, not just the call before it');
+    assert.notEqual(win.document.createElement('img').decode(), 'STUB', 'and is gone afterwards');
+  });
+});
 
 // jspsych-full's canvas segments both TEAR DOWN inside their own span: segment
 // 8 removes the canvas's parent at 263.4 and segment 9 removes the canvas
@@ -1074,6 +1102,38 @@ describe('T5.5 — canvas.snapshot composites in the parent, presented through a
       'and cannot point that selector at an element of its choosing, from either verb');
   });
 
+  it('a throwing presentation does not poison the canvas chain', async () => {
+    // A rejected chain is permanent: every later composite for that canvas is
+    // skipped and `canvasSettled()` — the one call Task 7's executor awaits —
+    // rejects. So both links have to end resolved whatever they throw.
+    const rec = baseRecording({
+      segments: [segment({
+        initial_dom: canvasKeyframe(2, 8, 4, {}),
+        events: [
+          { type: 'canvas.snapshot', t: 10, node: 2, data_url: PNG_1PX },
+          { type: 'canvas.snapshot', t: 30, node: 2, data_url: PNG_1PX, region: { x: 1, y: 1, w: 1, h: 1 } },
+        ],
+      })],
+    });
+    const v = boot(rec);
+    let thrown = 0;
+    await withProto(v.win, 'HTMLCanvasElement', 'toDataURL',
+      { value: function () { thrown++; throw new Error('encoder gone'); } },
+      async () => {
+        v.dbg.seek(20);
+        await v.dbg.canvasSettled();      // must RESOLVE, not reject
+      });
+    assert.ok(thrown > 0, 'the presentation really did throw');
+    assert.ok(v.dbg.getCounters().patchFailures >= 1, 'and the analyst is told');
+
+    // The canvas keeps working afterwards.
+    v.dbg.seek(40);
+    await v.dbg.canvasSettled();
+    const rule = v.doc().head.querySelector('style[data-ch-canvas-rule="2"]');
+    assert.match(rule.textContent, /background-image:url/,
+      'the composite after the failure still lands');
+  });
+
   it('counts a canvas.snapshot the span cannot honour instead of throwing', async () => {
     const rec = baseRecording({
       segments: [segment({
@@ -1234,6 +1294,47 @@ describe('T5.5 — §5.8 unknown event types', () => {
       'an unknown type is a vocabulary gap, not a reference the span could not honour');
   });
 
+  it('reports the file\'s unknown types BEFORE the analyst scrubs into the segment carrying them', () => {
+    // The chip's wording is a claim about the RECORDING, so it cannot be
+    // computed from wherever the playhead happens to have been. Computed
+    // during the walk it stayed empty until someone visited segment 1 — the
+    // "never fail silently" rule failing silently. `findCaptureStop` already
+    // makes the identical argument for the §5.7 banner one screen earlier.
+    const rec = baseRecording({
+      segments: [
+        segment({ index: 0, t_start: 0, t_end: 1000, initial_dom: bodyKeyframe([]), events: [] }),
+        segment({
+          index: 1, t_start: 1000, t_end: 2000, initial_dom: bodyKeyframe([]),
+          events: [
+            { type: 'vendor.telemetry', t: 10 },
+            { type: 'vendor.telemetry', t: 20 },
+          ],
+        }),
+      ],
+    });
+    const realWarn = console.warn;
+    const warned = [];
+    console.warn = (...args) => { warned.push(args.join(' ')); };
+    let v;
+    try { v = boot(rec); } finally { console.warn = realWarn; }
+
+    const chip = v.chip('data-ch-unknown-types');
+    assert.equal(chip.style.display, '', 'shown at boot, on segment 0, with nothing scrubbed');
+    assert.match(chip.textContent, /vendor\.telemetry/);
+    assert.match(chip.textContent, /2 event\(s\)/, 'the scan counts occurrences file-wide');
+    assert.deepEqual(v.dbg.getCounters().unknownTypes, ['vendor.telemetry']);
+    assert.equal(warned.length, 1, 'one console warning per type, at the scan');
+
+    // Restore-stable by construction: the count comes from the file, not from
+    // how many times the walk replayed it.
+    v.dbg.selectSegment(1);
+    v.dbg.seek(100);
+    v.dbg.seek(0);
+    v.dbg.seek(100);
+    assert.match(v.chip('data-ch-unknown-types').textContent, /2 event\(s\)/);
+    assert.deepEqual(v.dbg.getCounters().unknownTypes, ['vendor.telemetry']);
+  });
+
   it('does not re-warn for the same type after a restore', () => {
     const rec = baseRecording({
       segments: [segment({
@@ -1287,11 +1388,53 @@ describe('T5.5 — §5.7 truncation and the capture-failure surface', () => {
     assert.match(v.chip('data-ch-cap-note').textContent, /8,000,000 characters/);
   });
 
-  it('falls back to the library defaults, and says so, when the file states no limit', () => {
+  it('offers NO buffer-cap explanation for a stop the recording attributes to an error', () => {
+    // The banner used to name "capture error" in the summary and then explain
+    // it as a buffer cap in the body, quoting two numbers with nothing to do
+    // with what happened. §5.7 asks players to surface truncation; surfacing it
+    // with a cause the recording denies is worse than saying less.
     const v = boot(stopped({ type: 'recording.capture_stopped', t: 900, reason: 'error' }));
     const note = v.chip('data-ch-cap-note');
     assert.match(note.querySelector('summary').textContent, /capture error/);
+    assert.match(note.textContent, /capture error/, 'the body names what the recording says');
+    assert.ok(!/usual cause is a buffer cap/.test(note.textContent),
+      'and never ASSERTS the cause the recording denies (naming it to rule it out is fine)');
+    assert.ok(!/library defaults/.test(note.textContent));
+    assert.ok(!/50,000/.test(note.textContent) && !/8,000,000/.test(note.textContent),
+      'no cap numbers at all for a stop that was not a cap');
+  });
+
+  it('falls back to the library defaults, and says so, for a CH file that hit a cap it did not state', () => {
+    const v = boot(stopped({ type: 'recording.capture_stopped', t: 900, reason: 'buffer_limit' }));
+    const note = v.chip('data-ch-cap-note');
+    assert.match(note.querySelector('summary').textContent, /buffer limit/);
     assert.match(note.textContent, /library defaults/);
+    assert.match(note.textContent, /50,000 events/);
+  });
+
+  it('never quotes CH\'s defaults for a producer that is not CH', () => {
+    // `model.foreign` keys on producer identity and exists for exactly this
+    // (viewer-model.js's own comment). Quoting CH's REPLAY_DEFAULTS in the
+    // sentence that explains a jsPsych recording's stop describes a recorder
+    // that did not make the file — in a viewer whose premise (§7) is that it
+    // plays foreign conforming files.
+    const foreign = stopped(
+      { type: 'recording.capture_stopped', t: 900, reason: 'buffer_limit' },
+      { recorder: { name: 'jspsych', version: '8.2.3' } });
+    const note = boot(foreign).chip('data-ch-cap-note');
+    assert.match(note.textContent, /does not state/);
+    assert.ok(!/library defaults/.test(note.textContent));
+    assert.ok(!/50,000/.test(note.textContent) && !/8,000,000/.test(note.textContent),
+      'CH\'s numbers never describe another producer\'s recorder');
+
+    // The READ is not gated on `foreign`: a foreign file that DOES carry the
+    // namespace still gets its own number quoted (§9 is where vendor data
+    // lives, and declining to read one the viewer understands helps nobody).
+    const foreignWithLimit = stopped(
+      { type: 'recording.capture_stopped', t: 900, reason: 'buffer_limit',
+        extensions: { 'cyborg-hunter': { limit_events: 777 } } },
+      { recorder: { name: 'jspsych', version: '8.2.3' } });
+    assert.match(boot(foreignWithLimit).chip('data-ch-cap-note').textContent, /777 events/);
   });
 
   it('shows the banner for a truncated recording that carries no stop event at all', () => {

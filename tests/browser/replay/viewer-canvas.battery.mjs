@@ -178,6 +178,28 @@ const SEG8_POINTS = [
   { x: 60, y: 60, want: [104, 118, 223] },
   { x: 340, y: 240, want: [115, 82, 172] },
 ];
+
+// STRETCH WITNESS. Two mappings take a recorded bitmap coordinate to a shot
+// pixel — the letterbox `scale(k)`, and `background-size: 100% 100%` stretching
+// the composite over a box that is NOT the bitmap size. The letterbox half is
+// guarded by `frameShot`; this is the other half, and it had no pixel witness:
+// dropping `background-size: 100% 100%` left the whole battery green, because
+// segment 9's box equals its bitmap (so the two mappings coincide) and the
+// SEG8_POINTS above are deliberately flat.
+//
+// Segment 8 is the only box ≠ bitmap case (436×327 for a 400×300 bitmap), so
+// the witness lives there. Both points are locally flat within 5px in the
+// payload, and both flip if the composite is drawn at its natural size in the
+// corner instead of stretched to fill:
+//   (276,104) is INK in the stretched image and falls outside the un-stretched
+//             one entirely — white if the stretch is gone, white if the
+//             presentation never happened
+//   (312,132) is PAPER in the stretched image and reads deep purple if the
+//             sampling drifts inward by the 9% the stretch accounts for
+const SEG8_STRETCH = [
+  { x: 276, y: 104, want: [113, 90, 184], label: 'ink under the stretch' },
+  { x: 312, y: 132, want: [255, 255, 255], label: 'paper under the stretch' },
+];
 const INK = [44, 62, 80];         // the sketchpad stroke colour
 const PAPER = [254, 254, 254];    // its canvas background
 
@@ -375,6 +397,21 @@ async function runEngine(name, browser) {
   check(ok8, 'BASE the 189,322-char full baseline is PRESENTED in its recorded colours — ' + detail8.join(' '));
   check(await page.evaluate(() => window.__ruleFor(3)) > 1000,
     'the presentation rule carries the encoded composite (cheap pre-check, not the acceptance)');
+
+  // STRETCH: the second mapping, pixel-checked. Both points are read from the
+  // same shot as BASE, through the same box, so this asserts nothing about the
+  // letterbox — only that the composite fills the box rather than sitting in
+  // its corner at natural size.
+  let okStretch = true;
+  const detailS = [];
+  for (const p of SEG8_STRETCH) {
+    const got = at(after8, box8b, p.x, p.y);
+    const hit = near(got, p.want, 12);
+    if (!hit) okStretch = false;
+    detailS.push(`${p.label} (${p.x},${p.y}) ${rgb(got)}${hit ? '' : ' want ' + rgb(p.want)}`);
+  }
+  check(okStretch, 'STRETCH the composite is stretched over a box that is NOT the bitmap size — ' +
+    `box ${Math.round(box8b.w)}x${Math.round(box8b.h)}, bitmap ${box8b.bw}x${box8b.bh}; ` + detailS.join('; '));
 
   // The SHIPPED path, with nothing awaited: a report has no `canvasSettled()`
   // caller, so a viewer that only presents when someone asks it to shows the

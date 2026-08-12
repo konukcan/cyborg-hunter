@@ -401,9 +401,12 @@
     }
 
     // The cap the recording says it crossed, or null. CH stamps it as
-    // `{limit_events}` / `{limit_chars}`; a foreign producer stamps nothing and
-    // gets the library-defaults wording, which is then honest rather than a
-    // number presented as this recording's.
+    // `{limit_events}` / `{limit_chars}`.
+    //
+    // The READ is deliberately NOT gated on `model.foreign`: §9 is where vendor
+    // data belongs, the read is guarded on its own presence, and a player that
+    // declines to read a namespace it understands is being fastidious at the
+    // analyst's expense. What IS gated on `foreign` is the FALLBACK below.
     function captureStopLimit() {
       var ext = captureStop && captureStop.ev.extensions;
       var ch = ext && ext['cyborg-hunter'];
@@ -428,10 +431,29 @@
           (segments[captureStop.seg].index != null ? segments[captureStop.seg].index : captureStop.seg) +
           ' at ' + fmtClock(num(captureStop.ev.t) || 0) + '. ';
       }
+      // What the banner may say about the CAUSE, in the order the recording
+      // constrains it. Every branch below says only what this file supports:
+      // a banner that surfaces truncation with the wrong cause is a worse
+      // failure than the interim wording it replaced.
       var limit = captureStopLimit();
+      var reasonRaw = captureStop ? captureStop.ev.reason : null;
       if (limit) {
         capText += 'This recording states the cap it crossed: the recorder was configured to stop ' +
           'a segment after ' + limit + '. ';
+      } else if (reasonRaw === 'error') {
+        // The recording DENIES the buffer cap. Naming "capture error" in the
+        // summary and then explaining it as a cap in the body — quoting two
+        // numbers with nothing to do with what happened — is the banner
+        // contradicting itself inside one <details>.
+        capText += 'The recording attributes the stop to a capture error rather than a buffer cap, ' +
+          'and says nothing further about it. ';
+      } else if (model.foreign) {
+        // CAP_DEFAULTS are THIS library's REPLAY_DEFAULTS. Quoting them in the
+        // sentence that explains another producer's stop describes a recorder
+        // that did not make the file. `model.foreign` keys on producer identity
+        // (viewer-model.js) and exists for exactly this.
+        capText += 'This file does not state the cap it crossed, and it was not produced by this ' +
+          'library, so no configured limit can be quoted for it. ';
       } else {
         capText += 'The usual cause is a buffer cap: the recorder caps each segment at about ' +
           fmtCount(CAP_DEFAULTS.events) + ' events or ' + fmtCount(CAP_DEFAULTS.chars) +
@@ -1001,7 +1023,11 @@
           // reapplied. Counted, and the chain stays RESOLVED so the snapshots
           // after it still land.
           if (span) span.patchFailures++;
-        });
+        })
+        // …and the same for a throw inside the DRAW, which the handler above
+        // cannot see: it is the previous link's rejection handler, not this
+        // one's. Both links end resolved or the canvas stops compositing.
+        .catch(chainFailed);
       entry.dirty = true;
     }
 
@@ -1113,8 +1139,22 @@
       for (var i = 0; i < ids.length; i++) {
         var entry = canvasNodes.get(ids[i]);
         entry.dirty = false;
-        entry.chain = entry.chain.then(present(doc, ids[i], entry));
+        // A rejected chain is PERMANENT: one throw here (a torn-down head, a
+        // `setAttribute` on a node that just left the document) would silently
+        // skip every later composite for this canvas AND reject
+        // `canvasSettled()` — the one call Task 7's executor is told to await.
+        // The composite link had a rejection handler and this one did not; note
+        // that a trailing `catch` is what actually closes it, since a `then`'s
+        // second argument sees the PREVIOUS link's rejection and not a throw
+        // inside its own callback. No reachable throw is known.
+        entry.chain = entry.chain.then(present(doc, ids[i], entry)).catch(chainFailed);
       }
+    }
+
+    // Absorbs anything either link throws, counts it where the analyst can see
+    // it, and leaves the chain RESOLVED so the snapshots after it still land.
+    function chainFailed() {
+      if (span) span.patchFailures++;
     }
 
     // A named factory rather than a closure inside the loop: `var` has no block
@@ -1164,19 +1204,49 @@
     }
 
     // ── §5.8: unknown types ──
-    function noteUnknownType(type) {
+    // SCANNED ONCE AT INIT, for the same reason `findCaptureStop` is: the chip
+    // says "in this recording", which is a claim about the FILE, and a claim
+    // about the file cannot be assembled from wherever the playhead has been.
+    // Computed during the walk it stayed empty until the analyst happened to
+    // scrub into the segment carrying the unknown type — the "never fail
+    // silently" rule failing silently.
+    //
+    // The scan also makes the OCCURRENCE count restore-stable for free: it
+    // counts what the file holds, not how many times the walk replayed it,
+    // which is what made a per-occurrence count untenable when this was lazy.
+    function noteUnknownType(type, count) {
       if (unknownTypes.has(type)) return;
-      unknownTypes.set(type, true);
+      unknownTypes.set(type, count || 1);
       if (typeof console !== 'undefined' && console && console.warn) {
         console.warn('[cyborg-hunter-replay] event type "' + type +
           '" is not in this viewer\'s vocabulary; skipping it (spec §5.8)');
       }
       var names = [];
-      unknownTypes.forEach(function (_v, k) { names.push(k); });
+      var events = 0;
+      unknownTypes.forEach(function (n, k) { names.push(k); events += n; });
       unknownChip.textContent = names.length + ' event type(s) in this recording are not ' +
-        'recognised by this viewer and were skipped: ' + names.join(', ') + '.';
+        'recognised by this viewer and were skipped, ' + events + ' event(s) in total: ' +
+        names.join(', ') + '.';
       unknownChip.style.display = '';
     }
+
+    function scanUnknownTypes() {
+      var counts = new Map();
+      for (var si = 0; si < segments.length; si++) {
+        var evs = segments[si].events || [];
+        for (var ei = 0; ei < evs.length; ei++) {
+          var t = evs[ei] && evs[ei].type;
+          if (typeof t !== 'string' || KNOWN_TYPES[t] === true) continue;
+          counts.set(t, (counts.get(t) || 0) + 1);
+        }
+      }
+      // Sorted so the chip reads the same way twice over one file.
+      var types = [];
+      counts.forEach(function (_n, k) { types.push(k); });
+      types.sort();
+      for (var i = 0; i < types.length; i++) noteUnknownType(types[i], counts.get(types[i]));
+    }
+    scanUnknownTypes();
 
     // ── Event application ──
     function resolveNode(id) {
