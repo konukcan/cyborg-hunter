@@ -70,7 +70,14 @@
     'recording.capture_stopped': '#616161',
     'dom.add': '#1976d2', 'dom.remove': '#1976d2',
     'dom.attr': '#1976d2', 'dom.text': '#1976d2',
-    'input.value': '#388e3c', 'input.checked': '#388e3c', 'input.select': '#388e3c'
+    'input.value': '#388e3c', 'input.checked': '#388e3c', 'input.select': '#388e3c',
+    // Adopted vocabulary (design §7). Media and fullscreen are STATE changes
+    // the viewer reports rather than reproduces, so the lane is where they
+    // land: a badge says what the state is now, a marker says when it changed.
+    'fullscreen.enter': '#00838f', 'fullscreen.exit': '#00838f',
+    'canvas.snapshot': '#5e35b1',
+    'media.play': '#00897b', 'media.pause': '#00897b', 'media.ended': '#00897b',
+    'media.seeked': '#00897b', 'media.time': '#00897b'
   };
   var GUARD_COLOR = '#d32f2f';
   var UNCERTAIN_COLOR = '#b26a00';
@@ -89,10 +96,18 @@
   // state playing to it would.
   var KEYCAST_FADE_MS = 500;
 
-  // Buffer-cap explanation fallback: recorder.js's REPLAY_DEFAULTS. v2 moves
-  // the configured limits into `extensions['cyborg-hunter']`, which the viewer
-  // model does not carry today, so the note quotes the library defaults and
-  // says so. Re-pointing it at the recording's own limits is Task 5's §5.7 row.
+  // Buffer-cap explanation FALLBACK: recorder.js's REPLAY_DEFAULTS, quoted only
+  // when the recording states no limit of its own.
+  //
+  // It usually does state one. The configured cap that was actually crossed is
+  // CH's own diagnostic rather than a standard field, so it rides in the §5.7
+  // event's vendor namespace — `recording.capture_stopped.extensions
+  // ['cyborg-hunter'] = {limit_events}` or `{limit_chars}` (recorder.js), which
+  // `serializer.js` and `buildViewerModel` both copy through whole. So the
+  // §5.7 re-point reads the RECORDING's numbers out of the event stream this
+  // viewer already walks; it needs no new model field, and the defaults below
+  // survive only for a file that carries no such event (a foreign producer, or
+  // `reason: "error"`). See `findCaptureStop` / `captureStopLimit` below.
   var CAP_DEFAULTS = { events: 50000, chars: 8000000 };
 
   // Non-move input events: the ones that MAY carry §6 alignment blocks and the
@@ -118,6 +133,40 @@
   // How the viewer recognises its own shell after writing it. The parser drops
   // attributes on a re-parsed <html>, so the sentinel is a <meta>.
   var SHELL_META = 'ch-replay-shell';
+
+  // Spec §5's WHOLE vocabulary, not CH's capture subset (design §7): the
+  // conformance moment is this viewer playing a foreign conforming file, and
+  // `jspsych-full` carries canvas snapshots, fullscreen transitions and
+  // content-mode clipboard payloads CH's recorder will never produce.
+  //
+  // The set exists so §5.8's "skip and count" has a definition of KNOWN that is
+  // one list rather than the shape of an if/else chain. A type in here is
+  // handled or deliberately left to the overlay/lane/ticker; a type not in here
+  // is counted and warned about once.
+  var KNOWN_TYPES = {};
+  ('dom.add dom.remove dom.attr dom.text ' +
+   'mouse.move mouse.down mouse.up mouse.click ' +
+   'touch.start touch.move touch.end key.down key.up ' +
+   'input.value input.checked input.select ' +
+   'clipboard.copy clipboard.cut clipboard.paste clipboard.drop ' +
+   'canvas.snapshot ' +
+   'media.play media.pause media.ended media.seeked media.time ' +
+   'focus blur visibility.hidden visibility.visible ' +
+   'fullscreen.enter fullscreen.exit ' +
+   'scroll.window scroll.element ' +
+   'recording.capture_stopped').split(' ').forEach(function (t) { KNOWN_TYPES[t] = true; });
+
+  // Canvas presentation (design §3.1). MUST match dom-instantiate.js's
+  // VIEWER_OWNED_ATTRS entries — the module refuses both names on both verbs,
+  // which is what stops a recording from stripping the selector its own
+  // composite is presented through.
+  var CANVAS_ATTR = 'data-ch-canvas';
+  var CANVAS_RULE_ATTR = 'data-ch-canvas-rule';
+  // Nothing but our own encoder writes this string, and it goes inside a CSS
+  // `url("…")`, so the shape is checked rather than trusted: a realm without
+  // canvas support returns '' from toDataURL (happy-dom does), and a stray
+  // quote would end the declaration early.
+  var DATA_URL_RE = /^data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=]*$/;
 
   function el(tag, cls, text) {
     var node = document.createElement(tag);
@@ -258,6 +307,13 @@
     var appliedIdx = 0;
     var stats = { shellWrites: 0, mounts: 0 };
 
+    // Adopted-vocabulary state (design §7). All three are rebuilt by a restore,
+    // because all three are functions of the playhead — except `unknownTypes`,
+    // which describes the FILE and therefore outlives any walk.
+    var canvasNodes = new Map();   // node id -> {off, chain, w, h, dirty, sized, sizeCss}
+    var mediaState = new Map();    // node id -> {tag, state, time}
+    var unknownTypes = new Map();  // §5.8: type -> true, one entry per type
+
     // Camera at the applied position: window scroll + viewport dims.
     var cam = null;            // {x, y, w, h, cw, ch}
     var pendingCamSize = false;
@@ -319,23 +375,92 @@
       header.appendChild(el('span', 'replay-note',
         'No integrity score attached (this recording was captured standalone)'));
     }
-    if (model.captureStopped || model.truncated) {
+    // ── §5.7: truncation, with the recording's own numbers ──
+    // The stop signal is an EVENT, emitted once into the segment open at stop
+    // time, and it carries `reason` — plus, when CH produced it, the configured
+    // cap it crossed, in the event's vendor namespace. It is found by one scan
+    // here rather than during a walk, because the banner is a property of the
+    // RECORDING and must be visible before the analyst seeks anywhere near the
+    // point where capture went dark.
+    function findCaptureStop() {
+      for (var si = 0; si < segments.length; si++) {
+        var evs = segments[si].events || [];
+        for (var ei = 0; ei < evs.length; ei++) {
+          if (evs[ei].type === 'recording.capture_stopped') return { seg: si, ev: evs[ei] };
+        }
+      }
+      return null;
+    }
+    var captureStop = findCaptureStop();
+
+    function captureStopReason() {
+      var r = captureStop && captureStop.ev.reason;
+      if (r === 'buffer_limit') return 'buffer limit';
+      if (r === 'error') return 'capture error';
+      return null;
+    }
+
+    // The cap the recording says it crossed, or null. CH stamps it as
+    // `{limit_events}` / `{limit_chars}`; a foreign producer stamps nothing and
+    // gets the library-defaults wording, which is then honest rather than a
+    // number presented as this recording's.
+    function captureStopLimit() {
+      var ext = captureStop && captureStop.ev.extensions;
+      var ch = ext && ext['cyborg-hunter'];
+      if (!ch) return null;
+      if (num(ch.limit_events) != null) return fmtCount(ch.limit_events) + ' events';
+      if (num(ch.limit_chars) != null) return fmtCount(ch.limit_chars) + ' characters';
+      return null;
+    }
+
+    if (model.captureStopped || model.truncated || captureStop) {
       var capDetails = document.createElement('details');
       capDetails.className = 'replay-note replay-warn replay-cap';
       capDetails.setAttribute('data-ch-cap-note', '');
       var capSummary = document.createElement('summary');
-      capSummary.textContent = 'Capture stopped before the session ended (details)';
-      var capBody = el('p', null,
-        'The recorder stopped capturing before this session finished, so the replay ends ' +
-        'earlier than the participant\'s session did. The usual cause is a buffer cap: the ' +
-        'recorder caps each segment at about ' + fmtCount(CAP_DEFAULTS.events) + ' events or ' +
-        fmtCount(CAP_DEFAULTS.chars) + ' characters (library defaults — both are configurable ' +
-        'when the recorder is attached), and the segment that crosses either cap stops ' +
-        'recording. Absence of evidence after this point is not evidence of absence.');
+      var reason = captureStopReason();
+      capSummary.textContent = 'Capture stopped before the session ended' +
+        (reason ? ' (' + reason + ')' : '') + ' (details)';
+      var capText = 'The recorder stopped capturing before this session finished, so the replay ' +
+        'ends earlier than the participant\'s session did. ';
+      if (captureStop) {
+        capText += 'It stopped during segment ' +
+          (segments[captureStop.seg].index != null ? segments[captureStop.seg].index : captureStop.seg) +
+          ' at ' + fmtClock(num(captureStop.ev.t) || 0) + '. ';
+      }
+      var limit = captureStopLimit();
+      if (limit) {
+        capText += 'This recording states the cap it crossed: the recorder was configured to stop ' +
+          'a segment after ' + limit + '. ';
+      } else {
+        capText += 'The usual cause is a buffer cap: the recorder caps each segment at about ' +
+          fmtCount(CAP_DEFAULTS.events) + ' events or ' + fmtCount(CAP_DEFAULTS.chars) +
+          ' characters (library defaults — both are configurable when the recorder is attached, ' +
+          'and this file does not state which cap it crossed). ';
+      }
+      capText += 'Absence of evidence after this point is not evidence of absence.';
       capDetails.appendChild(capSummary);
-      capDetails.appendChild(capBody);
+      capDetails.appendChild(el('p', null, capText));
       header.appendChild(capDetails);
     }
+
+    // A capture CHANNEL that threw is spec §13's absence-of-evidence case in
+    // its sharpest form: the session looks clean in exactly the dimension that
+    // stopped being observed. `buildViewerModel` reduces the recorder's
+    // `{channel, message, t}` records to channel names, which is what a chip
+    // can say; the messages are recorder diagnostics with no analyst-facing
+    // reading. (T5.1 M-3: this field had no consumer until here.)
+    var captureFailChip = el('span', 'replay-note replay-warn', '');
+    captureFailChip.setAttribute('data-ch-capture-failures', '');
+    captureFailChip.style.display = 'none';
+    var failedChannels = (model.captureFailures || []).filter(function (c) { return !!c; });
+    if (failedChannels.length > 0) {
+      captureFailChip.textContent = '⚠ ' + failedChannels.length + ' capture channel(s) failed ' +
+        'during recording (' + failedChannels.join(', ') + '). Evidence those channels would have ' +
+        'carried is missing from this replay.';
+      captureFailChip.style.display = '';
+    }
+    header.appendChild(captureFailChip);
     // Alignment status chips — the "never fail silently" surface.
     var alignChip = el('span', 'replay-note', '');
     alignChip.setAttribute('role', 'status');
@@ -366,6 +491,30 @@
     dprChip.setAttribute('data-ch-dpr-note', '');
     dprChip.style.display = 'none';
     header.appendChild(dprChip);
+    // Media is rendered as STATE, never played (design §7) — the forensic
+    // posture, and the fork's too. Saying so is part of the rendering: a badge
+    // reading "paused at 4.0s" over a silent element would otherwise read as a
+    // viewer that failed rather than one that declined.
+    var mediaChip = el('span', 'replay-note', '');
+    mediaChip.setAttribute('data-ch-media-note', '');
+    mediaChip.style.display = 'none';
+    var hasMedia = segments.some(function (s) {
+      return (s.events || []).some(function (e) { return e.type && e.type.indexOf('media.') === 0; }) ||
+        !!(s.initialState && (s.initialState.media || []).length > 0);
+    });
+    if (hasMedia) {
+      mediaChip.textContent = 'This recording contains audio/video state. The viewer shows play state and position as badges; it does not play back media.';
+      mediaChip.style.display = '';
+    }
+    header.appendChild(mediaChip);
+    // §5.8: a type this viewer does not know is SKIPPED, never guessed at, and
+    // never silently. Counted once per type — the walk replays on every
+    // restore, so an occurrence count would climb with the analyst's scrubbing
+    // rather than describe the file.
+    var unknownChip = el('span', 'replay-note', '');
+    unknownChip.setAttribute('data-ch-unknown-types', '');
+    unknownChip.style.display = 'none';
+    header.appendChild(unknownChip);
     var animChip = el('span', 'replay-note', '');
     animChip.setAttribute('data-ch-anim-note', '');
     animChip.style.display = 'none';
@@ -435,6 +584,11 @@
     var keycast = el('div', 'replay-keycast');
     keycast.setAttribute('aria-hidden', 'true');
     stage.appendChild(keycast);
+    // Media badges: one per element with recorded state, top-left of the stage,
+    // the same "pure function of playhead" convention as the keycast chips.
+    var mediaLayer = el('div', 'replay-media');
+    mediaLayer.setAttribute('aria-hidden', 'true');
+    stage.appendChild(mediaLayer);
     mount.appendChild(stage);
     var ctx = overlay.getContext('2d');
 
@@ -742,6 +896,288 @@
       shadowChip.style.display = segHadShadow ? '' : 'none';
     }
 
+    // ── Canvas compositing and presentation (design §3) ──
+    //
+    // THE MEASURED FACT THIS IS BUILT AROUND (Task 0, tri-engine): a canvas in a
+    // frame sandboxed WITHOUT allow-scripts accepts `getContext('2d')`, accepts
+    // the draw calls, holds correct pixels — and never paints them. So the
+    // composite happens in an offscreen canvas owned by the REPORT document,
+    // where painting is unrestricted, and the result is PRESENTED as a
+    // background image on the in-frame canvas. Nothing about the recorded tree
+    // changes: same tag, same id, same attributes, same CSS match.
+    //
+    // ROUTE 2 OF DESIGN §3.1, taken deliberately over route 1 (re-present after
+    // the clobber). The presentation is a rule in the SHELL HEAD keyed on a
+    // viewer-owned attribute, not a declaration in the element's inline style.
+    // Per CSSOM `setAttribute('style', …)` replaces the whole inline
+    // declaration block, so a recorded `dom.attr` naming `style` — or removing
+    // it with `value: null` — erases anything the viewer put there; measured on
+    // all three engines, and mandated by the spec rather than produced by it.
+    // Presenting through the head makes the hazard structurally absent instead
+    // of repaired after the fact, and it covers the removal case for free. It
+    // costs one stamped attribute and one <style> per composited canvas; the
+    // attribute is viewer-owned in dom-instantiate.js, so a recording can
+    // neither forge the selector nor strip it.
+    //
+    // COST. Compositing is per-event and cheap (`drawImage`); PRESENTATION is a
+    // PNG re-encode and is deferred to once per applied batch, per canvas a
+    // snapshot actually touched — Task 0 measured that presented SIZE, not
+    // snapshot count, is what the cost tracks (ten composites presented cheaper
+    // than one 189 KB baseline).
+    function resetCanvases(doc) {
+      canvasNodes = new Map();
+      if (!doc) return;
+      // HEAD-scoped, like every other read of a name the viewer stamps: the
+      // recording mounts into <body>, and an unscoped query cannot tell the
+      // viewer's own element from a page element carrying the same attribute
+      // (the failure T5.4's I-1 found for `data-ch-sheet`).
+      var live = doc.head.querySelectorAll('[' + CANVAS_RULE_ATTR + ']');
+      for (var i = live.length - 1; i >= 0; i--) {
+        if (live[i].parentNode) live[i].parentNode.removeChild(live[i]);
+      }
+    }
+
+    // The bitmap size is §4's `canvas_size` annotation, recorded at
+    // instantiation because no live DOM read can recover it (a canvas's
+    // `width`/`height` properties are the bitmap size, but only while the
+    // element still has them). The element's own properties are the fallback
+    // for a producer that omits the annotation.
+    function canvasEntry(id, el) {
+      var entry = canvasNodes.get(id);
+      if (entry) return entry;
+      var size = span ? span.canvases.get(id) : null;
+      var w = size && num(size.w) ? size.w : (num(el && el.width) || 300);
+      var h = size && num(size.h) ? size.h : (num(el && el.height) || 150);
+      entry = { off: null, chain: Promise.resolve(), w: w, h: h, dirty: false, sized: false, sizeCss: '' };
+      canvasNodes.set(id, entry);
+      return entry;
+    }
+
+    // Allocated on the first snapshot, not on the first sight of a canvas: a
+    // page can hold canvases nobody ever draws into, and each offscreen buffer
+    // is w×h×4 bytes in the report page.
+    function offscreenFor(entry) {
+      if (!entry.off) {
+        entry.off = document.createElement('canvas');
+        entry.off.width = entry.w;
+        entry.off.height = entry.h;
+      }
+      return entry.off;
+    }
+
+    function applyCanvasSnapshot(e) {
+      var el = resolveNode(e.node);
+      if (!el || String(el.tagName || '').toLowerCase() !== 'canvas'
+          || typeof e.data_url !== 'string' || !e.data_url) {
+        if (span) span.patchFailures++;
+        return;
+      }
+      var entry = canvasEntry(e.node, el);
+      var region = e.region && num(e.region.x) != null && num(e.region.y) != null ? e.region : null;
+      // Decoding STARTS now, in parallel; the DRAW is what the per-canvas chain
+      // serialises. Region patches therefore composite in EVENT order however
+      // their images finish decoding — the fork's bare `img.onload` handlers
+      // have no such guarantee and would apply two patches in decode order.
+      var img = document.createElement('img');
+      img.src = e.data_url;
+      var decoded = img.decode
+        ? img.decode()
+        : new Promise(function (res, rej) { img.onload = res; img.onerror = rej; });
+      entry.chain = entry.chain
+        .then(function () { return decoded; })
+        .then(function () {
+          var c2 = offscreenFor(entry).getContext('2d');
+          if (!c2) return;   // a realm with no painting at all (the node suite)
+          if (region) {
+            c2.drawImage(img, region.x, region.y);
+          } else {
+            // No region = full baseline: clear, then draw at (0,0). A region
+            // patch must preserve the surrounding pixels; a baseline must not.
+            c2.clearRect(0, 0, entry.off.width, entry.off.height);
+            c2.drawImage(img, 0, 0);
+          }
+        }, function () {
+          // A payload that will not decode is a recorded change that cannot be
+          // reapplied. Counted, and the chain stays RESOLVED so the snapshots
+          // after it still land.
+          if (span) span.patchFailures++;
+        });
+      entry.dirty = true;
+    }
+
+    // Design §3.3, measured tri-engine by Task 0: a canvas in this sandbox has
+    // NO intrinsic size, so one with no CSS size collapses and takes the
+    // surrounding layout with it, while `width:50%` measures 150 in a 300px box
+    // and `width:50%` with auto height honours the intrinsic ratio. The repair
+    // therefore fires only where the box collapsed and can never override
+    // responsive CSS — unlike the fork's unconditional pin, which turns a
+    // percentage width into a fixed pixel width and then makes CH's own
+    // alignment check report a divergence the viewer caused.
+    //
+    // MEASURED ON THE CONTENT BOX, not on `getBoundingClientRect()`, and that
+    // is a correction to §3.3 rather than a detail. `jspsych-full` segment 9's
+    // sketchpad canvas carries a 2px border, so the collapse reads as a 4×28
+    // BORDER box — non-zero, so a rect-based guard passes it by and the
+    // composite is presented into a 4-pixel-wide element. `clientWidth` /
+    // `clientHeight` are the padding box, which is both where the collapse
+    // lands and what `background-origin: padding-box` sizes the presentation
+    // against. Task 0's probe could not see this: its canvases had no border.
+    function canvasSizeCss(el, entry) {
+      if (entry.sized) return entry.sizeCss;
+      var w = el.clientWidth;
+      var h = el.clientHeight;
+      if (typeof w !== 'number' || typeof h !== 'number') {
+        var r = null;
+        try { r = el.getBoundingClientRect(); } catch (err) { return ''; }
+        if (!r) return '';
+        w = r.width; h = r.height;
+      }
+      entry.sized = true;
+      entry.sizeCss = (w === 0 || h === 0)
+        ? 'display:inline-block;width:' + entry.w + 'px;height:' + entry.h + 'px;'
+        : '';
+      return entry.sizeCss;
+    }
+
+    function writeCanvasRule(doc, id, entry, css) {
+      var style = doc.head.querySelector('[' + CANVAS_RULE_ATTR + '="' + id + '"]');
+      if (!css) {
+        if (style && style.parentNode) style.parentNode.removeChild(style);
+        return;
+      }
+      if (!style) {
+        style = doc.createElement('style');
+        style.setAttribute(CANVAS_RULE_ATTR, String(id));
+        // Appended AFTER the shell rules, which are themselves after the
+        // recording's sheets, so nothing the recording carries outranks it.
+        doc.head.appendChild(style);
+      }
+      style.textContent = '[' + CANVAS_ATTR + '="' + id + '"]{' + css + '}';
+    }
+
+    function presentCanvas(doc, id, entry) {
+      var el = resolveNode(id);
+      if (!el || !el.setAttribute) { dropCanvas(doc, id); return; }
+      el.setAttribute(CANVAS_ATTR, String(id));
+      var css = canvasSizeCss(el, entry);
+      var url = entry.off && entry.off.toDataURL ? String(entry.off.toDataURL('image/png')) : '';
+      if (DATA_URL_RE.test(url)) {
+        // `!important` on the background only: the composite IS what was on
+        // screen, so the recording's own background must not outrank it. The
+        // SIZE carries none, because §3.3 leaves page CSS authoritative.
+        css += 'background-image:url("' + url + '") !important;' +
+          'background-size:100% 100% !important;background-repeat:no-repeat !important';
+      }
+      writeCanvasRule(doc, id, entry, css);
+    }
+
+    function dropCanvas(doc, id) {
+      canvasNodes.delete(id);
+      var style = doc && doc.head.querySelector('[' + CANVAS_RULE_ATTR + '="' + id + '"]');
+      if (style && style.parentNode) style.parentNode.removeChild(style);
+    }
+
+    // The once-per-applied-batch boundary (design §3.1). Only canvases a
+    // snapshot touched in THIS batch are re-encoded; the rest keep the rule
+    // they already have, which is the cheap follow-on Task 0's measurement
+    // pointed at.
+    function presentCanvases() {
+      var doc = frameDoc();
+      if (!doc) return;
+      // §3.3's repair is owed to every canvas in the span, not only to the ones
+      // that were drawn into: a collapsed canvas nobody snapshots still takes
+      // the layout around it down. Measured once per canvas per mount.
+      if (span) {
+        span.canvases.forEach(function (size, id) {
+          var el = resolveNode(id);
+          if (!el || !el.getBoundingClientRect) return;
+          var entry = canvasEntry(id, el);
+          if (entry.sized || entry.dirty) return;   // a dirty one presents below
+          if (canvasSizeCss(el, entry)) {
+            el.setAttribute(CANVAS_ATTR, String(id));
+            writeCanvasRule(doc, id, entry, entry.sizeCss);
+          }
+        });
+      }
+      var ids = [];
+      var gone = [];
+      canvasNodes.forEach(function (entry, id) {
+        // A canvas the span no longer holds (`dom.remove` purged it, id map and
+        // all) must lose its rule with it, or the head keeps presenting pixels
+        // for a node nothing can resolve — and a later `dom.add` re-binding the
+        // id would inherit them.
+        if (!resolveNode(id)) gone.push(id);
+        else if (entry.dirty) ids.push(id);
+      });
+      for (var g = 0; g < gone.length; g++) dropCanvas(doc, gone[g]);
+      for (var i = 0; i < ids.length; i++) {
+        var entry = canvasNodes.get(ids[i]);
+        entry.dirty = false;
+        entry.chain = entry.chain.then(present(doc, ids[i], entry));
+      }
+    }
+
+    // A named factory rather than a closure inside the loop: `var` has no block
+    // scope, and capturing the loop variable directly is the classic way to
+    // present every canvas as the last one.
+    function present(doc, id, entry) {
+      return function () { presentCanvas(doc, id, entry); };
+    }
+
+    // What a caller awaits when it must observe a SETTLED canvas — the
+    // checkpoint executor (Task 7) and the visual batteries. Everything else
+    // about a restore is synchronous; this is the one part that is not, because
+    // image decoding is.
+    function canvasSettled() {
+      presentCanvases();
+      var chains = [];
+      canvasNodes.forEach(function (entry) { chains.push(entry.chain); });
+      return Promise.all(chains).then(function () { return true; });
+    }
+
+    // ── Media: state, never playback (design §7) ──
+    // The forensic posture, and the fork's. `media_src` is honoured at
+    // instantiation so the element has its shape, `autoplay` is stripped there,
+    // and nothing here ever calls play() or writes currentTime: a replay that
+    // started making noise on the analyst's machine would be a different
+    // product, and a seeked <video> would claim frame-accuracy the format does
+    // not carry.
+    function applyMedia(e) {
+      var target = resolveNode(e.node);
+      if (!target) { if (span) span.patchFailures++; return; }
+      var st = mediaState.get(e.node) ||
+        { tag: String(target.tagName || 'media').toLowerCase(), state: 'paused', time: 0 };
+      if (e.type === 'media.play') st.state = 'playing';
+      else if (e.type === 'media.pause') st.state = 'paused';
+      else if (e.type === 'media.ended') st.state = 'ended';
+      if (num(e.current_time) != null) st.time = e.current_time;
+      mediaState.set(e.node, st);
+    }
+
+    function drawMediaBadges() {
+      mediaLayer.textContent = '';
+      mediaState.forEach(function (st) {
+        var glyph = st.state === 'playing' ? '▶' : (st.state === 'ended' ? '■' : '❚❚');
+        mediaLayer.appendChild(el('span', 'replay-media-badge',
+          glyph + ' ' + st.tag + ' ' + st.state + ' ' + (Math.round(st.time * 100) / 100) + 's'));
+      });
+    }
+
+    // ── §5.8: unknown types ──
+    function noteUnknownType(type) {
+      if (unknownTypes.has(type)) return;
+      unknownTypes.set(type, true);
+      if (typeof console !== 'undefined' && console && console.warn) {
+        console.warn('[cyborg-hunter-replay] event type "' + type +
+          '" is not in this viewer\'s vocabulary; skipping it (spec §5.8)');
+      }
+      var names = [];
+      unknownTypes.forEach(function (_v, k) { names.push(k); });
+      unknownChip.textContent = names.length + ' event type(s) in this recording are not ' +
+        'recognised by this viewer and were skipped: ' + names.join(', ') + '.';
+      unknownChip.style.display = '';
+    }
+
     // ── Event application ──
     function resolveNode(id) {
       return span && num(id) != null ? span.idMap.get(id) : undefined;
@@ -783,10 +1219,16 @@
     }
 
     // One dispatch for recorded events AND for the synthetic t=0 events that
-    // seed `initial_state` (design §6). Types this task does not render —
-    // canvas composites, media badges, clipboard, fullscreen, and §5.8's
-    // unknown-type counting — fall through to Task 5's vocabulary work; the
-    // lane and ticker already read them out of the event stream.
+    // seed `initial_state` (design §6). It implements spec §5 IN FULL rather
+    // than CH's capture subset (design §7): the conformance moment is this
+    // viewer playing a foreign conforming file, and a viewer that renders only
+    // what CH captures cannot play one.
+    //
+    // Types with no state to apply — `mouse.*`/`touch.*`/`key.*`,
+    // `clipboard.*`, `focus`/`blur`, `visibility.*`, `fullscreen.*` — are
+    // rendered by the overlay, the keycast, the lane and the ticker, which read
+    // the event stream directly. They are listed in KNOWN_TYPES so §5.8's
+    // counter can tell "handled elsewhere" from "not understood".
     function applyEvent(e) {
       if (!e || typeof e.type !== 'string') return;
       if (e.camera) foldEventCamera(e.camera);
@@ -801,6 +1243,12 @@
         applyCamScroll();
       } else if (type === 'scroll.element') {
         if (span) applyElementScroll(e);
+      } else if (type === 'canvas.snapshot') {
+        if (span) applyCanvasSnapshot(e);
+      } else if (type.indexOf('media.') === 0 && KNOWN_TYPES[type] === true) {
+        if (span) applyMedia(e);
+      } else if (KNOWN_TYPES[type] !== true) {
+        noteUnknownType(type);
       } else if (DISCRETE_TYPES[type] === true) {
         // Every non-move input event is OFFERED to the check; the §6 MAY-omit
         // rule is decided inside it, in one place, because "no camera block
@@ -848,8 +1296,8 @@
         else if (f.selected !== undefined) applyEvent({ type: 'input.select', t: 0, node: f.node, values: f.selected });
       });
       // Media is rendered as badges and lane markers, never played (design §7),
-      // so the seed's playback positions ride the same synthetic-event path and
-      // land wherever Task 5 takes them.
+      // so the seed's playback positions ride the same synthetic-event path as
+      // the recorded ones and reach the same badge.
       (st.media || []).forEach(function (m) {
         applyEvent({ type: 'media.time', t: 0, node: m.node, current_time: m.current_time });
       });
@@ -870,6 +1318,8 @@
           'it records DOM changes but no keyframe precedes it (' + s.defect + ').';
         defectChip.style.display = '';
         span = null; walk = []; appliedIdx = 0; spanStart = -1; spanEnd = -1;
+        resetCanvases(doc);
+        mediaState = new Map();
         if (doc) { mountTree(null, doc.body, doc); stats.mounts++; }
         seedCamera(targetSeg);
         pendingCamSize = true;
@@ -909,6 +1359,14 @@
       } else {
         span = null;
       }
+      // Canvas composites and media state are span state, and both are
+      // functions of the playhead: the walk below re-composites every snapshot
+      // it passes, so carrying either across a restore would show the analyst
+      // pixels from a position they have left. (Design §5 lists caching them
+      // as optimisation (a), NOT taken up front.) The rule elements go with
+      // them, or the shell head accumulates one per restore.
+      resetCanvases(doc);
+      mediaState = new Map();
       // 2. derive stylesheet state at the keyframe origin
       if (doc) deriveSheets(doc, segments[walkStart].origin);
       // camera seed comes from the span keyframe: that is the state a restore
@@ -932,6 +1390,11 @@
         applyEntry(w);
       }
       if (pendingCamSize) { flushCamSize(); applyCamScroll(); }
+      // The batch boundary design §3.1 defers presentation to — AFTER the
+      // camera flush, because the repair measures a used size and the iframe
+      // was just resized. One PNG re-encode per canvas a snapshot touched,
+      // rather than one per snapshot.
+      presentCanvases();
       updatePlaceholderChips();
     }
 
@@ -1100,6 +1563,7 @@
     function redraw() {
       drawOverlay();
       drawKeycast();
+      drawMediaBadges();
       drawLane();
       drawTicker();
       updateStatusChips();
@@ -1377,6 +1841,22 @@
       }
     }
 
+    // §5.3 has TWO conforming producer modes and a redacted variant, and the
+    // viewer renders all three because it must play foreign files: jsPsych
+    // writes `text`/`html` (content), CH writes `len` (length-only, on privacy
+    // grounds), and a target inside a redacted subtree carries neither. The
+    // redacted case shows the FACT and no measurement — a character count the
+    // file withheld must not be reconstructed from anywhere else.
+    function clipboardLabel(e) {
+      if (e.redacted) return ' [redacted]' + (num(e.len) != null ? ', ' + e.len + ' ch' : '');
+      if (typeof e.text === 'string') {
+        return ' "' + e.text.slice(0, 32) + (e.text.length > 32 ? '…' : '') + '" (' + e.text.length + ' ch)';
+      }
+      if (typeof e.html === 'string') return ' [html] (' + e.html.length + ' ch)';
+      if (num(e.len) != null) return ' (' + e.len + ' ch)';
+      return ' (length not recorded)';
+    }
+
     function drawTicker() {
       var events = seg().events;
       var recent = [];
@@ -1385,9 +1865,7 @@
         if (e.t > playhead) continue;
         if (e.type === 'mouse.move' || e.type === 'touch.move') continue;
         var label = e.type;
-        if (e.type.indexOf('clipboard.') === 0) {
-          label += ' (' + (e.len == null ? (e.text == null ? '?' : e.text.length) : e.len) + ' ch)';
-        }
+        if (e.type.indexOf('clipboard.') === 0) label += clipboardLabel(e);
         if (e.type === 'key.down' && e.key) label += ' ' + JSON.stringify(e.key);
         if (e.type === 'input.value') {
           label += e.redacted ? ' [redacted, ' + e.value_len + ' ch]'
@@ -1526,10 +2004,24 @@
       },
       getCamera: function () { return { x: cam.x, y: cam.y, w: cam.w, h: cam.h, cw: cam.cw, ch: cam.ch, k: k, ox: ox, oy: oy }; },
       getCounters: function () {
+        var unknown = [];
+        unknownTypes.forEach(function (_v, k) { unknown.push(k); });
         return {
           patchFailures: span ? span.patchFailures : 0,
-          skipped: span ? span.skipped : 0
+          skipped: span ? span.skipped : 0,
+          // §5.8: one entry per unrecognised TYPE. Not per occurrence — the
+          // walk replays on every restore, so occurrences would count the
+          // analyst's scrubbing rather than the file.
+          unknownTypes: unknown
         };
+      },
+      // Awaits the per-canvas decode chains, presenting anything still dirty
+      // first. The one asynchronous part of a restore (design §3.1).
+      canvasSettled: canvasSettled,
+      getMediaState: function () {
+        var out = [];
+        mediaState.forEach(function (st, id) { out.push({ node: id, state: st.state, time: st.time }); });
+        return out;
       },
       // The merged span list, in application order — the §7 tie precedence is
       // this array's order, so it is what a test asserts against.

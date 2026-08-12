@@ -150,7 +150,18 @@ var PLACEHOLDER_ATTR = 'data-ch-placeholder';
 // children are ordinary capturable nodes, the shadow ROOT's content is not.
 var SHADOW_ATTR = 'data-ch-shadow';
 
-// VIEWER-OWNED ATTRIBUTES. These two names are not page content: they are what
+// The canvas-presentation key (design §3.1, route 2). A script-less sandboxed
+// frame holds canvas pixels it never paints, so `canvas.snapshot` composites in
+// a parent-owned offscreen canvas and is PRESENTED as a background image. The
+// viewer stamps this name on the canvas it composites into and matches it from
+// a rule in the shell head; `CANVAS_RULE_ATTR` marks the rule element itself.
+// Presenting through the head instead of the element's inline `style` is what
+// makes the presentation survive a recorded `dom.attr` naming `style` — per
+// CSSOM that write replaces the whole inline declaration block.
+var CANVAS_ATTR = 'data-ch-canvas';
+var CANVAS_RULE_ATTR = 'data-ch-canvas-rule';
+
+// VIEWER-OWNED ATTRIBUTES. These names are not page content: they are what
 // the reconstruction says about ITSELF, and the viewer's chips read them back
 // out of the live DOM — the iframe/placeholder chip through
 // `iframe, [data-ch-placeholder="iframe"]`, the shadow chip through
@@ -179,9 +190,17 @@ var SHADOW_ATTR = 'data-ch-shadow';
 // and is serialised into keyframes, and the honeypot's `data-ch-role` /
 // `data-ch-decoy` are page-authored too. Dropping those would delete
 // attributes the page really had and silently break any CSS keyed on them.
+//
+// The canvas pair joined the set in T5.5 for a reason with more teeth than the
+// chips': `data-ch-canvas` is the SELECTOR the presented composite is keyed on,
+// so a recording that could strip it would blank a canvas the analyst is
+// looking at, and one that could forge it would paint another element with a
+// canvas's pixels.
 var VIEWER_OWNED_ATTRS = {};
 VIEWER_OWNED_ATTRS[PLACEHOLDER_ATTR] = true;
 VIEWER_OWNED_ATTRS[SHADOW_ATTR] = true;
+VIEWER_OWNED_ATTRS[CANVAS_ATTR] = true;
+VIEWER_OWNED_ATTRS[CANVAS_RULE_ATTR] = true;
 
 function isViewerOwnedAttr(name) {
   return VIEWER_OWNED_ATTRS[String(name).toLowerCase()] === true;
@@ -382,14 +401,15 @@ function instantiateElement(domNode, ctx, tag, parentNs) {
   // §4's `canvas_size` is the BITMAP size, which is not an attribute and must
   // not become one — it is what sizes the parent-owned offscreen canvas the
   // snapshots composite into (design §3.1) and what the used-size-0 sizing
-  // repair pins from (design §3.3). Both are Task 5's; recording it is this
-  // walk's, because this walk is the only place the annotation is in hand.
+  // repair pins from (design §3.3). Both live in the viewer client; recording it
+  // is this walk's, because this walk is the only place the annotation is in
+  // hand.
   //
   // The delete is not redundant with the set. `dom.add` OVERWRITES an id
   // binding, because a remove+add pair carrying one id is a MOVE (pin M5), and
   // this map is keyed by the same ids — so an id re-bound to a node with NO
-  // `canvas_size` would keep the previous node's bitmap size, and Task 5 would
-  // size an offscreen canvas for an element that is not a canvas.
+  // `canvas_size` would keep the previous node's bitmap size, and the viewer
+  // would size an offscreen canvas for an element that is not a canvas.
   ctx.canvases.delete(domNode.id);
   var size = domNode.canvas_size;
   if (size && typeof size === 'object'
@@ -724,7 +744,8 @@ function applyText(patch, mount) {
  *   event; anything else is left alone
  * @param {object} mount  the state `mountTree`/`instantiateTree` returned
  * @returns {boolean} whether this event was a DOM patch — so a caller's
- *   vocabulary dispatch (§5.2-§5.8, Task 5) can fall through on `false`
+ *   vocabulary dispatch (§5.2-§5.8, in the viewer client) can fall through on
+ *   `false`
  *   without needing its own list of the four types
  */
 function applyPatch(patch, mount) {

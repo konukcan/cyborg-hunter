@@ -888,6 +888,13 @@
                     background: rgba(0,0,0,0.72); color: #fff; padding: 2px 7px;
                     border-radius: 3px; white-space: nowrap; }
     .replay-key-chip--redacted { background: rgba(0,0,0,0.5); font-style: italic; }
+    /* Media is reported as state, never played (design §7): the badges say what
+       the recorded element was doing, in the stage's top-left. */
+    .replay-media { position: absolute; left: 0; top: 0; display: flex; gap: 4px;
+                    padding: 5px 6px; pointer-events: none; flex-wrap: wrap; }
+    .replay-media-badge { font: 11px/1.2 ui-monospace, SFMono-Regular, 'IBM Plex Mono', monospace;
+                    background: rgba(0,137,123,0.85); color: #fff; padding: 2px 7px;
+                    border-radius: 3px; white-space: nowrap; }
   </style>
   <script>
 
