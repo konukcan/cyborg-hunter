@@ -1,0 +1,37 @@
+{
+  "fixture": "negative-redaction-leak.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 1,
+    "events_total": 1,
+    "keyframes": 1,
+    "continuations": 0,
+    "events_by_type": {
+      "input.value": 1
+    }
+  },
+  "spot_checks": [],
+  "expect_leak": true,
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "references_resolve",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {
+    "no_redaction_leak": "redacted event carries disallowed key \"plaintext\""
+  },
+  "checkpoints": [],
+  "notes": {
+    "defect": "A redacted input.value carrying the content in a key the spec never defined. `node`, `value_len` and the marker are all correct; the leak rides beside them.",
+    "why_THIS_is_the_fixture_the_corpus_most_needed": "IT IS STRICT-VALID. validateStrict's redacted branch for input.value asks for a numeric node, a numeric value_len and an ABSENT `value` — all three hold — and it does not enumerate the keys an event may carry, because no per-field validator sensibly can. So the conformance profile passes this file and the privacy floor does not. That gap is the entire argument for the runner holding its own allowlist instead of trusting the validator, and before this fixture the argument was a comment.",
+    "what_a_real_producer_would_call_it": "Not `plaintext`, obviously. It would be a vendor field a producer added for its own analytics, or a debugging key nobody removed — which is why the check is an allowlist of what may be present rather than a denylist of what may not.",
+    "expect_leak": "Declared. The ALWAYS_ON scan is asserted to fire and to name the offending key, which is the inversion the T1 final review asked for."
+  }
+}

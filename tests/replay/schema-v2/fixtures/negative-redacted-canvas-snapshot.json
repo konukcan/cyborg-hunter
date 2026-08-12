@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "recorder": {
+    "name": "hand-authored",
+    "version": "0.0.1"
+  },
+  "host": null,
+  "participant_id": null,
+  "recording_started_at": "2026-08-12T00:00:00.000Z",
+  "recording_started_at_perf": 0,
+  "user_agent": "negative-fixture",
+  "viewport": {
+    "w": 800,
+    "h": 600,
+    "dpr": 1,
+    "scale": 1,
+    "offset_x": 0,
+    "offset_y": 0
+  },
+  "observed_root": null,
+  "stylesheets": [],
+  "stylesheet_events": [],
+  "viewport_changes": [],
+  "rng": null,
+  "rng_calls": null,
+  "ended_at_perf": 1000,
+  "end_reason": "finished",
+  "truncated": false,
+  "extensions": null,
+  "segments": [
+    {
+      "index": 0,
+      "label": null,
+      "plugin": null,
+      "t_start": 0,
+      "t_dom_ready": null,
+      "t_load": null,
+      "t_end": 1000,
+      "initial_dom": {
+        "id": 1,
+        "kind": "element",
+        "tag": "div",
+        "attrs": {
+          "id": "stage"
+        },
+        "children": [
+          {
+            "id": 2,
+            "kind": "element",
+            "tag": "canvas",
+            "attrs": {
+              "id": "pad"
+            },
+            "children": []
+          }
+        ]
+      },
+      "initial_state": null,
+      "events": [
+        {
+          "type": "canvas.snapshot",
+          "t": 100,
+          "node": 2,
+          "data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==",
+          "redacted": true
+        }
+      ],
+      "host_data": null,
+      "extensions": null
+    }
+  ]
+}

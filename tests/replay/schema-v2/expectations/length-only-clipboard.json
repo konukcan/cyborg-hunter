@@ -1,0 +1,51 @@
+{
+  "fixture": "length-only-clipboard.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "absolute",
+  "counts": {
+    "segments": 1, "events_total": 47, "keyframes": 1, "continuations": 0,
+    "events_by_type": {
+      "input.value": 14, "key.down": 13, "key.up": 13,
+      "clipboard.copy": 1, "clipboard.cut": 1, "clipboard.paste": 1,
+      "mouse.click": 1, "mouse.down": 1, "mouse.move": 1, "mouse.up": 1
+    }
+  },
+  "leak_scan": {
+    "absent": [
+      "pasted from somewhere else entirely",
+      "<p>pasted"
+    ],
+    "present": [
+      "clipboard.paste",
+      "\"len\": 50"
+    ]
+  },
+  "spot_checks": [
+    { "path": "recorder.name", "equals": "cyborg-hunter-replay" },
+    { "path": "host", "equals": null },
+    { "path": "observed_root", "equals": "#stage" },
+    { "path": "extensions.cyborg-hunter.tier", "equals": "dom" },
+
+    { "path": "segments.0.events.43",
+      "equals": { "type": "clipboard.paste", "t": 343.6, "target": 6, "text": null, "html": null, "len": 50 } },
+    { "path": "segments.0.events.44",
+      "equals": { "type": "clipboard.copy", "t": 343.7, "target": 6, "text": null, "html": null, "len": null } },
+    { "path": "segments.0.events.45",
+      "equals": { "type": "clipboard.cut", "t": 343.7, "target": 6, "text": null, "html": null, "len": null } }
+  ],
+  "invariants": [
+    "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe",
+    "no_redaction_leak", "password_floor", "truncation_mirrors_capture_stopped",
+    "references_resolve", "unique_node_ids", "perf_frame"
+  ],
+  "checkpoints": [],
+  "notes": {
+    "provenance": "REAL capture via tools/gen-schema-v2-fixtures.mjs (headless Chromium, CH's shipped recorder). The three clipboard events are dispatched as ClipboardEvents carrying a real DataTransfer, because headless Chromium has no system clipboard to paste from; the capture path reads `e.clipboardData.getData('text')` and cannot tell the two apart. Everything else — the keystrokes, the coalesced input.value stream, the keyframe — is ordinary interaction.",
+    "what_this_fixture_is_for": "Spec §5.3 defines TWO conforming producer modes and says players must render sensibly with either. jspsych-full is neither (jsPsych's demo timeline has no clipboard trial), so before this fixture the corpus carried no clipboard event at all and the length-only branch of every player was unexercised. This is CH's documented default (`clipboardContent: false`), and the mode's whole claim is the shape asserted below.",
+    "the_two_modes": "LENGTH-ONLY means `len` set and `text`/`html` null — not absent. The distinction matters: §5.3's fields are `string | null`, so an explicit null is the producer saying 'there was content and it is not here', which is a different claim from a key nobody wrote. The paste carries len 50; copy and cut carry len null, because the clipboard is not populated when they fire and any number read there would be a fiction about the selection. That asymmetry is the part a content-mode reader is most likely to get wrong, so all three events are pinned as whole objects rather than field by field.",
+    "leak_scan": "Not a §8 scan — nothing here is redacted, and the fixture would be lying if it claimed otherwise. It is the length-only mode's OWN floor: the pasted string was 50 characters of text that never belonged to the page, and the mode exists because pasted text routinely carries identifying material from outside it. `absent` proves the payload did not ride along in either format; `\"len\": 50` proves the event is there to have withheld it.",
+    "no_redaction_leak": "Holds vacuously — no event carries a `redacted` marker. redacted.json is where the privacy floor bites.",
+    "checkpoints": "None: every claim this fixture makes is about the wire, and the clipboard events have no reconstruction to read."
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "fixture": "redacted.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "absolute",
+  "counts": {
+    "segments": 1, "events_total": 76, "keyframes": 1, "continuations": 0,
+    "events_by_type": {
+      "input.value": 20, "key.down": 20, "key.up": 20,
+      "mouse.click": 3, "mouse.down": 3, "mouse.move": 3, "mouse.up": 3,
+      "dom.add": 2, "dom.remove": 2
+    }
+  },
+  "leak_scan": {
+    "absent": [
+      "Zq7VkTYPED",
+      "FILESENTINEL-3XQ.txt",
+      "fakepath",
+      "srcdocsentinel99"
+    ],
+    "absent_patterns": [
+      "\"key\"\\s*:",
+      "\"code\"\\s*:",
+      "\"mods\"\\s*:"
+    ],
+    "present": [
+      "zqxresidual42",
+      "\"value_len\"",
+      "\"redacted\": true",
+      "data-ch-redact"
+    ]
+  },
+  "spot_checks": [
+    { "path": "recorder.name", "equals": "cyborg-hunter-replay" },
+    { "path": "host", "equals": null },
+    { "path": "observed_root", "equals": "#stage" },
+    { "path": "end_reason", "equals": "finished" },
+    { "path": "truncated", "equals": false },
+    { "path": "rng", "equals": null },
+    { "path": "extensions.cyborg-hunter.tier", "equals": "dom" },
+    { "path": "extensions.cyborg-hunter.inherited_redaction_taint", "equals": false },
+
+    { "path": "segments.0.initial_dom.children.5.children.3.attrs",
+      "equals": { "id": "pw", "type": "password", "autocomplete": "off" } },
+    { "path": "segments.0.initial_dom.children.13.attrs",
+      "equals": { "id": "picker", "type": "file" } },
+    { "path": "segments.0.initial_dom.children.17.attrs",
+      "equals": { "id": "frame", "src": "about:blank", "width": "120", "height": "60" } },
+    { "path": "segments.0.initial_dom.children.5.children.5.attrs",
+      "equals": { "id": "rd", "type": "text",
+                  "data-note": "zqxresidual42",
+                  "style": "outline:1px solid #ccc; background-image:url(zqxresidual42.png)",
+                  "data-zqxresidual42": "1" } },
+    { "path": "segments.0.initial_dom.children.21",
+      "equals": { "id": 35, "kind": "element", "tag": "div" } },
+    { "path": "segments.0.initial_state", "equals": null },
+
+    { "path": "segments.0.events.3.anchor",
+      "equals": { "tag": "input", "rect": { "x": 82.2, "y": 79.9, "w": 153, "h": 21 }, "node": 13 } },
+    { "path": "segments.0.events.75.anchor",
+      "equals": { "tag": "h1", "id": "title", "rect": { "x": 8, "y": 21.4, "w": 984, "h": 37 }, "node": 3 } },
+    { "path": "segments.0.events.4", "equals": { "type": "key.down", "t": 96.1, "redacted": true } },
+    { "path": "segments.0.events.5",
+      "equals": { "type": "input.value", "t": 101.4, "node": 13, "redacted": true, "value_len": 1 } },
+    { "path": "segments.0.events.69",
+      "equals": { "type": "dom.add", "t": 613.7, "parent": 17, "before": null,
+                  "node": { "id": 42, "kind": "text", "text": "" } } },
+    { "path": "segments.0.events.71",
+      "equals": { "type": "dom.add", "t": 629.9, "parent": 23, "before": null,
+                  "node": { "id": 17, "kind": "element", "tag": "p", "attrs": { "id": "typed" },
+                            "children": [ { "id": 42, "kind": "text", "text": "" } ] } } }
+  ],
+  "invariants": [
+    "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe",
+    "no_redaction_leak", "password_floor", "truncation_mirrors_capture_stopped",
+    "references_resolve", "unique_node_ids", "perf_frame"
+  ],
+  "checkpoints": [],
+  "notes": {
+    "provenance": "REAL capture. tools/gen-schema-v2-fixtures.mjs drove CH's shipped recorder (dist/cyborg-hunter-replay.js) in headless Chromium over a page written for this fixture and wrote what serialize() produced. Nothing is hand-edited. Re-cutting produces different timestamps and different RAF-coalesced input.value counts, so the counts block above must be re-authored with tools/gen-expectations-counts.mjs after any regeneration; the runner recomputes it, so a stale block fails rather than drifts.",
+    "what_this_fixture_is_for": "The §8 whole-FILE verification, which is the one claim no structural check can make: 'a redacted subtree's content must not appear anywhere in the serialized recording'. Structural conformance is the password_floor invariant's job and runs on every fixture; this one searches the bytes. Four sentinels went into the page and the leak_scan above says where each came out.",
+    "leak_scan": "THREE SENTINELS ARE ABSENT AND ONE IS PRESENT, AND THE SPLIT IS THE POINT. Zq7VkTYPED was typed, character by character with real keystrokes, into BOTH redacted channels: the <input type=password> (the §8 floor, unconfigurable) and a [data-ch-redact] text field (the selector mechanism). It appears nowhere, and neither do the per-character key identities that spell it — the three absent_patterns forbid any `key`, `code` or `mods` field in the whole file, which is exactly right here because EVERY key event in this recording targeted a redacted field. FILESENTINEL-3XQ.txt was set on a real <input type=file>, where Chromium synthesizes `C:\\fakepath\\<name>` for .value; neither the name, nor a length, nor the fakepath token survives (§13 puts file selection outside the format, and capture drops the event entirely rather than emitting the redacted variant — a value_len would still leak the filename's length). srcdocsentinel99 was the iframe's srcdoc, stripped unconditionally by snapshot.js for every iframe, redacted or not. THE PRESENT ONES are liveness companions: without them an absence scan over a fixture that captured nothing would be green.",
+    "pin_8_residual_boundary": "zqxresidual42 IS PRESENT, THREE TIMES, AND THAT IS THE DOCUMENTED BOUNDARY rather than a leak (T3 Task-2 review carry). Inside the redacted subtree, node 15 carries the sentinel as a `data-note` VALUE, inside an inline `style` payload, and as part of an attribute NAME (`data-zqxresidual42`). snapshot.js's isEmittedAttr strips exactly two things — `srcdoc` on an iframe, and `value` under redaction — so every other attribute name and value survives redaction by design. A page that mirrors typed content into a title, an aria-label or a data-* attribute leaks it there, and widening the strip is a spec question, not a silent fix. The spot check on node 15's attrs pins the whole residual surface as an object, so a future widening turns this fixture red and gets argued for.",
+    "i2_moved_node": "THE TAINT-TRACKING VECTOR, END TO END (T3 Task-3 review carry). Events 68-69 are a write INTO the redacted subtree: the <p id=typed> text node is replaced, and the replacement ships as `text: \"\"` — content withheld. Events 70-71 then move that <p> OUT of the redacted subtree into #open, and the dom.add re-parenting it still carries `text: \"\"`. Before redaction.js's page-lifetime taint set, the mapper asked about the queried node alone, so new content created inside a container that had been moved out shipped in full through dom.add and was then withheld by the next keyframe describing the same nodes: one file, two verdicts, the weaker one first. The whole-file scan above is what proves it stayed closed here.",
+    "exclusion_placeholder": "segments.0.initial_dom.children.21 IS THE §4 PLACEHOLDER, spot-checked as a whole object: `{id: 35, kind: \"element\", tag: \"div\"}` — no `attrs` key and no `children` key, not empty ones. canonical-core contains no placeholder at all, which is why the fork player's instantiateDom crash on placeholders survived until a real capture hit it (T3 Task-9). Both players' loaders now walk one in CI. The id gap after 35 (the next sibling is 41) is the registry numbering the excluded children it did not emit, which is what keeps sibling positions and event targets coherent across the exclusion.",
+    "anchors": "TWO ANCHORS, DELIBERATELY CONTRASTED. Event 3 clicks the password input: the anchor keeps `tag`, `rect` and `node` and OMITS `id`, which is §8's rule for a redacted target (identity withheld, structure kept). Event 75 clicks the unredacted <h1>: same shape plus `id: \"title\"`. Absence vs presence of one key across two events in one file is what makes the omission a rule rather than an accident. §7's three readings of `target` are distinguishable here for the same reason.",
+    "comment_nodes": "The keyframe carries six comment nodes — the source page's own HTML comments, captured because §4's DomNode union includes them. No other fixture in the corpus has one, so this is also where the comment kind is exercised.",
+    "checkpoints": "NONE, deliberately. This is a wire-level fixture: every claim it makes is about what is IN the file, and the checkpoint format reads a reconstruction. Adding checkpoints here would also mean authoring them against the fork first (the provenance rule), which buys nothing a spot check does not already pin. The empty array is required by checkpoints.test.js's enrollment check."
+  }
+}

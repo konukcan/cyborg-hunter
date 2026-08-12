@@ -1,0 +1,38 @@
+{
+  "fixture": "negative-segments-overlap.json",
+  "expect": "accept",
+  "strict_valid": false,
+  "strict_errors": [
+    "overlaps segments[1], whose origin is 500"
+  ],
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 2,
+    "events_total": 1,
+    "keyframes": 1,
+    "continuations": 1,
+    "events_by_type": {
+      "dom.text": 1
+    }
+  },
+  "spot_checks": [],
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "no_redaction_leak",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "references_resolve",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {},
+  "checkpoints": [],
+  "notes": {
+    "defect": "Segment 0 ends at 800; segment 1 opens at 500. Spec §3: \"segments are ordered and non-overlapping (t_end[n] ≤ next segment's origin)\".",
+    "why_it_is_not_harmless": "Events between 500 and 800 belong to exactly one segment by §3, and an overlap makes that sentence unsatisfiable: a player assigning by time and a player trusting the arrays reconstruct different segments, which §7 forbids (\"Two conforming players MUST reconstruct identical state from the same file\"). The checkpoint format is affected directly — its second bound is the named segment's own window, and overlapping windows make \"segment 1, t=600\" name two moments.",
+    "origin_not_t_start": "The comparison uses §3's segment ORIGIN (first non-null of t_load, t_dom_ready, t_start), not t_start, because a segment whose t_start is null still opens somewhere. Segment 1 here states only t_start, so origin and t_start coincide and the fixture reads simply; the rule it pins is the general one.",
+    "no_corpus_invariant": "Checked by the validator alone. Non-overlap is a two-field comparison inside the segment list — exactly the shape a field walk can do — so putting it in the corpus layer would be duplication rather than independence."
+  }
+}

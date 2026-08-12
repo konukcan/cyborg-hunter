@@ -1,0 +1,37 @@
+{
+  "fixture": "negative-non-boolean-redacted.json",
+  "expect": "accept",
+  "strict_valid": false,
+  "strict_errors": [
+    "redacted must be the boolean true when present"
+  ],
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 1,
+    "events_total": 1,
+    "keyframes": 1,
+    "continuations": 0,
+    "events_by_type": {
+      "key.down": 1
+    }
+  },
+  "spot_checks": [],
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "no_redaction_leak",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "references_resolve",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {},
+  "checkpoints": [],
+  "notes": {
+    "defect": "A key.down whose `redacted` is the number 1 rather than the boolean true.",
+    "why_a_truthy_marker_is_dangerous_rather_than_untidy": "`redacted` is a VARIANT MARKER, not a toggle: every per-type check in the validator selects the redacted shape on `=== true`. A truthy non-boolean falls through to the PLAINTEXT branch, so the event asserts redaction and is then validated as if it had claimed nothing — licensing exactly the key identity the redaction was meant to remove. This fixture carries no payload alongside the bad marker, so it isolates the marker itself; `negative-redaction-leak.json` is where a payload rides one.",
+    "the_floor_still_holds_underneath": "The corpus privacy scan opens on TRUTHINESS, not on `=== true`, precisely so a sloppy marker cannot walk past it: `no_redaction_leak` holds this event to key.down's allowlist and passes it, because the event genuinely carries nothing else. The two layers disagreeing about the marker while agreeing about the content is the intended arrangement, and it is why this fixture has no expected_failures."
+  }
+}

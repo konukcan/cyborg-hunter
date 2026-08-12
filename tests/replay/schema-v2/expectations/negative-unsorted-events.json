@@ -1,0 +1,38 @@
+{
+  "fixture": "negative-unsorted-events.json",
+  "expect": "accept",
+  "strict_valid": false,
+  "strict_errors": [
+    "events must be time-sorted"
+  ],
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 1,
+    "events_total": 2,
+    "keyframes": 1,
+    "continuations": 0,
+    "events_by_type": {
+      "mouse.move": 2
+    }
+  },
+  "spot_checks": [],
+  "invariants": [
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "no_redaction_leak",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "references_resolve",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {
+    "time_sorted": "events unsorted at 1"
+  },
+  "checkpoints": [],
+  "notes": {
+    "defect": "Two mouse.move events at t=300 then t=100. Spec §5: \"Every array is time-sorted.\"",
+    "ties_are_legal_and_this_is_not_a_tie": "THE DISTINCTION THE FIXTURE EXISTS TO DRAW. §7 makes array order authoritative at equal `t`, so two events sharing a timestamp are conformant and a player must replay them in the order given. Only a DECREASE is a violation. `forward-compat.json` carries a real tie so the legal case has a witness too; without it, an implementation could \"fix\" this fixture by refusing ties and nothing would notice.",
+    "both_layers": "Caught twice on purpose — by validateStrict's checkSorted and by the corpus time_sorted invariant, which is reimplemented independently of the validator so a validator bug cannot self-certify."
+  }
+}

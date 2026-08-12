@@ -1,0 +1,478 @@
+{
+  "schema_version": 2,
+  "recorder": {
+    "name": "cyborg-hunter-replay",
+    "version": "0.7.5"
+  },
+  "host": null,
+  "participant_id": "P-FIXTURE",
+  "recording_started_at": "2026-08-12T11:56:56.879Z",
+  "recording_started_at_perf": 57.09999990463257,
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.7632.6 Safari/537.36",
+  "viewport": {
+    "w": 390,
+    "h": 844,
+    "dpr": 1,
+    "scale": 1,
+    "offset_x": 0,
+    "offset_y": 0
+  },
+  "observed_root": "#stage",
+  "stylesheets": [],
+  "stylesheet_events": [],
+  "viewport_changes": [],
+  "rng": null,
+  "rng_calls": null,
+  "ended_at_perf": 240.29999995231628,
+  "end_reason": "finished",
+  "truncated": false,
+  "extensions": {
+    "cyborg-hunter": {
+      "replay_version": "0.7.5",
+      "tier": "dom",
+      "keys": "full",
+      "viewport_client": {
+        "w": 390,
+        "h": 844
+      },
+      "ch_version": null,
+      "preset": null,
+      "scoring": null,
+      "session_signals": null,
+      "guard_violations": [],
+      "capture_failures": [],
+      "capture_stopped": false,
+      "inherited_redaction_taint": false
+    }
+  },
+  "segments": [
+    {
+      "index": 0,
+      "label": "tap-task",
+      "plugin": "ch:fixture",
+      "t_start": null,
+      "t_dom_ready": null,
+      "t_load": 4.7,
+      "t_end": 183.2,
+      "initial_dom": {
+        "id": 1,
+        "kind": "element",
+        "tag": "div",
+        "attrs": {
+          "id": "stage"
+        },
+        "children": [
+          {
+            "id": 2,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 3,
+            "kind": "element",
+            "tag": "h2",
+            "attrs": {
+              "id": "prompt"
+            },
+            "children": [
+              {
+                "id": 4,
+                "kind": "text",
+                "text": "Question 1"
+              }
+            ]
+          },
+          {
+            "id": 5,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 6,
+            "kind": "element",
+            "tag": "p",
+            "attrs": {
+              "id": "body"
+            },
+            "children": [
+              {
+                "id": 7,
+                "kind": "text",
+                "text": "Pick one."
+              }
+            ]
+          },
+          {
+            "id": 8,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 9,
+            "kind": "element",
+            "tag": "button",
+            "attrs": {
+              "id": "a",
+              "type": "button"
+            },
+            "children": [
+              {
+                "id": 10,
+                "kind": "text",
+                "text": "Alpha"
+              }
+            ]
+          },
+          {
+            "id": 11,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 12,
+            "kind": "element",
+            "tag": "button",
+            "attrs": {
+              "id": "b",
+              "type": "button"
+            },
+            "children": [
+              {
+                "id": 13,
+                "kind": "text",
+                "text": "Beta"
+              }
+            ]
+          },
+          {
+            "id": 14,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 15,
+            "kind": "element",
+            "tag": "ul",
+            "attrs": {
+              "id": "log"
+            },
+            "children": []
+          },
+          {
+            "id": 16,
+            "kind": "text",
+            "text": "\n"
+          }
+        ]
+      },
+      "initial_state": null,
+      "events": [
+        {
+          "type": "touch.start",
+          "t": 49.6,
+          "touches": [
+            {
+              "id": 0,
+              "x": 60,
+              "y": 90
+            }
+          ],
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 390,
+            "viewport_h": 844,
+            "client_w": 390,
+            "client_h": 844,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "div",
+            "id": "stage",
+            "rect": {
+              "x": 8,
+              "y": 19.9,
+              "w": 374,
+              "h": 102.9
+            },
+            "node": 1
+          }
+        },
+        {
+          "type": "touch.end",
+          "t": 50.2,
+          "touches": [
+            {
+              "id": 0,
+              "x": 60,
+              "y": 90
+            }
+          ],
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 390,
+            "viewport_h": 844,
+            "client_w": 390,
+            "client_h": 844,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "div",
+            "id": "stage",
+            "rect": {
+              "x": 8,
+              "y": 19.9,
+              "w": 374,
+              "h": 102.9
+            },
+            "node": 1
+          }
+        },
+        {
+          "type": "mouse.move",
+          "t": 51.5,
+          "x": 60,
+          "y": 90
+        },
+        {
+          "type": "mouse.down",
+          "t": 51.8,
+          "x": 60,
+          "y": 90,
+          "button": 0,
+          "target": 1,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 390,
+            "viewport_h": 844,
+            "client_w": 390,
+            "client_h": 844,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "div",
+            "id": "stage",
+            "rect": {
+              "x": 8,
+              "y": 19.9,
+              "w": 374,
+              "h": 102.9
+            },
+            "node": 1
+          }
+        },
+        {
+          "type": "mouse.up",
+          "t": 54.4,
+          "x": 60,
+          "y": 90,
+          "button": 0,
+          "target": 1,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 390,
+            "viewport_h": 844,
+            "client_w": 390,
+            "client_h": 844,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "div",
+            "id": "stage",
+            "rect": {
+              "x": 8,
+              "y": 19.9,
+              "w": 374,
+              "h": 102.9
+            },
+            "node": 1
+          }
+        },
+        {
+          "type": "mouse.click",
+          "t": 54.5,
+          "x": 60,
+          "y": 90,
+          "button": 0,
+          "target": 1,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 390,
+            "viewport_h": 844,
+            "client_w": 390,
+            "client_h": 844,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "div",
+            "id": "stage",
+            "rect": {
+              "x": 8,
+              "y": 19.9,
+              "w": 374,
+              "h": 102.9
+            },
+            "node": 1
+          }
+        },
+        {
+          "type": "touch.start",
+          "t": 76,
+          "touches": [
+            {
+              "id": 1,
+              "x": 200,
+              "y": 200
+            }
+          ],
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 390,
+            "viewport_h": 844,
+            "client_w": 390,
+            "client_h": 844,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "button",
+            "id": "b",
+            "rect": {
+              "x": 62.1,
+              "y": 101.8,
+              "w": 43.4,
+              "h": 21
+            },
+            "node": 12
+          }
+        },
+        {
+          "type": "touch.move",
+          "t": 82.6,
+          "touches": [
+            {
+              "id": 1,
+              "x": 212,
+              "y": 205
+            }
+          ]
+        },
+        {
+          "type": "touch.move",
+          "t": 90.9,
+          "touches": [
+            {
+              "id": 1,
+              "x": 224,
+              "y": 210
+            }
+          ]
+        },
+        {
+          "type": "touch.move",
+          "t": 99.3,
+          "touches": [
+            {
+              "id": 1,
+              "x": 236,
+              "y": 215
+            }
+          ]
+        },
+        {
+          "type": "touch.move",
+          "t": 109.6,
+          "touches": [
+            {
+              "id": 1,
+              "x": 248,
+              "y": 220
+            }
+          ]
+        },
+        {
+          "type": "touch.move",
+          "t": 116.1,
+          "touches": [
+            {
+              "id": 1,
+              "x": 260,
+              "y": 225
+            }
+          ]
+        },
+        {
+          "type": "touch.move",
+          "t": 126.4,
+          "touches": [
+            {
+              "id": 1,
+              "x": 272,
+              "y": 230
+            }
+          ]
+        },
+        {
+          "type": "touch.end",
+          "t": 132.6,
+          "touches": [],
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 390,
+            "viewport_h": 844,
+            "client_w": 390,
+            "client_h": 844,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "button",
+            "id": "b",
+            "rect": {
+              "x": 62.1,
+              "y": 101.8,
+              "w": 43.4,
+              "h": 21
+            },
+            "node": 12
+          }
+        },
+        {
+          "type": "blur",
+          "t": 150.2
+        },
+        {
+          "type": "focus",
+          "t": 150.3
+        }
+      ],
+      "host_data": null,
+      "extensions": null
+    }
+  ]
+}

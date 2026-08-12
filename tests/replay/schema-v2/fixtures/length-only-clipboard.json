@@ -1,0 +1,1005 @@
+{
+  "schema_version": 2,
+  "recorder": {
+    "name": "cyborg-hunter-replay",
+    "version": "0.7.5"
+  },
+  "host": null,
+  "participant_id": "P-FIXTURE",
+  "recording_started_at": "2026-08-12T11:38:43.375Z",
+  "recording_started_at_perf": 24,
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.7632.6 Safari/537.36",
+  "viewport": {
+    "w": 1000,
+    "h": 700,
+    "dpr": 1,
+    "scale": 1,
+    "offset_x": 0,
+    "offset_y": 0
+  },
+  "observed_root": "#stage",
+  "stylesheets": [],
+  "stylesheet_events": [],
+  "viewport_changes": [],
+  "rng": null,
+  "rng_calls": null,
+  "ended_at_perf": 398.7000000476837,
+  "end_reason": "finished",
+  "truncated": false,
+  "extensions": {
+    "cyborg-hunter": {
+      "replay_version": "0.7.5",
+      "tier": "dom",
+      "keys": "full",
+      "viewport_client": {
+        "w": 1000,
+        "h": 700
+      },
+      "ch_version": null,
+      "preset": null,
+      "scoring": null,
+      "session_signals": null,
+      "guard_violations": [],
+      "capture_failures": [],
+      "capture_stopped": false,
+      "inherited_redaction_taint": false
+    }
+  },
+  "segments": [
+    {
+      "index": 0,
+      "label": "paste-task",
+      "plugin": "ch:fixture",
+      "t_start": null,
+      "t_dom_ready": null,
+      "t_load": 1.3,
+      "t_end": 374.7,
+      "initial_dom": {
+        "id": 1,
+        "kind": "element",
+        "tag": "div",
+        "attrs": {
+          "id": "stage"
+        },
+        "children": [
+          {
+            "id": 2,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 3,
+            "kind": "element",
+            "tag": "h2",
+            "attrs": {
+              "id": "prompt"
+            },
+            "children": [
+              {
+                "id": 4,
+                "kind": "text",
+                "text": "Paste your answer"
+              }
+            ]
+          },
+          {
+            "id": 5,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 6,
+            "kind": "element",
+            "tag": "textarea",
+            "attrs": {
+              "id": "answer",
+              "rows": "3",
+              "cols": "40"
+            },
+            "children": []
+          },
+          {
+            "id": 7,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 8,
+            "kind": "element",
+            "tag": "p",
+            "attrs": {
+              "id": "note"
+            },
+            "children": [
+              {
+                "id": 9,
+                "kind": "text",
+                "text": "length-only is CH's documented default"
+              }
+            ]
+          },
+          {
+            "id": 10,
+            "kind": "text",
+            "text": "\n"
+          }
+        ]
+      },
+      "initial_state": null,
+      "events": [
+        {
+          "type": "mouse.move",
+          "t": 34.4,
+          "x": 178,
+          "y": 93
+        },
+        {
+          "type": "mouse.down",
+          "t": 34.9,
+          "x": 178,
+          "y": 93,
+          "button": 0,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "mouse.up",
+          "t": 35.2,
+          "x": 178,
+          "y": 93,
+          "button": 0,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "mouse.click",
+          "t": 35.3,
+          "x": 178,
+          "y": 93,
+          "button": 0,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "key.down",
+          "t": 36.4,
+          "key": "t",
+          "code": "KeyT",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 36.7,
+          "node": 6,
+          "value": "t"
+        },
+        {
+          "type": "key.up",
+          "t": 58.5,
+          "key": "t",
+          "code": "KeyT",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 58.8,
+          "key": "y",
+          "code": "KeyY",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 59,
+          "node": 6,
+          "value": "ty"
+        },
+        {
+          "type": "key.up",
+          "t": 81.2,
+          "key": "y",
+          "code": "KeyY",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 81.5,
+          "key": "p",
+          "code": "KeyP",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 81.6,
+          "node": 6,
+          "value": "typ"
+        },
+        {
+          "type": "key.up",
+          "t": 103.7,
+          "key": "p",
+          "code": "KeyP",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 103.9,
+          "key": "e",
+          "code": "KeyE",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 104.1,
+          "node": 6,
+          "value": "type"
+        },
+        {
+          "type": "key.up",
+          "t": 124.2,
+          "key": "e",
+          "code": "KeyE",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 124.3,
+          "key": "d",
+          "code": "KeyD",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 124.4,
+          "node": 6,
+          "value": "typed"
+        },
+        {
+          "type": "key.up",
+          "t": 146.7,
+          "key": "d",
+          "code": "KeyD",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 147,
+          "key": " ",
+          "code": "Space",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 147.1,
+          "node": 6,
+          "value": "typed "
+        },
+        {
+          "type": "key.up",
+          "t": 168.9,
+          "key": " ",
+          "code": "Space",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 169.3,
+          "key": "b",
+          "code": "KeyB",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 169.5,
+          "node": 6,
+          "value": "typed b"
+        },
+        {
+          "type": "key.up",
+          "t": 191.7,
+          "key": "b",
+          "code": "KeyB",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 191.9,
+          "key": "y",
+          "code": "KeyY",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 192.1,
+          "node": 6,
+          "value": "typed by"
+        },
+        {
+          "type": "key.up",
+          "t": 214.1,
+          "key": "y",
+          "code": "KeyY",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 214.3,
+          "key": " ",
+          "code": "Space",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 214.3,
+          "node": 6,
+          "value": "typed by "
+        },
+        {
+          "type": "key.up",
+          "t": 234.9,
+          "key": " ",
+          "code": "Space",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 235.1,
+          "key": "h",
+          "code": "KeyH",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 235.2,
+          "node": 6,
+          "value": "typed by h"
+        },
+        {
+          "type": "key.up",
+          "t": 257.3,
+          "key": "h",
+          "code": "KeyH",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 257.5,
+          "key": "a",
+          "code": "KeyA",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 257.6,
+          "node": 6,
+          "value": "typed by ha"
+        },
+        {
+          "type": "key.up",
+          "t": 280,
+          "key": "a",
+          "code": "KeyA",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 280.1,
+          "key": "n",
+          "code": "KeyN",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 280.3,
+          "node": 6,
+          "value": "typed by han"
+        },
+        {
+          "type": "key.up",
+          "t": 302.5,
+          "key": "n",
+          "code": "KeyN",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "key.down",
+          "t": 302.7,
+          "key": "d",
+          "code": "KeyD",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "textarea",
+            "id": "answer",
+            "rect": {
+              "x": 8,
+              "y": 67.8,
+              "w": 341,
+              "h": 51
+            },
+            "node": 6
+          }
+        },
+        {
+          "type": "input.value",
+          "t": 302.8,
+          "node": 6,
+          "value": "typed by hand"
+        },
+        {
+          "type": "key.up",
+          "t": 325,
+          "key": "d",
+          "code": "KeyD",
+          "mods": {
+            "ctrl": false,
+            "shift": false,
+            "alt": false,
+            "meta": false
+          },
+          "repeat": false,
+          "target": 6
+        },
+        {
+          "type": "clipboard.paste",
+          "t": 343.6,
+          "target": 6,
+          "text": null,
+          "html": null,
+          "len": 50
+        },
+        {
+          "type": "clipboard.copy",
+          "t": 343.7,
+          "target": 6,
+          "text": null,
+          "html": null,
+          "len": null
+        },
+        {
+          "type": "clipboard.cut",
+          "t": 343.7,
+          "target": 6,
+          "text": null,
+          "html": null,
+          "len": null
+        },
+        {
+          "type": "input.value",
+          "t": 358.3,
+          "node": 6,
+          "value": "typed by handpasted"
+        }
+      ],
+      "host_data": null,
+      "extensions": null
+    }
+  ]
+}

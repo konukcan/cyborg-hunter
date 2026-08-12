@@ -1,0 +1,974 @@
+{
+  "schema_version": 2,
+  "recorder": {
+    "name": "cyborg-hunter-replay",
+    "version": "0.7.5"
+  },
+  "host": null,
+  "participant_id": "P-FIXTURE",
+  "recording_started_at": "2026-08-12T11:38:42.620Z",
+  "recording_started_at_perf": 72.79999995231628,
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.7632.6 Safari/537.36",
+  "viewport": {
+    "w": 1000,
+    "h": 700,
+    "dpr": 1,
+    "scale": 1,
+    "offset_x": 0,
+    "offset_y": 0
+  },
+  "observed_root": "#stage",
+  "stylesheets": [],
+  "stylesheet_events": [],
+  "viewport_changes": [],
+  "rng": null,
+  "rng_calls": null,
+  "ended_at_perf": 753.2000000476837,
+  "end_reason": "finished",
+  "truncated": false,
+  "extensions": {
+    "cyborg-hunter": {
+      "replay_version": "0.7.5",
+      "tier": "dom",
+      "keys": "full",
+      "viewport_client": {
+        "w": 1000,
+        "h": 700
+      },
+      "ch_version": null,
+      "preset": null,
+      "scoring": null,
+      "session_signals": null,
+      "guard_violations": [],
+      "capture_failures": [],
+      "capture_stopped": false,
+      "inherited_redaction_taint": false
+    }
+  },
+  "segments": [
+    {
+      "index": 0,
+      "label": "screening",
+      "plugin": "ch:fixture",
+      "t_start": null,
+      "t_dom_ready": null,
+      "t_load": 4,
+      "t_end": 680.4,
+      "initial_dom": {
+        "id": 1,
+        "kind": "element",
+        "tag": "div",
+        "attrs": {
+          "id": "stage"
+        },
+        "children": [
+          {
+            "id": 2,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 3,
+            "kind": "element",
+            "tag": "h1",
+            "attrs": {
+              "id": "title"
+            },
+            "children": [
+              {
+                "id": 4,
+                "kind": "text",
+                "text": "Screening"
+              }
+            ]
+          },
+          {
+            "id": 5,
+            "kind": "text",
+            "text": "\n\n  "
+          },
+          {
+            "id": 6,
+            "kind": "comment",
+            "text": " The §8 redaction subtree. Two typed channels (a password field, which is\n       the unconfigurable floor, and a selector-designated text field), plus the\n       three pin-8 residuals on one element so a single spot check can find\n       them. "
+          },
+          {
+            "id": 7,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 8,
+            "kind": "element",
+            "tag": "div",
+            "attrs": {
+              "id": "private",
+              "class": "secret",
+              "data-ch-redact": ""
+            },
+            "children": [
+              {
+                "id": 9,
+                "kind": "text",
+                "text": ""
+              },
+              {
+                "id": 10,
+                "kind": "element",
+                "tag": "label",
+                "attrs": {
+                  "for": "pw"
+                },
+                "children": [
+                  {
+                    "id": 11,
+                    "kind": "text",
+                    "text": ""
+                  }
+                ]
+              },
+              {
+                "id": 12,
+                "kind": "text",
+                "text": ""
+              },
+              {
+                "id": 13,
+                "kind": "element",
+                "tag": "input",
+                "attrs": {
+                  "id": "pw",
+                  "type": "password",
+                  "autocomplete": "off"
+                },
+                "children": []
+              },
+              {
+                "id": 14,
+                "kind": "text",
+                "text": ""
+              },
+              {
+                "id": 15,
+                "kind": "element",
+                "tag": "input",
+                "attrs": {
+                  "id": "rd",
+                  "type": "text",
+                  "data-note": "zqxresidual42",
+                  "style": "outline:1px solid #ccc; background-image:url(zqxresidual42.png)",
+                  "data-zqxresidual42": "1"
+                },
+                "children": []
+              },
+              {
+                "id": 16,
+                "kind": "text",
+                "text": ""
+              },
+              {
+                "id": 17,
+                "kind": "element",
+                "tag": "p",
+                "attrs": {
+                  "id": "typed"
+                },
+                "children": [
+                  {
+                    "id": 18,
+                    "kind": "text",
+                    "text": ""
+                  }
+                ]
+              },
+              {
+                "id": 19,
+                "kind": "text",
+                "text": ""
+              }
+            ]
+          },
+          {
+            "id": 20,
+            "kind": "text",
+            "text": "\n\n  "
+          },
+          {
+            "id": 21,
+            "kind": "comment",
+            "text": " Where the I2 vector points: a node typed into INSIDE the redacted\n       subtree is moved OUT of it mid-span. Without taint tracking the dom.add\n       that re-parents it carries the content the keyframe withheld. "
+          },
+          {
+            "id": 22,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 23,
+            "kind": "element",
+            "tag": "div",
+            "attrs": {
+              "id": "open"
+            },
+            "children": []
+          },
+          {
+            "id": 24,
+            "kind": "text",
+            "text": "\n\n  "
+          },
+          {
+            "id": 25,
+            "kind": "comment",
+            "text": " Item 10: a file input with a real file set on it. "
+          },
+          {
+            "id": 26,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 27,
+            "kind": "element",
+            "tag": "input",
+            "attrs": {
+              "id": "picker",
+              "type": "file"
+            },
+            "children": []
+          },
+          {
+            "id": 28,
+            "kind": "text",
+            "text": "\n\n  "
+          },
+          {
+            "id": 29,
+            "kind": "comment",
+            "text": " srcdoc inlines a whole document, scripts included; snapshot.js drops it\n       for every iframe, not only redacted ones. "
+          },
+          {
+            "id": 30,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 31,
+            "kind": "element",
+            "tag": "iframe",
+            "attrs": {
+              "id": "frame",
+              "src": "about:blank",
+              "width": "120",
+              "height": "60"
+            },
+            "children": []
+          },
+          {
+            "id": 32,
+            "kind": "text",
+            "text": "\n\n  "
+          },
+          {
+            "id": 33,
+            "kind": "comment",
+            "text": " Item 9: a §4 exclusion placeholder. canonical-core has none, which is\n       why the fork player's instantiateDom crash on placeholders survived\n       until a real capture hit it. "
+          },
+          {
+            "id": 34,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 35,
+            "kind": "element",
+            "tag": "div"
+          },
+          {
+            "id": 41,
+            "kind": "text",
+            "text": "\n"
+          }
+        ]
+      },
+      "initial_state": null,
+      "events": [
+        {
+          "type": "mouse.move",
+          "t": 65.5,
+          "x": 158,
+          "y": 90
+        },
+        {
+          "type": "mouse.down",
+          "t": 68.6,
+          "x": 158,
+          "y": 90,
+          "button": 0,
+          "target": 13,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "input",
+            "rect": {
+              "x": 82.2,
+              "y": 79.9,
+              "w": 153,
+              "h": 21
+            },
+            "node": 13
+          }
+        },
+        {
+          "type": "mouse.up",
+          "t": 84.2,
+          "x": 158,
+          "y": 90,
+          "button": 0,
+          "target": 13,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "input",
+            "rect": {
+              "x": 82.2,
+              "y": 79.9,
+              "w": 153,
+              "h": 21
+            },
+            "node": 13
+          }
+        },
+        {
+          "type": "mouse.click",
+          "t": 84.4,
+          "x": 158,
+          "y": 90,
+          "button": 0,
+          "target": 13,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "input",
+            "rect": {
+              "x": 82.2,
+              "y": 79.9,
+              "w": 153,
+              "h": 21
+            },
+            "node": 13
+          }
+        },
+        {
+          "type": "key.down",
+          "t": 96.1,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 101.4,
+          "node": 13,
+          "redacted": true,
+          "value_len": 1
+        },
+        {
+          "type": "key.up",
+          "t": 123.9,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 124.1,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 124.2,
+          "node": 13,
+          "redacted": true,
+          "value_len": 2
+        },
+        {
+          "type": "key.up",
+          "t": 146.6,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 146.9,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 147,
+          "node": 13,
+          "redacted": true,
+          "value_len": 3
+        },
+        {
+          "type": "key.up",
+          "t": 169.1,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 169.3,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 169.4,
+          "node": 13,
+          "redacted": true,
+          "value_len": 4
+        },
+        {
+          "type": "key.up",
+          "t": 191.6,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 191.8,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 191.9,
+          "node": 13,
+          "redacted": true,
+          "value_len": 5
+        },
+        {
+          "type": "key.up",
+          "t": 214,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 214.2,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 214.3,
+          "node": 13,
+          "redacted": true,
+          "value_len": 6
+        },
+        {
+          "type": "key.up",
+          "t": 234.9,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 235.1,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 235.3,
+          "node": 13,
+          "redacted": true,
+          "value_len": 7
+        },
+        {
+          "type": "key.up",
+          "t": 257.4,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 257.7,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 257.8,
+          "node": 13,
+          "redacted": true,
+          "value_len": 8
+        },
+        {
+          "type": "key.up",
+          "t": 280.1,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 280.2,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 280.4,
+          "node": 13,
+          "redacted": true,
+          "value_len": 9
+        },
+        {
+          "type": "key.up",
+          "t": 302.6,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 302.8,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 302.8,
+          "node": 13,
+          "redacted": true,
+          "value_len": 10
+        },
+        {
+          "type": "key.up",
+          "t": 326.3,
+          "redacted": true
+        },
+        {
+          "type": "mouse.move",
+          "t": 356.1,
+          "x": 315,
+          "y": 90
+        },
+        {
+          "type": "mouse.down",
+          "t": 356.3,
+          "x": 315,
+          "y": 90,
+          "button": 0,
+          "target": 15,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "input",
+            "rect": {
+              "x": 239.2,
+              "y": 79.9,
+              "w": 153,
+              "h": 21
+            },
+            "node": 15
+          }
+        },
+        {
+          "type": "mouse.up",
+          "t": 356.8,
+          "x": 315,
+          "y": 90,
+          "button": 0,
+          "target": 15,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "input",
+            "rect": {
+              "x": 239.2,
+              "y": 79.9,
+              "w": 153,
+              "h": 21
+            },
+            "node": 15
+          }
+        },
+        {
+          "type": "mouse.click",
+          "t": 356.8,
+          "x": 315,
+          "y": 90,
+          "button": 0,
+          "target": 15,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "input",
+            "rect": {
+              "x": 239.2,
+              "y": 79.9,
+              "w": 153,
+              "h": 21
+            },
+            "node": 15
+          }
+        },
+        {
+          "type": "key.down",
+          "t": 361.5,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 361.7,
+          "node": 15,
+          "redacted": true,
+          "value_len": 1
+        },
+        {
+          "type": "key.up",
+          "t": 383.1,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 383.4,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 384.4,
+          "node": 15,
+          "redacted": true,
+          "value_len": 2
+        },
+        {
+          "type": "key.up",
+          "t": 406.7,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 406.9,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 407.4,
+          "node": 15,
+          "redacted": true,
+          "value_len": 3
+        },
+        {
+          "type": "key.up",
+          "t": 429.1,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 429.3,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 429.4,
+          "node": 15,
+          "redacted": true,
+          "value_len": 4
+        },
+        {
+          "type": "key.up",
+          "t": 451.9,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 452,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 452.2,
+          "node": 15,
+          "redacted": true,
+          "value_len": 5
+        },
+        {
+          "type": "key.up",
+          "t": 474.3,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 474.5,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 474.6,
+          "node": 15,
+          "redacted": true,
+          "value_len": 6
+        },
+        {
+          "type": "key.up",
+          "t": 496,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 496.2,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 496.2,
+          "node": 15,
+          "redacted": true,
+          "value_len": 7
+        },
+        {
+          "type": "key.up",
+          "t": 517.8,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 518,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 518.2,
+          "node": 15,
+          "redacted": true,
+          "value_len": 8
+        },
+        {
+          "type": "key.up",
+          "t": 540.9,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 541.2,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 541.3,
+          "node": 15,
+          "redacted": true,
+          "value_len": 9
+        },
+        {
+          "type": "key.up",
+          "t": 562.6,
+          "redacted": true
+        },
+        {
+          "type": "key.down",
+          "t": 562.8,
+          "redacted": true
+        },
+        {
+          "type": "input.value",
+          "t": 562.9,
+          "node": 15,
+          "redacted": true,
+          "value_len": 10
+        },
+        {
+          "type": "key.up",
+          "t": 585.3,
+          "redacted": true
+        },
+        {
+          "type": "dom.remove",
+          "t": 613.7,
+          "node": 18
+        },
+        {
+          "type": "dom.add",
+          "t": 613.7,
+          "parent": 17,
+          "before": null,
+          "node": {
+            "id": 42,
+            "kind": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "dom.remove",
+          "t": 629.9,
+          "node": 17
+        },
+        {
+          "type": "dom.add",
+          "t": 629.9,
+          "parent": 23,
+          "before": null,
+          "node": {
+            "id": 17,
+            "kind": "element",
+            "tag": "p",
+            "attrs": {
+              "id": "typed"
+            },
+            "children": [
+              {
+                "id": 42,
+                "kind": "text",
+                "text": ""
+              }
+            ]
+          }
+        },
+        {
+          "type": "mouse.move",
+          "t": 664.1,
+          "x": 500,
+          "y": 39
+        },
+        {
+          "type": "mouse.down",
+          "t": 664.2,
+          "x": 500,
+          "y": 39,
+          "button": 0,
+          "target": 3,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "h1",
+            "id": "title",
+            "rect": {
+              "x": 8,
+              "y": 21.4,
+              "w": 984,
+              "h": 37
+            },
+            "node": 3
+          }
+        },
+        {
+          "type": "mouse.up",
+          "t": 664.8,
+          "x": 500,
+          "y": 39,
+          "button": 0,
+          "target": 3,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "h1",
+            "id": "title",
+            "rect": {
+              "x": 8,
+              "y": 21.4,
+              "w": 984,
+              "h": 37
+            },
+            "node": 3
+          }
+        },
+        {
+          "type": "mouse.click",
+          "t": 664.8,
+          "x": 500,
+          "y": 39,
+          "button": 0,
+          "target": 3,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "h1",
+            "id": "title",
+            "rect": {
+              "x": 8,
+              "y": 21.4,
+              "w": 984,
+              "h": 37
+            },
+            "node": 3
+          }
+        }
+      ],
+      "host_data": null,
+      "extensions": null
+    }
+  ]
+}

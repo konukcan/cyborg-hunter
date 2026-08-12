@@ -1,0 +1,12 @@
+{
+  "fixture": "negative-corrupt-gzip.json.gz",
+  "expect": "reject",
+  "reject_stage": "gunzip",
+  "expect_error": "incorrect data check",
+  "checkpoints": [],
+  "notes": {
+    "defect": "A real gzip stream — correct magic bytes, correct header, decompressible body — with the trailing CRC32 damaged. Produced by gzipping a valid minimal recording and flipping two bytes of the checksum.",
+    "why_a_checksum_and_not_random_bytes": "Random bytes after the magic fail immediately and prove only that the reader calls gunzip. A damaged CHECKSUM decompresses to plausible-looking JSON and fails at the very end, which is the case a reader is most likely to get wrong: a streaming implementation that parses as it inflates has already handed the caller a recording by the time the check fails. §10 makes gzip detection normative; this is what detection has to be robust to.",
+    "where_it_is_refused": "At the gunzip stage, before parse. The gzip round-trip test for reject-mode fixtures also asserts that the magic bytes and the `.json.gz` extension agree, so the file cannot quietly stop being a gzip test."
+  }
+}

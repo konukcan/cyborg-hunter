@@ -1,0 +1,34 @@
+{
+  "fixture": "negative-duplicate-node-ids.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 1,
+    "events_total": 0,
+    "keyframes": 1,
+    "continuations": 0,
+    "events_by_type": {}
+  },
+  "spot_checks": [],
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "no_redaction_leak",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "references_resolve",
+    "perf_frame"
+  ],
+  "expected_failures": {
+    "unique_node_ids": "node id 3 is already live"
+  },
+  "checkpoints": [],
+  "notes": {
+    "defect": "One keyframe tree names id 3 twice, on two sibling <p> elements. Spec §4 assigns ids \"in first-seen order\", which presumes they are unique; a tree that breaks that has no well-defined assignment, and every dom.* event addressing id 3 afterwards is ambiguous.",
+    "why_this_one_matters": "THE r3 QUESTION THIS PINS (T5 Task-3 fix round). A keyframe carrying duplicate ids is undefended on the viewer's NON-BODY mount path, where the root binds last, so two players silently disagree about which node keeps the id. The corpus REFUSES the file rather than picking a winner: with duplicates invalid, the first-seen vs last-seen question never arises for a conforming recording, and §4's ordering sentence stays a statement about the producer rather than a tie-break rule players have to share. If r3 decides duplicates are legal and names a winner, `unique_node_ids` in corpus-invariants.js is the check that changes and this fixture is where the new rule gets stated.",
+    "carve_out": "Deliberately NOT a duplicate: dom.remove + dom.add of the same id inside one span, which is how a move legally encodes (M5). The generated `redacted.json` contains a real one — a <p> moved out of a redacted subtree, re-added with the same id and the same child text-node id — and it passes.",
+    "strict_is_silent_here": "validateStrict walks the tree and type-checks every node; it does not hold a set of what it has seen, and adding one would make the strict profile carry corpus semantics. This is exactly the division corpus-invariants.js exists for."
+  }
+}

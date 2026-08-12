@@ -1,0 +1,49 @@
+{
+  "fixture": "touch-lifecycle.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "absolute",
+  "counts": {
+    "segments": 1, "events_total": 16, "keyframes": 1, "continuations": 0,
+    "events_by_type": {
+      "touch.move": 6, "touch.end": 2, "touch.start": 2,
+      "blur": 1, "focus": 1,
+      "mouse.click": 1, "mouse.down": 1, "mouse.move": 1, "mouse.up": 1
+    }
+  },
+  "spot_checks": [
+    { "path": "viewport", "equals": { "w": 390, "h": 844, "dpr": 1, "scale": 1, "offset_x": 0, "offset_y": 0 } },
+    { "path": "recorder.name", "equals": "cyborg-hunter-replay" },
+
+    { "path": "segments.0.events.0.type", "equals": "touch.start" },
+    { "path": "segments.0.events.0.touches", "equals": [ { "id": 0, "x": 60, "y": 90 } ] },
+    { "path": "segments.0.events.0.camera",
+      "equals": { "scroll_x": 0, "scroll_y": 0, "viewport_w": 390, "viewport_h": 844,
+                  "client_w": 390, "client_h": 844, "dpr": 1,
+                  "vv_scale": 1, "vv_offset_x": 0, "vv_offset_y": 0 } },
+    { "path": "segments.0.events.6.anchor",
+      "equals": { "tag": "button", "id": "b", "rect": { "x": 62.1, "y": 101.8, "w": 43.4, "h": 21 }, "node": 12 } },
+    { "path": "segments.0.events.7", "equals": { "type": "touch.move", "t": 82.6, "touches": [ { "id": 1, "x": 212, "y": 205 } ] } },
+    { "path": "segments.0.events.13.touches", "equals": [] },
+    { "path": "segments.0.events.14", "equals": { "type": "blur", "t": 150.2 } },
+    { "path": "segments.0.events.15", "equals": { "type": "focus", "t": 150.3 } }
+  ],
+  "invariants": [
+    "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe",
+    "no_redaction_leak", "password_floor", "truncation_mirrors_capture_stopped",
+    "references_resolve", "unique_node_ids", "perf_frame"
+  ],
+  "expected_failures": {},
+  "checkpoints": [],
+  "notes": {
+    "provenance": "REAL capture via tools/gen-schema-v2-fixtures.mjs, in a touch-enabled 390x844 Chromium context. The first tap goes through Chromium's own input pipeline (page.touchscreen.tap), so its touch lists and the mouse.* events that follow it are the browser's compatibility behaviour, not a script's idea of it. The drag and the window focus/blur pair are dispatched, for reasons given below.",
+    "what_this_fixture_is_for": "T7 brief item 12. T5.9's seek-budget gate enumerates its channel coverage against the shipped viewer's own KNOWN_TYPES and NAMES the types no fixture carries, rather than letting their absence read as coverage; twenty-one were named. This entry retires five of them at CORPUS level — touch.start, touch.move, touch.end, focus, blur — which is the half T7 owns.",
+    "what_is_still_owed_and_by_whom": "THE GATE DOES NOT CONSUME THIS YET, and the brief's phrasing ('the gate needs no change to consume one: it enumerates whatever the fixtures carry') is true of the ENUMERATION and not of the CELLS. tests/browser/replay/seek-budget.battery.mjs derives its vocabulary from the client and computes `gaps` from the spans its gated cells actually replayed — but those cells load three NAMED recordings (jspsych-full, alignment-v2-frozen, and a synthetic worst case), so touch.* moves from 'no fixture carries it' to 'no gated cell replays it' rather than out of the gap list. Closing the rest is a perf-gate change: add a cell over this fixture, which also adds a budget row. That belongs to whoever next touches the gate, not to a corpus entry — a fixture cannot enroll itself in a perf budget.",
+    "why_touch_was_the_one_to_cut_first": "The brief is explicit that the gap list is not flat. touch.start and touch.end sit in capture's withAlignment set, so they carry §6 camera and anchor blocks and fire the §8 alignment self-check — the largest single term in a deep-span restore, and the term the driver design §11 is written around. They are also the only way an alignment claim about TOUCH input stops being an extrapolation from mouse input: before this fixture, every camera/anchor block in the corpus rode a mouse event. The clipboard, media, focus/blur and visibility handlers are constant-per-event with no forced layout, so their perf exposure is small; what they lack is §7 RENDERING evidence, which is a separate debt.",
+    "the_touch_list_shapes_are_the_claim": "§5.2 records the whole touch LIST, not one point, because multi-touch is what distinguishes a pinch from a drag — and §5.2's touch.end reports the points that ENDED. Event 13's `touches: []` is therefore correct rather than empty-by-accident: the last finger lifted and nothing changed hands. Event 0, the real tap, carries its point. Both shapes are spot-checked, because an implementation that treated an empty list as a malformed event would pass every other fixture in the corpus.",
+    "the_mouse_events_after_the_tap_are_the_browsers": "Events 2-5 are Chromium's touch-to-mouse compatibility emulation for the tap, captured verbatim. They are not noise to be cleaned up: a real touch session contains them, and a player that double-counts a tap as a tap AND a click will do so on this file.",
+    "why_focus_blur_are_dispatched": "capture-trace binds focus/blur on the WINDOW, and headless Chromium does not deliver a real window blur to the page it is driving. Dispatching is faithful here in a way it would not be elsewhere: §5.5 types both events as {type, t} and nothing else, so there is no state to fake — the recorded event is byte-identical to what a real blur produces.",
+    "still_ungated_after_this": "Sixteen of the twenty-one remain: clipboard.copy/cut/paste/drop (three are now covered by length-only-clipboard.json at the WIRE level, but not inside a gated seek cell), input.checked, input.select, media.play/pause/ended/seeked/time, fullscreen.enter/exit, recording.capture_stopped (covered at wire level by truncated.json), visibility.hidden/visible. visibility.* is the notable miss in THIS fixture: document.hidden is not settable and Chromium will not deliver a visibilitychange to a page it is driving, so it needs a CDP-level page-lifecycle call rather than a dispatch — and a dispatched visibilitychange would be the dishonest kind, since the recorded event's meaning is entirely about a state the fake does not change. canonical-core carries both at the wire level.",
+    "perf_frame": "'absolute' — origin 57.1, ended_at_perf 240.3, last observed moment 183.2 on the wire clock; the difference is the extent, which only the absolute reading produces."
+  }
+}

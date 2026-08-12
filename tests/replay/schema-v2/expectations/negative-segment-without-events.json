@@ -1,0 +1,12 @@
+{
+  "fixture": "negative-segment-without-events.json",
+  "expect": "reject",
+  "reject_stage": "tolerant",
+  "expect_error": "segments[0] must carry an events array",
+  "checkpoints": [],
+  "notes": {
+    "defect": "A segment object with no `events` key.",
+    "why_this_is_one_of_only_four_fatal_defects": "Spec §11 lists exactly four things the TOLERANT profile refuses: schema_version ≠ 2, missing recorder identity, missing segments array, and a segment without events[]. Everything else loads with warnings, because recordings are unrepeatable participant data and a runtime refusal is data loss. This fixture is the witness for the fourth, and it is the reason the expectations format has a `reject` mode at all: a file that never becomes a recording has no counts to state and no invariants to run.",
+    "the_other_three": "Not given fixtures of their own — they are covered by validator.test.js's unit assertions, which can state all four in four lines. What a FIXTURE adds here is the end-to-end path: the runner reading bytes off disk, refusing them at a named stage, and asserting no counts were authored for a recording that does not exist."
+  }
+}

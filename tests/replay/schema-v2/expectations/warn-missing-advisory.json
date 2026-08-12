@@ -1,0 +1,36 @@
+{
+  "fixture": "warn-missing-advisory.json",
+  "expect": "warn",
+  "strict_valid": false,
+  "strict_errors": [
+    "user_agent must be a string"
+  ],
+  "perf_frame": "undiscriminating",
+  "expect_warning": "missing advisory field: user_agent",
+  "counts": {
+    "segments": 1,
+    "events_total": 0,
+    "keyframes": 1,
+    "continuations": 0,
+    "events_by_type": {}
+  },
+  "spot_checks": [],
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "no_redaction_leak",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "references_resolve",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {},
+  "checkpoints": [],
+  "notes": {
+    "defect": "No `user_agent`. §2 declares it required and §11 puts it outside the tolerant profile's four fatal defects, so the file loads with a warning and fails conformance.",
+    "why_the_corpus_needs_a_warn_witness": "This is the middle of the three outcomes and the one nothing else in the corpus produces: every other positive fixture loads silently, every negative either fails strict or never loads at all. Without an entry here, the `warn` branch of the runner — and the tolerant profile's entire \"loads with warnings and documented defaults\" clause — is code no fixture reaches. The accept branch asserts warnings are EMPTY, so a producer that started warning on healthy files would also be caught.",
+    "the_default_is_visible_in_the_load": "The tolerant profile fills absent top-level keys from TOP_DEFAULTS; `user_agent` is not among them, so it stays absent rather than becoming an empty string. That is deliberate — a defaulted \"\" would be a claim about the participant's browser that nobody made — and the semantic-preservation test asserts the loader added nothing."
+  }
+}

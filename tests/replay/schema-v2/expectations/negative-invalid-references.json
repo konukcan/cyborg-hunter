@@ -1,0 +1,36 @@
+{
+  "fixture": "negative-invalid-references.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 1,
+    "events_total": 2,
+    "keyframes": 1,
+    "continuations": 0,
+    "events_by_type": {
+      "dom.attr": 1,
+      "dom.text": 1
+    }
+  },
+  "spot_checks": [],
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "no_redaction_leak",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {
+    "references_resolve": "node 99, which the keyframe span never emitted"
+  },
+  "checkpoints": [],
+  "notes": {
+    "defect": "The second event addresses node 99. The keyframe emitted ids 1, 2 and 3, and no dom.add introduces another, so the reference resolves to nothing.",
+    "why_this_one_matters": "T3 Task-1 carry. Strict validation only NUMBER-checks `node`, `parent` and `before`, so a dangling reference is a well-typed pointer to nothing: the player resolves it to undefined and, being tolerant by design (an analyst tool must not throw on participant data), says nothing at all. The defect therefore has no symptom anywhere — which is why it needs a fixture rather than a code review.",
+    "ordered_not_setwise": "references_resolve checks in TIME ORDER within the span, not against the span's whole id set. A reference that arrives BEFORE the dom.add introducing its node is the same defect with a different cause, and a set-wise check would call it fine."
+  }
+}

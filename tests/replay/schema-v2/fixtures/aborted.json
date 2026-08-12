@@ -1,0 +1,293 @@
+{
+  "schema_version": 2,
+  "recorder": {
+    "name": "cyborg-hunter-replay",
+    "version": "0.7.5"
+  },
+  "host": null,
+  "participant_id": "P-FIXTURE",
+  "recording_started_at": "2026-08-12T11:38:43.822Z",
+  "recording_started_at_perf": 23.59999990463257,
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.7632.6 Safari/537.36",
+  "viewport": {
+    "w": 1000,
+    "h": 700,
+    "dpr": 1,
+    "scale": 1,
+    "offset_x": 0,
+    "offset_y": 0
+  },
+  "observed_root": "#stage",
+  "stylesheets": [],
+  "stylesheet_events": [],
+  "viewport_changes": [],
+  "rng": null,
+  "rng_calls": null,
+  "ended_at_perf": 68.09999990463257,
+  "end_reason": "aborted",
+  "truncated": false,
+  "extensions": {
+    "cyborg-hunter": {
+      "replay_version": "0.7.5",
+      "tier": "dom",
+      "keys": "full",
+      "viewport_client": {
+        "w": 1000,
+        "h": 700
+      },
+      "ch_version": null,
+      "preset": null,
+      "scoring": null,
+      "session_signals": null,
+      "guard_violations": [],
+      "capture_failures": [],
+      "capture_stopped": false,
+      "inherited_redaction_taint": false
+    }
+  },
+  "segments": [
+    {
+      "index": 0,
+      "label": "q1",
+      "plugin": "ch:fixture",
+      "t_start": null,
+      "t_dom_ready": null,
+      "t_load": 1.4,
+      "t_end": 44.5,
+      "initial_dom": {
+        "id": 1,
+        "kind": "element",
+        "tag": "div",
+        "attrs": {
+          "id": "stage"
+        },
+        "children": [
+          {
+            "id": 2,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 3,
+            "kind": "element",
+            "tag": "h2",
+            "attrs": {
+              "id": "prompt"
+            },
+            "children": [
+              {
+                "id": 4,
+                "kind": "text",
+                "text": "Question 1"
+              }
+            ]
+          },
+          {
+            "id": 5,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 6,
+            "kind": "element",
+            "tag": "p",
+            "attrs": {
+              "id": "body"
+            },
+            "children": [
+              {
+                "id": 7,
+                "kind": "text",
+                "text": "Pick one."
+              }
+            ]
+          },
+          {
+            "id": 8,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 9,
+            "kind": "element",
+            "tag": "button",
+            "attrs": {
+              "id": "a",
+              "type": "button"
+            },
+            "children": [
+              {
+                "id": 10,
+                "kind": "text",
+                "text": "Alpha"
+              }
+            ]
+          },
+          {
+            "id": 11,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 12,
+            "kind": "element",
+            "tag": "button",
+            "attrs": {
+              "id": "b",
+              "type": "button"
+            },
+            "children": [
+              {
+                "id": 13,
+                "kind": "text",
+                "text": "Beta"
+              }
+            ]
+          },
+          {
+            "id": 14,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 15,
+            "kind": "element",
+            "tag": "ul",
+            "attrs": {
+              "id": "log"
+            },
+            "children": []
+          },
+          {
+            "id": 16,
+            "kind": "text",
+            "text": "\n"
+          }
+        ]
+      },
+      "initial_state": null,
+      "events": [
+        {
+          "type": "mouse.move",
+          "t": 28.9,
+          "x": 33,
+          "y": 112
+        },
+        {
+          "type": "mouse.down",
+          "t": 29.8,
+          "x": 33,
+          "y": 112,
+          "button": 0,
+          "target": 9,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "button",
+            "id": "a",
+            "rect": {
+              "x": 8,
+              "y": 101.8,
+              "w": 50.1,
+              "h": 21
+            },
+            "node": 9
+          }
+        },
+        {
+          "type": "mouse.up",
+          "t": 30,
+          "x": 33,
+          "y": 112,
+          "button": 0,
+          "target": 9,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "button",
+            "id": "a",
+            "rect": {
+              "x": 8,
+              "y": 101.8,
+              "w": 50.1,
+              "h": 21
+            },
+            "node": 9
+          }
+        },
+        {
+          "type": "mouse.click",
+          "t": 30,
+          "x": 33,
+          "y": 112,
+          "button": 0,
+          "target": 9,
+          "camera": {
+            "scroll_x": 0,
+            "scroll_y": 0,
+            "viewport_w": 1000,
+            "viewport_h": 700,
+            "client_w": 1000,
+            "client_h": 700,
+            "dpr": 1,
+            "vv_scale": 1,
+            "vv_offset_x": 0,
+            "vv_offset_y": 0
+          },
+          "anchor": {
+            "tag": "button",
+            "id": "a",
+            "rect": {
+              "x": 8,
+              "y": 101.8,
+              "w": 50.1,
+              "h": 21
+            },
+            "node": 9
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 44.5,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 17,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 18,
+                "kind": "text",
+                "text": "chose Alpha"
+              }
+            ]
+          }
+        }
+      ],
+      "host_data": null,
+      "extensions": null
+    }
+  ]
+}

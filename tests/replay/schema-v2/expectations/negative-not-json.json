@@ -1,0 +1,11 @@
+{
+  "fixture": "negative-not-json.json",
+  "expect": "reject",
+  "reject_stage": "parse",
+  "expect_error": "invalid JSON",
+  "checkpoints": [],
+  "notes": {
+    "defect": "A truncated JSON document — the opening of a plausible recording, cut off mid-array. Not random bytes: a file that fails to parse for an INTERESTING reason, which is what a half-written upload or a killed export actually looks like.",
+    "why_parse_is_its_own_stage": "validateTolerant would parse this itself and report the same failure, so separating the stages buys one thing: \"this is not JSON\" and \"this is JSON that is not a recording\" become different fixture claims. A negative fixture that says which one it is cannot quietly start passing for the other reason."
+  }
+}

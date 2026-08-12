@@ -184,7 +184,21 @@ export function createRecorder(userConfig) {
       implicit: !!implicit,
       // tLoad is THE trial time origin (see design §10). tStart/tDomReady are
       // #3661-parity fields; null when the host has no pre-render hook.
-      tLoad: implicit ? session.sessionStart : performance.now(),
+      //
+      // An implicit segment backdates its origin to the session start ONLY when
+      // it is the first — spec §3's "unbracketed recordings are one whole-session
+      // segment", where one segment genuinely owns the whole timeline. A
+      // TRAILING implicit segment (events arriving after a bracketed trial
+      // closed, e.g. the teardown flush, or a click between trials) opens when
+      // it opens, and backdating it to 0 made the recording state two segments
+      // that both own the same instant. That breaks §3's non-overlap rule
+      // literally, and it breaks the viewer materially: the §3 origin is what
+      // every player rebases segment-relative times by, so this segment's
+      // playhead ran on the session clock while every other segment's ran on
+      // its own. Found by T7's segment non-overlap check, which is the first
+      // thing in the repo that compared one segment's end against the next
+      // one's stated origin.
+      tLoad: (implicit && trialCounter === 1) ? session.sessionStart : performance.now(),
       tStart: (opts && opts.tStart) != null ? opts.tStart : null,
       tDomReady: (opts && opts.tDomReady) != null ? opts.tDomReady : null,
       tEnd: null,

@@ -216,6 +216,38 @@ describe('recorder lifecycle', () => {
     assert.deepStrictEqual(seen, ['t1', '__session__']);
   });
 
+  it('a FIRST implicit trial owns the whole session; a TRAILING one opens when it opens', () => {
+    // Spec §3 has two clauses that pull opposite ways here: "unbracketed
+    // recordings are one whole-session segment", and "segments are ordered and
+    // non-overlapping (t_end[n] ≤ next segment's origin)". Backdating EVERY
+    // implicit trial to the session start satisfied the first and broke the
+    // second — a click between two bracketed trials, or the teardown flush,
+    // produced a segment claiming to have started before the one it follows.
+    //
+    // It is not a cosmetic disagreement: t_load is the §3 time origin, so every
+    // player rebases that segment's events by it, and a backdated origin put
+    // the segment's playhead on the session clock while every other segment's
+    // ran on its own. T7's segment non-overlap check is what caught it.
+    const unbracketed = freshRecorder();
+    unbracketed.startSession();
+    unbracketed.pushRecord({ type: 'mouse.move', x: 1, y: 1 });
+    const only = unbracketed.getState().trials[0];
+    assert.strictEqual(only.trialId, '__session__');
+    assert.strictEqual(only.tLoad, unbracketed.getState().sessionStart,
+      'the sole segment of an unbracketed recording owns the whole session');
+
+    const trailing = freshRecorder();
+    trailing.startSession();
+    trailing.startTrial({ trialId: 't1' });
+    trailing.endTrial();
+    trailing.pushRecord({ type: 'mouse.move', x: 1, y: 1 });   // opens the implicit trial
+    const [bracketed, after] = trailing.getState().trials;
+    assert.strictEqual(after.trialId, '__session__');
+    assert.ok(after.tLoad >= bracketed.tEnd,
+      `a trailing implicit segment opens at or after the segment it follows ` +
+      `(t_load ${after.tLoad} vs previous t_end ${bracketed.tEnd})`);
+  });
+
   it('setStylesheets stores the initial stylesheet capture', () => {
     const rec = freshRecorder();
     rec.startSession();

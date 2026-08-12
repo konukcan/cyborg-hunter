@@ -1,0 +1,76 @@
+{
+  "schema_version": 2,
+  "recorder": { "name": "future-recorder", "version": "3.1.0" },
+  "recorder_build": "2027.02-nightly",
+  "host": { "name": "some-other-runtime", "version": "1.0.0" },
+  "participant_id": "P-FWD-01",
+  "recording_started_at": "2027-02-01T09:00:00.000Z",
+  "recording_started_at_perf": 4000,
+  "user_agent": "forward-compat-fixture",
+  "viewport": { "w": 1024, "h": 768, "dpr": 2, "scale": 1, "offset_x": 0, "offset_y": 0,
+                "orientation": "landscape" },
+  "observed_root": "#root",
+  "stylesheets": [ { "id": 1, "kind": "inline", "css": "#root{font:14px sans-serif}", "media": null,
+                     "origin": "author" } ],
+  "stylesheet_events": [],
+  "viewport_changes": [],
+  "rng": null,
+  "rng_calls": null,
+  "ended_at_perf": 6000,
+  "end_reason": "finished",
+  "truncated": false,
+  "eye_tracking": { "sample_hz": 60, "calibration_error_deg": 0.4 },
+  "extensions": {
+    "cyborg-hunter": { "replay_version": "0.7.5", "tier": "dom" },
+    "some-other-vendor": {
+      "study_arm": "B",
+      "nested": { "deep": [ 1, 2, { "deeper": true } ] }
+    }
+  },
+  "segments": [
+    {
+      "index": 0,
+      "label": "trial-1",
+      "plugin": null,
+      "t_start": 0,
+      "t_dom_ready": 10,
+      "t_load": 10,
+      "t_end": 2000,
+      "difficulty": "hard",
+      "initial_dom": {
+        "id": 1, "kind": "element", "tag": "div", "attrs": { "id": "root" }, "children": [
+          { "id": 2, "kind": "element", "tag": "p", "attrs": { "id": "msg" }, "children": [
+            { "id": 3, "kind": "text", "text": "before" } ] },
+          { "id": 4, "kind": "element", "tag": "img",
+            "attrs": { "id": "pic", "src": "pic.png" }, "children": [],
+            "intrinsic_size": { "w": 320, "h": 240 } }
+        ]
+      },
+      "initial_state": {
+        "scroll": { "x": 0, "y": 0 },
+        "element_scroll": [],
+        "media": [],
+        "form": [],
+        "pointer_lock": false
+      },
+      "events": [
+        { "type": "dom.text", "t": 100, "node": 3, "text": "after", "reason": "plugin-update" },
+        { "type": "gaze.fixation", "t": 200, "node": 2, "duration": 340, "confidence": 0.91 },
+        { "type": "mouse.click", "t": 500, "x": 40, "y": 60, "button": 0, "target": 2,
+          "pressure": 0.5,
+          "camera": { "scroll_x": 0, "scroll_y": 0, "viewport_w": 1024, "viewport_h": 768,
+                       "client_w": 1024, "client_h": 768, "dpr": 2,
+                       "vv_scale": 1, "vv_offset_x": 0, "vv_offset_y": 0 },
+          "anchor": { "tag": "p", "id": "msg", "rect": { "x": 8, "y": 8, "w": 200, "h": 20 },
+                       "node": 2 } },
+        { "type": "dom.attr", "t": 900, "node": 2, "name": "class", "value": "one" },
+        { "type": "dom.attr", "t": 900, "node": 4, "name": "alt", "value": "two" },
+        { "type": "scroll.window", "t": 900, "x": 0, "y": 30 },
+        { "type": "vendor.marker", "t": 1500, "payload": { "phase": "debrief" },
+          "extensions": { "some-other-vendor": { "seq": 7 } } }
+      ],
+      "host_data": { "response": "left", "rt": 812 },
+      "extensions": { "some-other-vendor": { "arm": "B" } }
+    }
+  ]
+}

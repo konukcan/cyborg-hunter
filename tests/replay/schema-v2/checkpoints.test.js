@@ -345,7 +345,14 @@ test('no authored checkpoint depends on the 0.1 ms quantisation for its placemen
   // sibling test below ("rebases with the model's own forward rule") exists to
   // stop exactly that, and this loop was quietly exempt from it (review M-2).
   for (const { file, exp } of EXPECTATIONS) {
-    if (!Array.isArray(exp.checkpoints) || !FIXTURES.has(file)) continue;
+    // An entry with no checkpoints has no placement to guard, and from T7 the
+    // corpus is full of them: eighteen negative fixtures, three of which are
+    // not parseable recordings at all (a truncated JSON document, a corrupt
+    // gzip, a decompression bomb). Parsing every twin to guard an empty array
+    // crashed this test on the first of those — correctly, in the sense that
+    // the fixture IS unparseable, and uselessly, since it authors nothing.
+    if (!Array.isArray(exp.checkpoints) || exp.checkpoints.length === 0) continue;
+    if (!FIXTURES.has(file)) continue;
     const rec = recordingFor(file);
     const model = boot(rec).model;
     for (const cp of exp.checkpoints) {

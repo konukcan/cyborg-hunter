@@ -1,0 +1,38 @@
+{
+  "fixture": "negative-continuation-before-keyframe.json",
+  "expect": "accept",
+  "strict_valid": false,
+  "strict_errors": [
+    "continuation carries dom.* events before any keyframe"
+  ],
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 1,
+    "events_total": 1,
+    "keyframes": 0,
+    "continuations": 1,
+    "events_by_type": {
+      "dom.attr": 1
+    }
+  },
+  "spot_checks": [],
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "no_redaction_leak",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {
+    "first_dom_bearing_is_keyframe": "first DOM-bearing segment 0 is not a keyframe",
+    "references_resolve": "node 1, which the keyframe span never emitted"
+  },
+  "checkpoints": [],
+  "notes": {
+    "defect": "The recording opens with a continuation (initial_dom: null) that patches node 1. Spec §3: \"the first DOM-bearing segment of a recording MUST be a keyframe.\"",
+    "two_failures_one_defect": "It fails references_resolve as well, and that is not sloppiness — it is the same defect seen from the other side. A continuation before any keyframe has no tree, so EVERY id it names is dangling. Declaring both is what stops a future reader from assuming the reference check is redundant here.",
+    "why_it_is_catastrophic_rather_than_merely_wrong": "The checkpoint executor refuses this shape explicitly (checkpoints.test.js's §3 self-test). CH's viewer renders it as a defect chip over an empty body, which is right for an analyst and fatal for an oracle: with nothing mounted, every `exists` reads false and every checkpoint asserting ABSENCE passes over a blank stage."
+  }
+}

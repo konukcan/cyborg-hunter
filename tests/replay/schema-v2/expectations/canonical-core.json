@@ -1,6 +1,8 @@
 {
   "fixture": "canonical-core.json",
+  "expect": "accept",
   "strict_valid": true,
+  "perf_frame": "undiscriminating",
   "counts": {
     "segments": 3, "events_total": 14, "keyframes": 2, "continuations": 1,
     "events_by_type": {
@@ -19,7 +21,11 @@
     { "path": "segments.2.events.1.redacted", "equals": true },
     { "path": "segments.2.events.2.value_len", "equals": 1 }
   ],
-  "invariants": [ "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe", "no_redaction_leak" ],
+  "invariants": [
+    "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe",
+    "no_redaction_leak", "password_floor", "truncation_mirrors_capture_stopped",
+    "references_resolve", "unique_node_ids", "perf_frame"
+  ],
   "checkpoints": [
     { "t": 500,  "segment": 0, "assert": [ { "node": 5, "prop": "text", "equals": "Clicked!" } ] },
     { "t": 2250, "segment": 1, "assert": [ { "node": 6, "prop": "exists", "equals": true },

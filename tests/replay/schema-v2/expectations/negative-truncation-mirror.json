@@ -1,0 +1,33 @@
+{
+  "fixture": "negative-truncation-mirror.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 1,
+    "events_total": 0,
+    "keyframes": 1,
+    "continuations": 0,
+    "events_by_type": {}
+  },
+  "spot_checks": [],
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "no_redaction_leak",
+    "password_floor",
+    "references_resolve",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {
+    "truncation_mirrors_capture_stopped": "truncated: true with no recording.capture_stopped"
+  },
+  "checkpoints": [],
+  "notes": {
+    "defect": "truncated: true with no recording.capture_stopped event anywhere in the file. Spec §5.7: the flag \"mirrors\" the event.",
+    "why_half_a_signal_is_worse_than_none": "§12 requires players to \"surface truncation rather than presenting a partial recording as complete\". A flag with no event leaves a player announcing truncation it cannot locate — the analyst sees a warning banner and no way to tell whether the missing minute is at the start, the middle or the end. The opposite half (an event with no flag) is the more dangerous one and is checked by the same invariant; a flag-only reader would present that file as complete.",
+    "the_affirmative_witness": "`truncated.json`, a real capture with a 12-event cap, is where both halves are present and agree."
+  }
+}

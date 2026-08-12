@@ -1,0 +1,34 @@
+{
+  "fixture": "negative-rng-mismatch.json",
+  "expect": "accept",
+  "strict_valid": false,
+  "strict_errors": [
+    "rng_calls must be non-null iff rng is non-null"
+  ],
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 1,
+    "events_total": 0,
+    "keyframes": 1,
+    "continuations": 0,
+    "events_by_type": {}
+  },
+  "spot_checks": [],
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "no_redaction_leak",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "references_resolve",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {},
+  "checkpoints": [],
+  "notes": {
+    "defect": "rng is null while rng_calls is an empty array. Spec §7: \"rng_calls is non-null iff rng is non-null.\"",
+    "why_the_iff_carries_meaning": "The two nulls are not redundant. §7 spells three distinct states: `rng: null` means RNG capture was OFF; `rng` present with an EMPTY rng_calls means capture was on and nothing fired; `rng` present with entries means capture was on and these are the draws. This file states the fourth combination, which says capture was off and here are zero of its results — an empty array that an analyst would read as \"nothing fired\" when the truthful reading is \"nobody was watching\". §13's warning in miniature."
+  }
+}

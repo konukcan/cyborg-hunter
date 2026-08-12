@@ -21,6 +21,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // The counts block the conformance runner asserts, recomputed there from the
 // fixture: segments, total events, and the split between keyframes
@@ -90,18 +91,23 @@ function inventoryOf(rec) {
   };
 }
 
-const args = process.argv.slice(2);
-const inventoryOnly = args.includes('--inventory');
-const file = args.find(a => !a.startsWith('--'));
-if (!file) {
-  process.stderr.write('usage: node tools/gen-expectations-counts.mjs <fixture.json> [--inventory]\n');
-  process.exit(1);
-}
-const rec = JSON.parse(readFileSync(resolve(process.cwd(), file), 'utf8'));
-const inventory = JSON.stringify(inventoryOf(rec), null, 2) + '\n';
-if (inventoryOnly) {
-  process.stdout.write(inventory);
-} else {
-  process.stdout.write(JSON.stringify(countsOf(rec), null, 2) + '\n');
-  process.stderr.write(inventory);
+// CLI only when RUN, not when imported. tools/gen-negative-fixtures.mjs imports
+// `countsOf` to build its expectations twins, and without this guard the import
+// executed the argv parse below and exited with a usage message.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const args = process.argv.slice(2);
+  const inventoryOnly = args.includes('--inventory');
+  const file = args.find(a => !a.startsWith('--'));
+  if (!file) {
+    process.stderr.write('usage: node tools/gen-expectations-counts.mjs <fixture.json> [--inventory]\n');
+    process.exit(1);
+  }
+  const rec = JSON.parse(readFileSync(resolve(process.cwd(), file), 'utf8'));
+  const inventory = JSON.stringify(inventoryOf(rec), null, 2) + '\n';
+  if (inventoryOnly) {
+    process.stdout.write(inventory);
+  } else {
+    process.stdout.write(JSON.stringify(countsOf(rec), null, 2) + '\n');
+    process.stderr.write(inventory);
+  }
 }

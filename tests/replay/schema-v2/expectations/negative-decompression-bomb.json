@@ -1,0 +1,12 @@
+{
+  "fixture": "negative-decompression-bomb.json.gz",
+  "expect": "reject",
+  "reject_stage": "gunzip",
+  "expect_error": "Cannot create a Buffer larger than",
+  "checkpoints": [],
+  "notes": {
+    "defect": "A valid gzip stream, ~17 KB on disk, that inflates to 17 MB — past the runner's 16 MB decompressed-size ceiling. Highly compressible filler, not a recording: what it inflates TO is irrelevant, since the point is that nothing may inflate it far enough to find out.",
+    "why_a_ceiling_is_normative_ish": "Spec §10: \"Players SHOULD enforce a decompressed-size ceiling before parsing (protection against decompression bombs; a configurable limit with a generous default)\", and §12 makes recording content untrusted input. A reader without a ceiling turns a 17 KB upload into an allocation the size of its memory limit, and the ratio here is deliberately modest — a real bomb reaches gigabytes from the same few kilobytes.",
+    "the_ceiling_is_tested_separately_too": "conformance.test.js proves the ceiling itself on a synthetic buffer, because a ceiling quietly raised above this fixture would leave the fixture passing for the wrong reason and nothing else would notice."
+  }
+}

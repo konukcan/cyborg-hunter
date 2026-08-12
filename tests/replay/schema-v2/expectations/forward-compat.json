@@ -1,0 +1,53 @@
+{
+  "fixture": "forward-compat.json",
+  "expect": "accept",
+  "strict_valid": false,
+  "strict_errors": [
+    "unknown top-level event type \"gaze.fixation\"",
+    "unknown top-level event type \"vendor.marker\""
+  ],
+  "perf_frame": "absolute",
+  "counts": {
+    "segments": 1, "events_total": 7, "keyframes": 1, "continuations": 0,
+    "events_by_type": {
+      "dom.attr": 2, "dom.text": 1, "gaze.fixation": 1,
+      "mouse.click": 1, "scroll.window": 1, "vendor.marker": 1
+    }
+  },
+  "spot_checks": [
+    { "path": "recorder_build", "equals": "2027.02-nightly" },
+    { "path": "eye_tracking", "equals": { "sample_hz": 60, "calibration_error_deg": 0.4 } },
+    { "path": "viewport.orientation", "equals": "landscape" },
+    { "path": "stylesheets.0.origin", "equals": "author" },
+    { "path": "extensions.some-other-vendor.nested.deep.2.deeper", "equals": true },
+    { "path": "segments.0.difficulty", "equals": "hard" },
+    { "path": "segments.0.initial_state.pointer_lock", "equals": false },
+    { "path": "segments.0.initial_dom.children.1.intrinsic_size", "equals": { "w": 320, "h": 240 } },
+    { "path": "segments.0.events.0.reason", "equals": "plugin-update" },
+    { "path": "segments.0.events.1",
+      "equals": { "type": "gaze.fixation", "t": 200, "node": 2, "duration": 340, "confidence": 0.91 } },
+    { "path": "segments.0.events.2.pressure", "equals": 0.5 },
+    { "path": "segments.0.events.6.extensions.some-other-vendor.seq", "equals": 7 },
+    { "path": "segments.0.extensions.some-other-vendor.arm", "equals": "B" },
+    { "path": "segments.0.events.3.t", "equals": 900 },
+    { "path": "segments.0.events.4.t", "equals": 900 },
+    { "path": "segments.0.events.5.t", "equals": 900 }
+  ],
+  "invariants": [
+    "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe",
+    "no_redaction_leak", "password_floor", "truncation_mirrors_capture_stopped",
+    "references_resolve", "unique_node_ids", "perf_frame"
+  ],
+  "expected_failures": {},
+  "checkpoints": [],
+  "notes": {
+    "provenance": "HAND-AUTHORED, and deliberately by a producer that does not exist: `recorder: {name: \"future-recorder\", version: \"3.1.0\"}` on a host called \"some-other-runtime\". Every unknown thing in it is a plausible v2.1 addition rather than a random key, because the question the fixture asks is what a CURRENT reader does with a FUTURE file, and a reader that copes with garbage may still drop a field it half-recognises.",
+    "what_this_fixture_is_for": "Spec §11's preservation rule — \"unknown fields and unknown event types MUST survive load → save SEMANTICALLY INTACT: every key and value preserved; formatting, key order and numeric spelling are free\" — plus §5.8's skip-unknown-events rule. The conformance runner's `semantic preservation` test loads this file through the tolerant profile and compares every top-level key against the parsed original, so a loader that whitelisted keys, or that defaulted anything INSIDE a segment, turns it red.",
+    "unknown_at_every_level": "Seven levels carry something the spec does not define, so a loader cannot pass by preserving only the easy ones: TOP (`recorder_build`, `eye_tracking`); inside a declared OBJECT (`viewport.orientation`); inside a session ARRAY element (`stylesheets[0].origin`); SEGMENT (`difficulty`); inside `initial_state` (`pointer_lock`); inside a DomNode (`intrinsic_size` on the img); on a known EVENT (`dom.text.reason`, `mouse.click.pressure`); and as whole unknown EVENT TYPES (`gaze.fixation`, `vendor.marker`). The last of these also carries an event-level `extensions` block, which §9 puts at session, segment AND event level and which nothing else in the corpus exercises at event level.",
+    "why_strict_valid_is_false_and_that_is_CORRECT": "§5.8 has two halves and they point opposite ways: players MUST skip event types they do not recognise, and producers MAY NOT emit vendor events as top-level unknown types (they belong in `extensions`). So this file is exactly what a conforming PLAYER must load and exactly what a conforming PRODUCER must not write, and the two profiles say so separately — strict names the two unknown types, tolerant loads the file clean with no warnings. A fixture that was strict-valid could not make that point. This is the corpus's only entry where `expect: accept` and `strict_valid: false` coexist without a defect being alleged.",
+    "unknown_FIELDS_are_not_errors": "Note what is NOT in strict_errors: none of the eleven unknown FIELDS. The validator type-checks declared fields and does not enumerate permitted keys, which is what makes §11's preservation rule implementable at all — a strict profile that rejected unknown keys would forbid the forward compatibility the same document requires.",
+    "the_tie_is_a_positive_claim": "Events 3, 4 and 5 all sit at t=900, and the three spot checks pin that. §7: \"within one array, array order is authoritative\" at equal `t`, so a tie is CONFORMANT and a player must replay dom.attr(class) → dom.attr(alt) → scroll.window in that order. `negative-unsorted-events.json` is the refusal case (a DECREASE), and without this tie an implementation could satisfy that fixture by rejecting ties too, with nothing to notice.",
+    "reference_checking_stops_at_unknown_types": "`gaze.fixation` carries `node: 2`, which happens to resolve — but the corpus reference check does not look at it, because NODE_REF_FIELDS is keyed by event type and an unknown type has no declared reference fields. Guessing that any field called `node` is a node id is exactly the heuristic that would misread `touches[].id`. So this fixture also pins the limit of that check.",
+    "perf_frame": "\"absolute\": origin 4000, ended_at_perf 6000, last observed moment 2000 on the wire clock. Non-zero and self-consistent, so this hand-authored entry pins the same reading the generated CH captures do — without depending on a re-cut to keep pinning it."
+  }
+}

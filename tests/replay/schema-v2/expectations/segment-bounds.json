@@ -1,0 +1,39 @@
+{
+  "fixture": "segment-bounds.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 2, "events_total": 3, "keyframes": 2, "continuations": 0,
+    "events_by_type": { "input.value": 2, "mouse.click": 1 }
+  },
+  "spot_checks": [
+    { "path": "end_reason", "equals": "unload" },
+    { "path": "ended_at_perf", "equals": 900 },
+    { "path": "segments.0.t_start", "equals": 0 },
+    { "path": "segments.0.t_dom_ready", "equals": 10 },
+    { "path": "segments.0.t_load", "equals": 20 },
+    { "path": "segments.0.t_end", "equals": 500 },
+    { "path": "segments.1.t_start", "equals": 500 },
+    { "path": "segments.1.t_dom_ready", "equals": null },
+    { "path": "segments.1.t_load", "equals": null },
+    { "path": "segments.1.t_end", "equals": null }
+  ],
+  "invariants": [
+    "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe",
+    "no_redaction_leak", "password_floor", "truncation_mirrors_capture_stopped",
+    "references_resolve", "unique_node_ids", "perf_frame"
+  ],
+  "expected_failures": {},
+  "checkpoints": [],
+  "notes": {
+    "provenance": "HAND-AUTHORED, and it had to be — both halves are shapes no CH capture can produce. THE OWED FIXTURE of T7 brief item 11(d) (T5.7 review I-1), plus the open-segment half of the spec Appendix's `aborted` row.",
+    "what_this_fixture_is_for": "SEGMENT BOUNDS ARE ONE CONTRACT WITH THREE READINGS, and until this file every fixture in the corpus masked all three. canonical-core states t_load === t_dom_ready on every segment; jspsych-full states t_load: null on all fourteen; every generated CH capture states t_load and nothing else. So three implementations agreed by coincidence rather than by rule, exactly the way the corpus masked the 0.1 ms placement problem until an authored checkpoint landed on the boundary.",
+    "the_three_readings_segment_0_splits": "Segment 0 states t_start 0, t_dom_ready 10 and t_load 20 — THREE DIFFERENT VALUES, which no other fixture does. Spec §3's origin is 'first non-null of t_load, t_dom_ready, t_start', so CH rebases by 20. The fork's player and its span bound use t_dom_ready ALONE, so they rebase by 10 (its tests/checkpoints.test.ts:263-273). The fork's segment-window bound puts t_start FIRST, so it bounds from 0 (:228-236). One keyframe, three origins, 20 ms apart — and a checkpoint placed between them lands on different events depending on which player reads it.",
+    "the_open_segment_segment_1_splits": "Segment 1 states ONLY t_start, and t_end: null. Two more splits in one segment: CH resolves the origin down §3's chain to t_start and places happily, while the fork — needing t_dom_ready — calls it unplaceable and THROWS; and CH bounds a null t_end by reconstructing round1(origin + durMs) while the fork throws on that too. §3 types t_end as 'null if segment open at recording end' and nothing in the corpus stated one before this, so the format's open-segment reading had no witness.",
+    "WHY_NO_CHECKPOINTS_ARE_AUTHORED_HERE": "DELIBERATE, AND IT IS THE BRIEF'S OWN RULE (item 11(d)): 'until r3 answers, do not author checkpoints onto a segment whose origin fields disagree.' A checkpoint here would not be a conformance oracle, it would be a bet on which reading wins — and the two executors would disagree about the same authored value, which is precisely the failure the provenance rule exists to prevent. What this fixture does instead is make the disagreement LOADABLE and LOCATABLE by both players: every claim below is wire-level and agreed, and the reconstruction-level ones are the open question. When r3 names the rule, the checkpoints go here and this note becomes the record of why they could not before.",
+    "end_reason_unload": "The last uninhabited value of §2's four-way enum (finished: canonical-core and the generated captures; aborted: aborted.json; null: permitted for a recording still in progress and stated by nothing). It belongs on this fixture because 'unload' is the reason a segment is open at recording end.",
+    "non_overlap_still_holds": "Segment 0 ends at 500 and segment 1's origin is 500 (its only stated field), so t_end ≤ next origin is satisfied at equality — the touching case every real recording produces. The validator SKIPS the comparison where t_end is null rather than inventing a bound, so a null t_end in the MIDDLE of a recording is currently unpoliced; noted rather than fixed, because §3's wording ('open at recording end') implies last-position and turning an implication into a check is r3's call.",
+    "perf_frame": "'undiscriminating' — the origin is 0, so both readings of ended_at_perf coincide. Deliberate: this fixture is about segment bounds, and a large perf origin would give it a second subject. negative-perf-frame.json and forward-compat.json are the hand-authored entries that pin the frame."
+  }
+}

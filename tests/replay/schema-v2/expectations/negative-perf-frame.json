@@ -1,0 +1,36 @@
+{
+  "fixture": "negative-perf-frame.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "absolute",
+  "counts": {
+    "segments": 1,
+    "events_total": 1,
+    "keyframes": 1,
+    "continuations": 0,
+    "events_by_type": {
+      "mouse.move": 1
+    }
+  },
+  "spot_checks": [],
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "no_redaction_leak",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "references_resolve",
+    "unique_node_ids"
+  ],
+  "expected_failures": {
+    "perf_frame": "but the last observed moment on the wire clock is 1000"
+  },
+  "checkpoints": [],
+  "notes": {
+    "defect": "The recording states a perf origin of 5000 and an end of 5100 — a 100 ms session — while its only segment runs to t_end 1000 on the wire clock. Under the absolute reading it declares, the recording ended 900 ms before its own last moment.",
+    "why_a_declaration_is_needed_at_all": "T3 Task-6 carry. Spec §7 puts every event `t` on the wire clock and says NOTHING about which clock `ended_at_perf` is on; §2 types it as `number | null` and stops. CH's serializer keeps it absolute by design; jsPsych-v1 states it on the wire clock and the converter copies that across. Both are strict-valid, and a consumer computing a duration gets two answers. So the expectations file declares the frame and the invariant holds the arithmetic to the declaration.",
+    "why_the_origin_is_5000_and_not_0": "A zero origin cannot discriminate the two readings — flipping canonical-core to relative leaves it deep-equal, which is how the ambiguity survived until T3 Task-6 went looking. Only a large non-zero origin makes the declaration mean anything, which is also why `perf_frame: \"undiscriminating\"` is a real value rather than a hedge: canonical-core has to say out loud that it cannot answer.",
+    "routed_to_r3": "§7 needs one sentence naming the frame. Whichever it names, one of the two producers changes and one of the corpus's declarations flips with it."
+  }
+}

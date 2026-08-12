@@ -1,0 +1,38 @@
+{
+  "fixture": "negative-index-mismatch.json",
+  "expect": "accept",
+  "strict_valid": false,
+  "strict_errors": [
+    "index (5) must equal array position 1"
+  ],
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 2,
+    "events_total": 1,
+    "keyframes": 1,
+    "continuations": 1,
+    "events_by_type": {
+      "dom.text": 1
+    }
+  },
+  "spot_checks": [],
+  "invariants": [
+    "time_sorted",
+    "first_dom_bearing_is_keyframe",
+    "no_redaction_leak",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "references_resolve",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {
+    "index_matches_position": "segment at position 1 has index 5"
+  },
+  "checkpoints": [],
+  "notes": {
+    "defect": "The second segment states index 5 at array position 1. Spec §7: \"index MUST equal the segment's array position. Strict validation rejects disagreement; tolerant loaders trust array order.\"",
+    "why_the_two_profiles_disagree_on_purpose": "This fixture loads. It has to: §11's whole argument is that recordings are unrepeatable participant data and a runtime refusal is data loss, so the tolerant profile trusts the array and carries on. The disagreement between the profiles is the point, and a fixture is the only way to state it — which is why `expect` (does it load) and `strict_valid` (does it conform) are separate axes in the expectations format.",
+    "the_second_segment_is_a_real_continuation": "It patches node 3 from the previous keyframe's span, so the file is otherwise a legal two-segment recording and the index is the only thing wrong with it."
+  }
+}

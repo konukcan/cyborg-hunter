@@ -1,0 +1,38 @@
+{
+  "fixture": "aborted.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "absolute",
+  "counts": {
+    "segments": 1, "events_total": 5, "keyframes": 1, "continuations": 0,
+    "events_by_type": {
+      "dom.add": 1, "mouse.click": 1, "mouse.down": 1, "mouse.move": 1, "mouse.up": 1
+    }
+  },
+  "spot_checks": [
+    { "path": "end_reason", "equals": "aborted" },
+    { "path": "truncated", "equals": false },
+    { "path": "recorder.name", "equals": "cyborg-hunter-replay" },
+    { "path": "host", "equals": null },
+    { "path": "segments.0.label", "equals": "q1" },
+    { "path": "segments.0.plugin", "equals": "ch:fixture" },
+    { "path": "segments.0.t_start", "equals": null },
+    { "path": "segments.0.t_dom_ready", "equals": null },
+    { "path": "segments.0.t_load", "equals": 1.4 },
+    { "path": "segments.0.t_end", "equals": 44.5 },
+    { "path": "extensions.cyborg-hunter.capture_stopped", "equals": false }
+  ],
+  "invariants": [
+    "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe",
+    "no_redaction_leak", "password_floor", "truncation_mirrors_capture_stopped",
+    "references_resolve", "unique_node_ids", "perf_frame"
+  ],
+  "checkpoints": [],
+  "notes": {
+    "provenance": "REAL capture via tools/gen-schema-v2-fixtures.mjs. The abort is genuine, not simulated: the generator calls neither endTrial() nor stopSession(), then serializes — which is what a closed tab leaves behind. serialize()'s `state.endReason || 'aborted'` is the line that turns an unstopped session into this file.",
+    "what_this_fixture_is_for": "`end_reason: \"aborted\"` had no fixture: canonical-core, jspsych-full and every other generated entry state \"finished\", so the enum's other inhabited value was never loaded by either player. §2 types it as a four-way union and §11 asks strict validation to check every declared field; an enum with one witness is a check nobody has watched discriminate.",
+    "t_end_is_NOT_null_and_that_is_a_finding": "THE SPEC APPENDIX ASKS THIS FIXTURE FOR 'end_reason aborted, OPEN SEGMENT (t_end: null)' AND CH CANNOT PRODUCE THE SECOND HALF. §3 types t_end as 'null if segment open at recording end', but src/replay/serializer.js closes every segment deliberately — `t_end: wireT(trial.tEnd != null ? trial.tEnd : lastEventT, s0)` — so a segment still open at serialization time is written as ending at its last observed event (here 44.5, the dom.add). The spot check above pins the non-null value rather than papering over it, and `segment-bounds.json` carries the `t_end: null` case hand-authored, because the format's open-segment reading needs a witness and CH is not able to be one. ROUTED TO r3: either §3 gains a sentence permitting a producer to close an open segment at its last event (and CH is conforming), or it does not (and CH's serializer changes). The two fixtures together are what makes that a decision rather than an oversight.",
+    "no_redaction_leak": "Holds vacuously — nothing here is redacted.",
+    "checkpoints": "None. The claim is about top-level lifecycle fields, which the checkpoint format has no prop for."
+  }
+}

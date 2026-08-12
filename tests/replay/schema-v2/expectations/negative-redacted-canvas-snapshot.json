@@ -1,0 +1,40 @@
+{
+  "fixture": "negative-redacted-canvas-snapshot.json",
+  "expect": "accept",
+  "strict_valid": false,
+  "strict_errors": [
+    "canvas.snapshot has no redacted variant"
+  ],
+  "perf_frame": "undiscriminating",
+  "counts": {
+    "segments": 1,
+    "events_total": 1,
+    "keyframes": 1,
+    "continuations": 0,
+    "events_by_type": {
+      "canvas.snapshot": 1
+    }
+  },
+  "spot_checks": [],
+  "expect_leak": true,
+  "invariants": [
+    "time_sorted",
+    "index_matches_position",
+    "first_dom_bearing_is_keyframe",
+    "password_floor",
+    "truncation_mirrors_capture_stopped",
+    "references_resolve",
+    "unique_node_ids",
+    "perf_frame"
+  ],
+  "expected_failures": {
+    "no_redaction_leak": "no redacted variant defined for \"canvas.snapshot\""
+  },
+  "checkpoints": [],
+  "notes": {
+    "defect": "A canvas.snapshot claiming `redacted: true` AND keeping its data_url. Spec §5.2 defines redacted variants for seven event types; canvas.snapshot is not one of them.",
+    "why_the_marker_is_worse_than_no_marker": "Nothing in canvas.snapshot's check strips content, so the marker is a claim no layer can honour: the event says the pixels were withheld while carrying them. A reader filtering on `redacted` to find what was protected would skip precisely this event. The floor is an ALLOWLIST for exactly this reason — a denylist of known-bad names only catches the leaks someone thought to name, and every new event type would silently opt out of §8 until the list grew.",
+    "expect_leak": "Declared, because the ALWAYS_ON privacy scan is expected to CATCH this rather than pass. Without the declaration the runner would fail the suite on a fixture doing its job; with it, the scan is asserted to fire and to name the type.",
+    "also_caught_by_strict": "Both layers refuse it, from different directions: strict refuses the marker on a type outside REDACTABLE_TYPES, the corpus scan refuses an event claiming a variant that REDACTED_SHAPES does not define. The drift guard in corpus-invariants.test.js is what keeps those two tables naming the same seven types."
+  }
+}

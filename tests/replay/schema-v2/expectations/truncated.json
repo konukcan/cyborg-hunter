@@ -1,0 +1,33 @@
+{
+  "fixture": "truncated.json",
+  "expect": "accept",
+  "strict_valid": true,
+  "perf_frame": "absolute",
+  "counts": {
+    "segments": 1, "events_total": 13, "keyframes": 1, "continuations": 0,
+    "events_by_type": { "dom.add": 12, "recording.capture_stopped": 1 }
+  },
+  "spot_checks": [
+    { "path": "truncated", "equals": true },
+    { "path": "end_reason", "equals": "finished" },
+    { "path": "extensions.cyborg-hunter.capture_stopped", "equals": true },
+    { "path": "segments.0.events.12",
+      "equals": { "type": "recording.capture_stopped", "t": 210.3, "reason": "buffer_limit",
+                  "extensions": { "cyborg-hunter": { "limit_events": 12 } } } }
+  ],
+  "invariants": [
+    "time_sorted", "index_matches_position", "first_dom_bearing_is_keyframe",
+    "no_redaction_leak", "password_floor", "truncation_mirrors_capture_stopped",
+    "references_resolve", "unique_node_ids", "perf_frame"
+  ],
+  "checkpoints": [],
+  "notes": {
+    "provenance": "REAL capture via tools/gen-schema-v2-fixtures.mjs, with `maxEventsPerTrial: 12` on attach(). The generator then drove 24 DOM insertions past that cap, so the stop lands MID-SEGMENT rather than at the point the interaction happened to end — where 'capture stopped' and 'the recording finished' would look the same to a player.",
+    "what_this_fixture_is_for": "§5.7's two halves, in one file: the standard `recording.capture_stopped` event and the top-level `truncated` flag that mirrors it. Players MUST surface truncation rather than presenting a partial recording as complete, and before this fixture no corpus entry set either — so 'the player surfaces truncation' was a sentence in §12 with nothing to load.",
+    "the_mirror_rule": "The truncation_mirrors_capture_stopped invariant runs on EVERY fixture in the corpus, not just this one, and it is bidirectional: a flag with no event leaves a player reporting truncation it cannot locate, and an event with no flag leaves a flag-only reader presenting a partial recording as complete. This is the fixture where it fires in the affirmative; the negative-* entries are where each half is shown missing. Note that end_reason stays \"finished\": the SESSION ended normally, the CAPTURE did not, and conflating them is exactly what the two fields exist to prevent.",
+    "vendor_detail": "The event's `extensions['cyborg-hunter'].limit_events` says WHICH cap fired — a vendor detail by §9, ignorable by any player, and the reason the event's `reason` field stays the spec's coarse \"buffer_limit\". The whole event is spot-checked as one object so the vendor block cannot quietly disappear into an unrecorded default.",
+    "what_a_reader_should_NOT_conclude": "The 12 dom.add events are not 'the segment', they are what fitted. §13's warning applies with unusual force to a truncated recording: absence of evidence after t=210.3 is absence of CAPTURE, and the mirror is the only thing in the file that says so.",
+    "no_redaction_leak": "Holds vacuously — nothing here is redacted.",
+    "checkpoints": "None. A reconstruction of a truncated recording is well-defined up to the stop, but what this fixture asserts is the stop itself, which no prop reads."
+  }
+}

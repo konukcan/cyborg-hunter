@@ -1,0 +1,413 @@
+{
+  "schema_version": 2,
+  "recorder": {
+    "name": "cyborg-hunter-replay",
+    "version": "0.7.5"
+  },
+  "host": null,
+  "participant_id": "P-FIXTURE",
+  "recording_started_at": "2026-08-12T11:38:43.964Z",
+  "recording_started_at_perf": 24.40000009536743,
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.7632.6 Safari/537.36",
+  "viewport": {
+    "w": 1000,
+    "h": 700,
+    "dpr": 1,
+    "scale": 1,
+    "offset_x": 0,
+    "offset_y": 0
+  },
+  "observed_root": "#stage",
+  "stylesheets": [],
+  "stylesheet_events": [],
+  "viewport_changes": [],
+  "rng": null,
+  "rng_calls": null,
+  "ended_at_perf": 467.7999999523163,
+  "end_reason": "finished",
+  "truncated": true,
+  "extensions": {
+    "cyborg-hunter": {
+      "replay_version": "0.7.5",
+      "tier": "dom",
+      "keys": "full",
+      "viewport_client": {
+        "w": 1000,
+        "h": 700
+      },
+      "ch_version": null,
+      "preset": null,
+      "scoring": null,
+      "session_signals": null,
+      "guard_violations": [],
+      "capture_failures": [],
+      "capture_stopped": true,
+      "inherited_redaction_taint": false
+    }
+  },
+  "segments": [
+    {
+      "index": 0,
+      "label": "q1",
+      "plugin": "ch:fixture",
+      "t_start": null,
+      "t_dom_ready": null,
+      "t_load": 1.4,
+      "t_end": 443.4,
+      "initial_dom": {
+        "id": 1,
+        "kind": "element",
+        "tag": "div",
+        "attrs": {
+          "id": "stage"
+        },
+        "children": [
+          {
+            "id": 2,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 3,
+            "kind": "element",
+            "tag": "h2",
+            "attrs": {
+              "id": "prompt"
+            },
+            "children": [
+              {
+                "id": 4,
+                "kind": "text",
+                "text": "Question 1"
+              }
+            ]
+          },
+          {
+            "id": 5,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 6,
+            "kind": "element",
+            "tag": "p",
+            "attrs": {
+              "id": "body"
+            },
+            "children": [
+              {
+                "id": 7,
+                "kind": "text",
+                "text": "Pick one."
+              }
+            ]
+          },
+          {
+            "id": 8,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 9,
+            "kind": "element",
+            "tag": "button",
+            "attrs": {
+              "id": "a",
+              "type": "button"
+            },
+            "children": [
+              {
+                "id": 10,
+                "kind": "text",
+                "text": "Alpha"
+              }
+            ]
+          },
+          {
+            "id": 11,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 12,
+            "kind": "element",
+            "tag": "button",
+            "attrs": {
+              "id": "b",
+              "type": "button"
+            },
+            "children": [
+              {
+                "id": 13,
+                "kind": "text",
+                "text": "Beta"
+              }
+            ]
+          },
+          {
+            "id": 14,
+            "kind": "text",
+            "text": "\n  "
+          },
+          {
+            "id": 15,
+            "kind": "element",
+            "tag": "ul",
+            "attrs": {
+              "id": "log"
+            },
+            "children": []
+          },
+          {
+            "id": 16,
+            "kind": "text",
+            "text": "\n"
+          }
+        ]
+      },
+      "initial_state": null,
+      "events": [
+        {
+          "type": "dom.add",
+          "t": 10.4,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 17,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 18,
+                "kind": "text",
+                "text": "row 0"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 27,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 19,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 20,
+                "kind": "text",
+                "text": "row 1"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 43.5,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 21,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 22,
+                "kind": "text",
+                "text": "row 2"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 60.1,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 23,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 24,
+                "kind": "text",
+                "text": "row 3"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 76.7,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 25,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 26,
+                "kind": "text",
+                "text": "row 4"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 93.8,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 27,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 28,
+                "kind": "text",
+                "text": "row 5"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 110.2,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 29,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 30,
+                "kind": "text",
+                "text": "row 6"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 126.8,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 31,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 32,
+                "kind": "text",
+                "text": "row 7"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 143.6,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 33,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 34,
+                "kind": "text",
+                "text": "row 8"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 160.2,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 35,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 36,
+                "kind": "text",
+                "text": "row 9"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 176.7,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 37,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 38,
+                "kind": "text",
+                "text": "row 10"
+              }
+            ]
+          }
+        },
+        {
+          "type": "dom.add",
+          "t": 193.9,
+          "parent": 15,
+          "before": null,
+          "node": {
+            "id": 39,
+            "kind": "element",
+            "tag": "li",
+            "attrs": {},
+            "children": [
+              {
+                "id": 40,
+                "kind": "text",
+                "text": "row 11"
+              }
+            ]
+          }
+        },
+        {
+          "type": "recording.capture_stopped",
+          "t": 210.3,
+          "reason": "buffer_limit",
+          "extensions": {
+            "cyborg-hunter": {
+              "limit_events": 12
+            }
+          }
+        }
+      ],
+      "host_data": null,
+      "extensions": null
+    }
+  ]
+}
