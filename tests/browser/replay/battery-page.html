@@ -6,9 +6,18 @@
 <style>
   /* Deliberately hostile layout: UA-default body margin (8px) stays — the
      reconstruction must reproduce it, not strip it. */
-  body { height: 2400px; position: relative; font-family: system-ui, sans-serif; }
-  .target { position: absolute; width: 80px; height: 30px; background: #1976d2;
-            color: #fff; border: 0; font-size: 13px; }
+  body { height: 2600px; position: relative; font-family: system-ui, sans-serif; }
+  /* ENGINE-STABLE TARGET BOX. The battery replays a FROZEN recording made on
+     one engine inside all three, and the §8 rect check compares the recorded
+     box against the replayed one at ±3px/edge. A UA-default <button> is not
+     the same box on chromium, firefox and webkit (their default padding and
+     border differ), so the literal coordinate pins would measure the UA
+     stylesheet rather than the reconstruction. border-box + explicit padding,
+     border and appearance removes every UA-supplied term from the box. */
+  .target { position: absolute; box-sizing: border-box; width: 80px; height: 30px;
+            padding: 0; margin: 0; border: 0; background: #1976d2; color: #fff;
+            font: 13px/30px monospace; appearance: none; -webkit-appearance: none;
+            border-radius: 0; }
   #t-base   { left: 200px; top: 150px; }
   #t-scroll { left: 250px; top: 900px; }
   #t-fixed  { position: fixed; left: 500px; top: 60px; width: 90px; height: 28px;
@@ -21,13 +30,18 @@
                 transform: translate(60px, 25px); width: 200px; height: 100px; }
   #t-trans  { left: 0; top: 0; }
   #rot-wrap { position: absolute; left: 620px; top: 1700px; }
-  #t-rot    { position: static; transform: rotate(30deg); width: 100px; height: 40px; }
+  #t-rot    { position: static; transform: rotate(30deg); width: 100px; height: 40px;
+              line-height: 40px; }
+  #flick-zone { position: absolute; left: 300px; top: 1900px; }
+  #t-flick  { position: static; width: 120px; height: 34px; line-height: 34px;
+              background: #00695c; }
   #center-wrap { max-width: 400px; margin: 0 auto; position: absolute;
                  left: 0; right: 0; top: 2000px; height: 60px; }
   #t-center { left: 160px; top: 10px; }
   #table-zone { position: absolute; left: 60px; top: 2150px; }
   #dup-zone { position: absolute; left: 400px; top: 2150px; }
   #secret-zone { position: absolute; left: 60px; top: 2300px; }
+  #nest-zone { position: absolute; left: 700px; top: 2300px; }
   #frame-zone { position: absolute; left: 700px; top: 150px; }
 </style>
 </head>
@@ -38,10 +52,13 @@
   <div id="scrollbox"><div class="inner"><button class="target" id="t-inner">inner</button></div></div>
   <div id="trans-wrap"><button class="target" id="t-trans">trans</button></div>
   <div id="rot-wrap"><button class="target" id="t-rot">rot</button></div>
+  <div id="flick-zone"><button class="target" id="t-flick">flick</button></div>
   <div id="center-wrap"><button class="target" id="t-center">center</button></div>
 
   <!-- parser-normalization case: rows appended DIRECTLY under <table> at
-       runtime; reconstruction reparses with an inserted <tbody> -->
+       runtime. v1 reparsed serialized HTML and had to survive the parser's
+       inserted <tbody>; v2 never parses (§4 is a node tree), so the claim is
+       the STRONGER one — the shape arrives exactly as recorded. -->
   <div id="table-zone"><table id="the-table" border="1"></table></div>
 
   <!-- comment siblings shift raw childNodes indices vs the serialized tree -->
@@ -57,6 +74,11 @@
     <input id="secret" data-ch-redact placeholder="do not record me" style="width:180px">
   </div>
 
+  <!-- NESTED FORMS: unreachable from markup (the parser drops the inner
+       <form>), so it is built by script below and exists only in the live DOM.
+       A serialize→reparse round trip cannot carry it; a node tree can. -->
+  <div id="nest-zone"></div>
+
   <!-- duplicate-id INPUTS: value restore must hit the right one -->
   <div id="dup-input-zone" style="position:absolute;left:400px;top:2300px">
     <input id="dup-in" placeholder="first" style="width:120px">
@@ -64,7 +86,7 @@
   </div>
 
   <!-- shadow DOM: content invisible to serialization; host must be flagged -->
-  <div id="shadow-zone" style="position:absolute;left:60px;top:2360px">
+  <div id="shadow-zone" style="position:absolute;left:60px;top:2400px">
     <div id="shadow-host" style="display:inline-block;width:140px;height:36px"></div>
   </div>
 
@@ -73,19 +95,42 @@
 
   <script src="../../../dist/cyborg-hunter-replay.js"></script>
   <script>
-    // Shadow content set up before recording starts.
+    // Shadow content and the nested-form shape are set up BEFORE recording
+    // starts, so both ride in the keyframe.
     (function () {
       var host = document.getElementById('shadow-host');
       var root = host.attachShadow({ mode: 'open' });
       root.innerHTML = '<button id="shadow-btn" style="width:120px;height:30px">shadow</button>';
+
+      // <form><form><button></form></form> — legal in the DOM, impossible from
+      // markup. Built with the DOM API so the recorder's node tree carries it.
+      var outer = document.createElement('form');
+      outer.id = 'outer-form';
+      outer.setAttribute('action', 'javascript:void 0');
+      var inner = document.createElement('form');
+      inner.id = 'inner-form';
+      inner.setAttribute('action', 'javascript:void 0');
+      var btn = document.createElement('button');
+      btn.id = 't-nested';
+      btn.className = 'target';
+      btn.setAttribute('type', 'button');
+      btn.setAttribute('style', 'position:static');
+      btn.textContent = 'nested';
+      inner.appendChild(btn);
+      outer.appendChild(inner);
+      document.getElementById('nest-zone').appendChild(outer);
     })();
 
     window.BAT = {
-      start: function () {
-        window.__rec = window.CyborgHunterReplay.attach({
+      start: function (cfg) {
+        var base = {
           participantId: 'BAT-1', tier: 'dom', autoSave: { mode: 'none' },
           redactSelector: '[data-ch-redact]', root: document.body
-        });
+        };
+        for (var k in (cfg || {})) {
+          if (Object.prototype.hasOwnProperty.call(cfg, k)) base[k] = cfg[k];
+        }
+        window.__rec = window.CyborgHunterReplay.attach(base);
         window.__rec.startSession();
       },
       trial: function (id) {
@@ -102,13 +147,79 @@
         var td = document.createElement('td');
         var btn = document.createElement('button');
         btn.id = 't-row';
+        btn.className = 'target';
+        btn.setAttribute('style', 'position:static');
         btn.textContent = 'row';
         td.appendChild(btn);
         tr.appendChild(td);
-        // Direct table > tr append — the parser will insert <tbody> when the
-        // serialized snapshot/patch is reparsed in the viewer.
+        // Direct table > tr append — the shape a serialize/reparse round trip
+        // normalises by inserting <tbody>. The v2 node tree must carry it as
+        // the live DOM has it.
         document.getElementById('the-table').appendChild(tr);
       },
+
+      // ── Same-task drivers ─────────────────────────────────────────────────
+      // Playwright's own `click()` and `setViewportSize()` each return to the
+      // event loop, which lets the browser dispatch the scroll/resize
+      // notification the recorder coalesces on. These dispatch the interaction
+      // in the SAME TASK as the state change, which is the A1 case: an
+      // interaction recorded BEFORE the notification that describes the state
+      // it happened under. The geometry is real (`getBoundingClientRect` on the
+      // live element); only the event object is synthetic.
+      clickAt: function (id) {
+        var el = document.getElementById(id);
+        var r = el.getBoundingClientRect();
+        var cx = Math.round(r.left + r.width / 2);
+        var cy = Math.round(r.top + r.height / 2);
+        ['mousedown', 'mouseup', 'click'].forEach(function (type) {
+          el.dispatchEvent(new MouseEvent(type, {
+            bubbles: true, cancelable: true, view: window,
+            clientX: cx, clientY: cy, button: 0
+          }));
+        });
+        return { x: cx, y: cy, rect: { x: r.left, y: r.top, w: r.width, h: r.height } };
+      },
+      // A flick: several scroll positions and then the click, all in one task,
+      // so not one scroll event has dispatched when the click is recorded.
+      flickThenClick: function (id, ys) {
+        for (var i = 0; i < ys.length; i++) window.scrollTo(0, ys[i]);
+        return window.BAT.clickAt(id);
+      },
+      scrollElementThenClick: function (boxId, top, id) {
+        document.getElementById(boxId).scrollTop = top;
+        return window.BAT.clickAt(id);
+      },
+
+      // ── Zoom / pinch instrumentation (DECLARED STUB) ──────────────────────
+      // Playwright cannot drive real browser zoom or a pinch gesture on a
+      // desktop engine. `devicePixelRatio` and `visualViewport` are exactly the
+      // two globals `cameraBlock()` reads (capture-trace.js:282-297), and they
+      // are read live in each interaction's own handler, so shadowing them with
+      // own properties reproduces the recorded wire values a zoomed/pinched
+      // participant would produce. Everything else in the scenario is real: the
+      // layout, the rects, the client coordinates.
+      pinch: function (scale, ox, oy) {
+        var vv = window.visualViewport;
+        Object.defineProperty(window, 'visualViewport', {
+          configurable: true,
+          value: {
+            scale: scale, offsetLeft: ox, offsetTop: oy,
+            width: (vv ? vv.width : window.innerWidth) / scale,
+            height: (vv ? vv.height : window.innerHeight) / scale,
+            addEventListener: function () {}, removeEventListener: function () {}
+          }
+        });
+      },
+      unpinch: function () {
+        delete window.visualViewport;
+      },
+      setDpr: function (v) {
+        Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: v });
+      },
+      resetDpr: function () {
+        delete window.devicePixelRatio;
+      },
+
       finish: function () {
         window.__rec.endTrial();
         window.__rec.stopSession('finished');

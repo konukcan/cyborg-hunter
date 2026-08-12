@@ -1,0 +1,1911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cyborg Hunter Report</title>
+  <style>
+    :root {
+      --bg: #fafafa; --surface: #fff; --ink: #1a1814;
+      --dim: #706a5c; --line: #e2ddd1;
+      --hard: #d32f2f; --soft: #f57c00; --clean: #388e3c;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+           color: var(--ink); background: var(--bg); display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+    .topbar { display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+              background: var(--surface); border-bottom: 1px solid var(--line); }
+    .topbar h1 { font-size: 18px; font-weight: 600; }
+    .topbar .meta { color: var(--dim); font-size: 13px; flex: 1; }
+    .topbar button { padding: 6px 12px; border: 1px solid var(--line); background: var(--surface);
+                     color: var(--ink); border-radius: 4px; cursor: pointer; font-size: 13px; }
+    .topbar button:hover { background: var(--bg); }
+    .layout { display: grid; grid-template-columns: 360px 1fr; height: 100%; overflow: hidden; }
+    .rail { background: var(--surface); border-right: 1px solid var(--line); overflow-y: auto; }
+    .detail { overflow-y: auto; padding: 20px; }
+    .note { color: var(--dim); font-style: italic; font-size: 13px; }
+    .mono {
+      font: 13px/1.3 ui-monospace, SFMono-Regular, 'IBM Plex Mono', monospace;
+      font-variant-numeric: tabular-nums;
+    }
+    [hidden] { display: none !important; }
+
+    /* Rail layout — fixed top band, scrolling middle, sticky footer */
+    .rail { display: flex; flex-direction: column; }
+    .rail-top {
+      padding: 12px; border-bottom: 1px solid var(--line);
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .rail-list { flex: 1; overflow-y: auto; }
+    .rail-footer {
+      padding: 10px 12px; border-top: 1px solid var(--line);
+      background: var(--surface); font-size: 12px;
+    }
+    .totals-title { color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+    .totals-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+    .totals-row .count { margin-left: auto; }
+
+    /* Search */
+    .search-wrap input {
+      width: 100%; padding: 6px 8px; border: 1px solid var(--line);
+      border-radius: 4px; font-size: 13px; background: var(--bg);
+      color: var(--ink);
+    }
+    .search-wrap input:focus { outline: 1px solid var(--ink); border-color: var(--ink); }
+
+    /* Filter chips */
+    .filter-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+    .filter-chip {
+      padding: 3px 8px; border: 1px solid var(--line); background: var(--surface);
+      color: var(--ink); border-radius: 12px; cursor: pointer; font-size: 12px;
+    }
+    .filter-chip:hover { background: var(--bg); }
+    .filter-chip.active {
+      background: var(--ink); color: var(--surface); border-color: var(--ink);
+    }
+
+    /* Sort selector */
+    .sort-wrap { font-size: 12px; color: var(--dim); }
+    .sort-wrap select {
+      background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+      border-radius: 4px; padding: 2px 4px; font-size: 12px;
+    }
+
+    /* Cohort rows */
+    .cohort-row {
+      padding: 10px 12px; border-bottom: 1px solid var(--line);
+      cursor: pointer;
+    }
+    .cohort-row:hover { background: var(--bg); }
+    .cohort-row.selected {
+      border-left: 4px solid var(--ink);
+      padding-left: 8px;  /* compensate for the 4px left border */
+      background: var(--bg);
+    }
+    .cohort-row-top { display: flex; align-items: center; gap: 8px; }
+    .cohort-row-top .pid {
+      flex: 1; min-width: 0; color: var(--ink);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .cohort-row-top .score { color: var(--dim); flex-shrink: 0; }
+    .cohort-row.selected .cohort-row-top .score { color: var(--ink); font-weight: 600; }
+    .cohort-row-bot {
+      display: flex; align-items: flex-start; gap: 8px;
+      margin-top: 4px;
+    }
+    .reason-excerpt {
+      flex: 1; color: var(--dim); font-size: 12px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* Tier dot — small filled circle, color from tier */
+    .tier-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .tier-dot[data-tier="hard"]  { background: var(--hard); }
+    .tier-dot[data-tier="soft"]  { background: var(--soft); }
+    .tier-dot[data-tier="clean"] { background: var(--clean); }
+
+    /* Tier badge — small pill, filled for hard/soft, outline for clean */
+    .tier-badge {
+      font-size: 10px; padding: 2px 6px; border-radius: 3px;
+      font-weight: 600; letter-spacing: 0.04em; flex-shrink: 0;
+    }
+    .tier-badge[data-tier="hard"]  { background: var(--hard);  color: white; }
+    .tier-badge[data-tier="soft"]  { background: var(--soft);  color: white; }
+    .tier-badge[data-tier="clean"] {
+      background: transparent; color: var(--dim);
+      border: 1px solid var(--line); font-weight: 400;
+    }
+
+    /* Detail pane base */
+    .detail .participant { max-width: 800px; }
+
+    /* Empty-state hint when filter+search combine to hide every row.
+       Shown by reconcileSelection() via [data-empty="true"] on .detail. */
+    .detail[data-empty="true"]::before {
+      content: "No participants match. Try clearing the filter or search.";
+      display: block;
+      padding: 40px 0;
+      color: var(--dim);
+      font-size: 14px;
+      text-align: center;
+    }
+
+    /* Filter chip selectors — pure CSS hiding via body[data-filter] attribute.
+       JS just flips the data attribute; the actual hiding lives here so
+       interactivity degrades gracefully (rows still show with JS disabled). */
+    body[data-filter="hard"]  .cohort-row:not([data-tier="hard"])  { display: none; }
+    body[data-filter="soft"]  .cohort-row:not([data-tier="soft"])  { display: none; }
+    body[data-filter="clean"] .cohort-row:not([data-tier="clean"]) { display: none; }
+    .cohort-row.search-hidden { display: none; }
+
+    /* Header strip */
+    .detail-header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 12px; margin-bottom: 16px;
+    }
+    .detail-header-top { display: flex; align-items: center; gap: 12px; }
+    .detail-header-top .pid-full { flex: 1; font-size: 13px; color: var(--ink); }
+    .detail-header-top .score-big { font-size: 36px; font-weight: 600; color: var(--ink); }
+    .detail-header-sub { color: var(--dim); font-size: 12px; margin-top: 4px; }
+
+    /* Tier pill — bigger version of the tier badge in the rail */
+    .tier-pill {
+      font-size: 11px; padding: 3px 8px; border-radius: 4px;
+      font-weight: 600; letter-spacing: 0.04em;
+    }
+    .tier-pill[data-tier="hard"]  { background: var(--hard); color: white; }
+    .tier-pill[data-tier="soft"]  { background: var(--soft); color: white; }
+    .tier-pill[data-tier="clean"] {
+      background: transparent; color: var(--dim);
+      border: 1px solid var(--line); font-weight: 400;
+    }
+
+    /* Signal grid — colour-coded tiles, one per tracked signal in SIGNALS taxonomy.
+       Every tile renders for every participant (hits and misses), so the layout
+       is stable across panes. Only firing signals light up; misses fade to muted. */
+    .signal-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: 6px;
+      margin: 12px 0 16px;
+    }
+    .signal-tile {
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      background: transparent;
+      color: var(--dim);
+      font-variant-numeric: tabular-nums;
+      cursor: help;
+    }
+    .signal-tile.tone-critical { color: var(--hard); border-color: var(--hard); background: rgba(211, 47,  47, 0.04); }
+    .signal-tile.tone-warn     { color: var(--soft); border-color: var(--soft); background: rgba(245, 124,  0, 0.04); }
+    .signal-tile.tone-muted    { color: var(--ink);  border-color: var(--ink);  background: rgba(26,  24, 20, 0.03); }
+    .signal-tile.tone-zero     { color: #b8b1a0; border-color: #ebe6d8; background: transparent; }
+    .signal-value { font-size: 18px; font-weight: 700; line-height: 1; }
+    .signal-label { font-size: 10px; letter-spacing: 0.4px; text-transform: uppercase; opacity: 0.85; }
+
+    /* Score breakdown — horizontal flex of weighted contributions to t.score,
+       ending in "Total: N". Only non-zero terms render; the bar widths are
+       proportional to each term's share of the total. */
+    .score-breakdown {
+      display: flex; flex-wrap: wrap; gap: 10px 16px;
+      align-items: center; margin-bottom: 16px;
+    }
+    .score-term {
+      display: inline-flex; gap: 6px; align-items: center;
+      font-size: 12px;
+    }
+    .score-term .label { color: var(--dim); }
+    .score-term .contrib { color: var(--ink); }
+    .score-term .bar {
+      height: 6px; background: var(--ink); opacity: 0.4; border-radius: 3px;
+    }
+    .score-total { margin-left: auto; font-weight: 600; color: var(--ink); }
+
+    /* Reason pull-quote — warm-tinted block-quote with a left rule. The bg
+       color is picked by hand from --bg's family rather than computed, so
+       it shifts cleanly when the palette changes. */
+    .reason {
+      border-left: 3px solid var(--ink);
+      background: #f5f1e8;
+      padding: 10px 14px;
+      margin: 0 0 16px;
+      font-size: 14px;
+      color: var(--ink);
+    }
+
+    /* Session-level signals — small cards in a responsive grid. The grid
+       collapses from 3 cells to 1 in narrow detail panes via auto-fit. */
+    .section-heading {
+      font-size: 13px; color: var(--dim);
+      text-transform: uppercase; letter-spacing: 0.04em;
+      margin: 18px 0 8px;
+    }
+    .session-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .sig-cell {
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: 6px; padding: 10px;
+    }
+    .sig-cell-title {
+      font-size: 11px; color: var(--dim);
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .sig-cell ul { list-style: none; margin-top: 4px; font-size: 12px; padding: 0; }
+    .sig-cell li { padding: 2px 0; word-break: break-word; }
+    .muted { color: var(--dim); }
+
+    /* Paste evidence — list of expandable entries */
+    .paste-list { display: flex; flex-direction: column; gap: 6px; }
+    .paste-entry {
+      display: flex; gap: 8px; align-items: flex-start;
+    }
+    .paste-toggle {
+      background: none; border: none; color: var(--dim);
+      cursor: pointer; font-size: 14px; line-height: 1.2;
+      padding: 0 4px; flex-shrink: 0;
+    }
+    .paste-toggle:disabled { cursor: default; }
+    .paste-toggle:hover:not(:disabled) { color: var(--ink); }
+    .paste-trial { color: var(--dim); flex-shrink: 0; }
+    .paste-preview, .paste-full {
+      background: #f5f1e8;  /* warm tinted bg, same as the reason pull-quote */
+      padding: 4px 8px; border-radius: 3px;
+      font-size: 12px;
+      word-break: break-word; white-space: pre-wrap;
+      flex: 1; min-width: 0;  /* allow flex item to shrink and wrap correctly */
+    }
+    /* When expanded by Task 11's JS: hide preview, show full text */
+    .paste-entry.expanded .paste-preview { display: none; }
+    .paste-entry:not(.expanded) .paste-full { display: none; }
+    .paste-overflow { font-size: 12px; margin-top: 4px; }
+
+    /* Image blocks — wrapper containers so a missing PNG hides its heading too.
+       Each .image-block contains a <h4 class="section-heading"> + a zoomable
+       <a> wrapping an <img>; if the image fails to load, onerror hides the
+       whole block (no orphan heading). */
+    .image-block { margin: 18px 0; }
+    .image-block:first-of-type { margin-top: 0; }  /* tighten when image is the first thing in the pane */
+    /* Override .section-heading's default top margin inside .image-block, so
+       the wrapper's margin: 18px 0 doesn't stack with the heading's own margin. */
+    .image-block .section-heading { margin: 0 0 6px; }
+    .detail img {
+      max-width: 100%; display: block; margin: 6px 0 0;
+      border: 1px solid var(--line); border-radius: 4px;
+    }
+    .zoomable {
+      display: block; cursor: zoom-in;
+      text-decoration: none;
+    }
+    .zoomable:hover img { opacity: 0.92; }
+
+    /* Lightbox overlay — hidden by default; Task 11's JS adds .open to show it. */
+    .lightbox-overlay {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85);
+      z-index: 1000; display: none;
+      align-items: center; justify-content: center;
+      cursor: zoom-out; padding: 20px;
+    }
+    .lightbox-overlay.open { display: flex; }
+    .lightbox-overlay img {
+      max-width: 100%; max-height: 100%; border-radius: 4px;
+    }
+    .lightbox-close {
+      position: fixed; top: 16px; right: 24px;
+      color: white; font-size: 32px; cursor: pointer;
+      background: rgba(0, 0, 0, 0.4); border-radius: 50%;
+      width: 40px; height: 40px;
+      display: flex; align-items: center; justify-content: center; line-height: 1;
+    }
+
+    /* Legend modal — opens via Task 11's JS by removing the [hidden] attribute. */
+    #legend-modal {
+      position: fixed; inset: 0; z-index: 900;
+    }
+    .modal-backdrop {
+      position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45);
+    }
+    .modal-card {
+      position: relative;
+      background: var(--surface);
+      max-width: 560px; max-height: calc(100vh - 16vh);
+      margin: 8vh auto 0;
+      padding: 20px 24px;
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+      overflow-y: auto;
+    }
+    .modal-close {
+      position: absolute; top: 8px; right: 12px;
+      background: none; border: none;
+      font-size: 24px; line-height: 1;
+      cursor: pointer; color: var(--dim);
+      padding: 4px 8px;
+    }
+    .modal-close:hover { color: var(--ink); }
+    .modal-card h3 {
+      font-size: 16px; margin-bottom: 12px;
+    }
+    .legend-table {
+      width: 100%; border-collapse: collapse;
+      font-size: 13px;
+    }
+    .legend-table th, .legend-table td {
+      text-align: left; padding: 6px 8px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    .legend-table th {
+      color: var(--dim); font-weight: 500; font-size: 12px;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .legend-table td:first-child {
+      color: var(--ink); font-weight: 500;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body data-filter="all">
+  <header class="topbar">
+    <h1>Cyborg Hunter Report</h1>
+    <span class="meta">1 participants &middot; v0.7.1</span>
+    <button class="legend-btn" type="button" aria-haspopup="dialog" aria-controls="legend-modal">Legend &#9432;</button>
+  </header>
+  <div class="layout">
+    <aside class="rail"><div class="rail-top">
+  <div class="search-wrap">
+    <input type="search" placeholder="Search (press / to focus)" aria-label="Search participants">
+  </div>
+  <div class="filter-chips">
+    <button class="filter-chip active" data-filter="all">All 1</button>
+    <button class="filter-chip" data-filter="hard">Hard 0</button>
+    <button class="filter-chip" data-filter="soft">Soft 0</button>
+    <button class="filter-chip" data-filter="clean">Clean 1</button>
+  </div>
+  <div class="sort-wrap">
+    <label>Sort:
+      <select name="sort">
+        <option value="tier" selected>Tier (hard first)</option>
+        <option value="score">Score &darr;</option>
+        <option value="id">ID</option>
+      </select>
+    </label>
+  </div>
+</div>
+
+<div class="rail-list">
+  <div class="cohort-row" data-pid="SMOKE-19NRQR"
+       data-sanitized="SMOKE-19NRQR"
+       data-tier="clean"
+       data-score="0"
+       data-reason="clean">
+    <div class="cohort-row-top">
+      <span class="tier-dot" data-tier="clean"></span>
+      <span class="mono pid" title="SMOKE-19NRQR">SMOKE-19NRQR</span>
+      <span class="mono score">0</span>
+    </div>
+    <div class="cohort-row-bot">
+      <span class="reason-excerpt">clean</span>
+      <span class="tier-badge" data-tier="clean">clean</span>
+    </div>
+  </div>
+</div>
+
+<div class="rail-footer">
+  <div class="totals-title">Cohort totals</div>
+  <div class="totals-row" data-tier="hard"><span class="tier-dot" data-tier="hard"></span> Hard <span class="mono count">0</span></div>
+  <div class="totals-row" data-tier="soft"><span class="tier-dot" data-tier="soft"></span> Soft <span class="mono count">0</span></div>
+  <div class="totals-row" data-tier="clean"><span class="tier-dot" data-tier="clean"></span> Clean <span class="mono count">1</span></div>
+</div></aside>
+    <section class="detail"><section class="participant" id="p-SMOKE-19NRQR">
+    <div class="detail-header">
+    <div class="detail-header-top">
+      <span class="mono pid-full">SMOKE-19NRQR</span>
+      <span class="tier-pill" data-tier="clean">clean</span>
+      <span class="mono score-big">0</span>
+    </div>
+    <div class="detail-header-sub">
+      3 trials · 0.0 cps · 0s off-task
+    </div>
+  </div>
+    <div class="signal-grid" role="list">
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Clipboard paste events into the input">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Paste</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Clipboard copy events from the task">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Copy</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Drag-and-drop into inputs">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Drop</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Window blurred for 10+ seconds">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Tab-away ≥10s</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Above the tab-away threshold (3s default, 5s strict), under 10s">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Tab-away (mid)</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="At or below the tab-away threshold (3s default) — not scored">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Flicker</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Trials typed faster than the preset cps threshold">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Fast typing</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Text appeared without preceding keystrokes">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Synthetic</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Typing landed outside the experiment container">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Foreign input</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="innerWidth shrank — side panel opened">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Sidebar</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Known AI extension selectors found in DOM">
+        <span class="signal-value">0</span>
+        <span class="signal-label">AI extensions</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="DevTools hotkeys: Ctrl/Cmd+Shift+I/J/C, F12">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Kb shortcuts</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Viewport-width change events (recorded as layoutShifts before 0.6.1)">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Viewport shifts</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Browser zoom level changed during task">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Zoom changes</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Reserved (always 0) — DevTools opens are counted under Kb shortcuts">
+        <span class="signal-value">0</span>
+        <span class="signal-label">DevTools</span>
+      </div>
+    
+      <div class="signal-tile tone-zero"
+           role="listitem"
+           title="Mouse exited window through a screen edge">
+        <span class="signal-value">0</span>
+        <span class="signal-label">Edge exits</span>
+      </div>
+    
+  </div>
+    <div class="score-breakdown">
+    
+    <span class="score-total mono">Total: 0</span>
+  </div>
+    <blockquote class="reason">clean</blockquote>
+    
+    
+    <p class="muted note">Visual renderers not available (install the canvas package).</p>
+    <div class="image-block replay-block" data-pid="SMOKE-19NRQR"
+         data-replay-src="replay/SMOKE-19NRQR.replay.js">
+      <h4 class="section-heading">Session replay <span class="replay-note">(dom tier)</span></h4>
+      <div class="replay-mount">
+        <button class="replay-load-btn" type="button">Load replay</button>
+      </div>
+    </div>
+  </section></section>
+  </div>
+
+  <div id="legend-modal" hidden role="dialog" aria-label="Signal legend">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <button class="modal-close" type="button" aria-label="Close">&times;</button>
+      <h3>Signal reference</h3>
+      <table class="legend-table">
+        <thead>
+          <tr><th>Signal</th><th>Meaning</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>paste</td>             <td>Clipboard paste into the response field (hard signal).</td></tr>
+          <tr><td>copy</td>              <td>Clipboard copy from the page (soft signal).</td></tr>
+          <tr><td>drop</td>              <td>Drag-and-drop into the response field (hard signal).</td></tr>
+          <tr><td>tab-away &ge;10s</td>  <td>Left the page for &ge;10 seconds; counts toward soft score.</td></tr>
+          <tr><td>tab-away (mid)</td>    <td>Longer than the participant's tab-away threshold (3s by default, 5s strict) and under 10s; counts toward soft score.</td></tr>
+          <tr><td>flicker</td>           <td>At or below the tab-away threshold (3s by default); reported but not scored.</td></tr>
+          <tr><td>sidebar event</td>     <td>Viewport width shrank suddenly &mdash; likely AI sidebar opened.</td></tr>
+          <tr><td>AI extension</td>      <td>Browser extension known for AI assistance detected.</td></tr>
+          <tr><td>kb shortcut</td>       <td>DevTools-adjacent keyboard shortcut used.</td></tr>
+          <tr><td>viewport shift</td>    <td>Viewport width changed substantially (recorded as "layout shift" before 0.6.1).</td></tr>
+          <tr><td>zoom change</td>       <td>Browser zoom level changed.</td></tr>
+          <tr><td>synthetic insertion</td><td>Text appeared without matching keystrokes.</td></tr>
+          <tr><td>foreign input</td>     <td>Keystroke outside the response field.</td></tr>
+          <tr><td>edge exit</td>         <td>Mouse exited the viewport edge &mdash; pattern often seen with sidebar use.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div id="lightbox" class="lightbox-overlay" role="dialog" aria-label="Enlarged image">
+    <span class="lightbox-close" aria-label="Close">&times;</span>
+    <img id="lightbox-img" alt="">
+  </div>
+
+  <script>
+    // Tasks 4-7 will wire interactivity (cohort selection, lightbox, legend modal).
+    (function() {
+      // DOM refs — captured once on load. Cohort rows and detail panes were emitted
+      // server-side, so these collections stay valid for the page's lifetime.
+      const rail   = document.querySelector('.rail');
+      const detail = document.querySelector('.detail');
+      const rows   = [...document.querySelectorAll('.cohort-row')];
+      const panes  = [...document.querySelectorAll('.participant')];
+
+      // --- Modal & lightbox refs (Task 11) ---
+      const legend     = document.getElementById('legend-modal');
+      const legendBtn  = document.querySelector('.legend-btn');
+      const legendClose = legend.querySelector('.modal-close');
+      const legendBack  = legend.querySelector('.modal-backdrop');
+      const overlay     = document.getElementById('lightbox');
+      const overlayImg  = document.getElementById('lightbox-img');
+
+      // Module-scoped current selection, indexed by participantId. Tasks 10/11 read it.
+      let currentId = null;
+
+      function isVisible(row) {
+        // CSS hides via either:
+        //   - data-filter rule (display: none from body[data-filter] not matching tier)
+        //   - .search-hidden class (display: none from CSS)
+        // Both resolve to display: none, so getComputedStyle catches the union.
+        return !row.classList.contains('search-hidden')
+            && getComputedStyle(row).display !== 'none';
+      }
+
+      function reconcileSelection() {
+        const visible = rows.filter(isVisible);
+        if (visible.length === 0) {
+          // No matches — clear panes and show empty-state hint in the detail column.
+          for (const p of panes) p.setAttribute('hidden', '');
+          for (const r of rows) r.classList.remove('selected');
+          detail.dataset.empty = 'true';
+          currentId = null;
+          return;
+        }
+        delete detail.dataset.empty;
+        // Keep current selection if still visible; otherwise pick the top visible row.
+        const stillVisible = visible.find(r => r.dataset.pid === currentId);
+        if (!stillVisible) selectById(visible[0].dataset.pid);
+      }
+
+      function selectById(pid, opts = {}) {
+        const row = rows.find(r => r.dataset.pid === pid);
+        if (!row) return;
+        const sanitized = row.dataset.sanitized;
+
+        // Toggle [hidden] on detail panes — only one visible at a time.
+        for (const p of panes) {
+          if (p.id === `p-${sanitized}`) p.removeAttribute('hidden');
+          else p.setAttribute('hidden', '');
+        }
+
+        // Update .selected on rows.
+        for (const r of rows) r.classList.toggle('selected', r === row);
+
+        currentId = pid;
+        detail.scrollTop = 0;
+
+        // Persist selection in the URL hash so a reload restores the same participant.
+        // Tasks that mutate visibility (filter/search) reuse selectById so the hash
+        // stays consistent with the visible pane.
+        if (!opts.skipHash) {
+          history.replaceState(null, '', `#p-${sanitized}`);
+        }
+      }
+
+      // --- Overlay open/close helpers (Task 11) ---
+      function openLegend()    { legend.removeAttribute('hidden'); }
+      function closeLegend()   { legend.setAttribute('hidden', ''); }
+      function closeLightbox() { overlay.classList.remove('open'); overlayImg.src = ''; }
+
+      // --- Legend modal wiring ---
+      legendBtn.addEventListener('click', openLegend);
+      legendClose.addEventListener('click', closeLegend);
+      legendBack.addEventListener('click', closeLegend);
+
+      // --- Lightbox wiring ---
+      // Delegate via existing a.zoomable elements. They're emitted server-side
+      // around each image, so a fresh querySelectorAll at IIFE init time is fine.
+      document.querySelectorAll('a.zoomable').forEach(a => {
+        a.addEventListener('click', e => {
+          e.preventDefault();
+          overlayImg.src = a.getAttribute('href');
+          overlay.classList.add('open');
+        });
+      });
+      overlay.addEventListener('click', closeLightbox);
+
+      // --- Paste-toggle wiring ---
+      // Delegated handler for paste-toggle buttons. Only "long" pastes have a
+      // .paste-full element; short pastes have a disabled toggle and we exit early.
+      document.addEventListener('click', e => {
+        const btn = e.target.closest('.paste-toggle');
+        if (!btn || btn.disabled) return;
+        const entry = btn.closest('.paste-entry');
+        if (!entry || !entry.querySelector('.paste-full')) return;
+        const expanded = entry.classList.toggle('expanded');
+        btn.textContent = expanded ? '▾' : '▸';
+        btn.setAttribute('aria-expanded', String(expanded));
+      });
+
+      // Delegated click handler — one listener on the rail catches all row clicks.
+      rail.addEventListener('click', e => {
+        const row = e.target.closest('.cohort-row');
+        if (row) selectById(row.dataset.pid);
+      });
+
+      // Initial selection on page load. Priority:
+      //   1. URL hash matches a participant — restore it.
+      //   2. Default to first row (most-suspicious, since triage is sorted desc).
+      //   3. No rows at all — do nothing (defensive).
+      (function initSelection() {
+        const match = location.hash.match(/^#p-(.+)$/);
+        if (match) {
+          const row = rows.find(r => r.dataset.sanitized === match[1]);
+          if (row) {
+            selectById(row.dataset.pid, { skipHash: true });
+            return;
+          }
+        }
+        if (rows[0]) selectById(rows[0].dataset.pid, { skipHash: true });
+      })();
+
+      // --- Filter chips ---
+      // CSS does the actual hiding via body[data-filter] selectors. JS just sets
+      // the data attribute and updates which chip is .active.
+      const chips = [...document.querySelectorAll('.filter-chip')];
+      chips.forEach(chip => {
+        chip.addEventListener('click', () => {
+          document.body.dataset.filter = chip.dataset.filter;
+          chips.forEach(c => c.classList.toggle('active', c === chip));
+          reconcileSelection();
+        });
+      });
+
+      // --- Search ---
+      const searchEl = document.querySelector('.search-wrap input');
+      searchEl.addEventListener('input', () => {
+        const q = searchEl.value.trim().toLowerCase();
+        for (const r of rows) {
+          // data-pid is mixed case; data-reason is pre-lowercased server-side (Task 3).
+          const hit = !q
+            || r.dataset.pid.toLowerCase().includes(q)
+            || r.dataset.reason.includes(q);
+          r.classList.toggle('search-hidden', !hit);
+        }
+        reconcileSelection();
+      });
+
+      // --- Sort ---
+      const sortEl = document.querySelector('.sort-wrap select');
+      sortEl.addEventListener('change', () => {
+        const key = sortEl.value;  // 'score' | 'id' | 'tier'
+        const tierRank = { hard: 0, soft: 1, clean: 2 };
+        const parent = rows[0]?.parentNode;
+        if (!parent) return;
+        const sorted = [...rows].sort((a, b) => {
+          if (key === 'score') return parseFloat(b.dataset.score) - parseFloat(a.dataset.score);
+          if (key === 'id')    return a.dataset.pid.localeCompare(b.dataset.pid);
+          // 'tier': hard first, then soft, then clean; within tier, score desc.
+          const dt = tierRank[a.dataset.tier] - tierRank[b.dataset.tier];
+          if (dt !== 0) return dt;
+          return parseFloat(b.dataset.score) - parseFloat(a.dataset.score);
+        });
+        for (const r of sorted) parent.appendChild(r);
+        // Sort doesn't change visibility, but the call is cheap and protects against
+        // future filter+sort interactions from getting out of sync.
+        reconcileSelection();
+      });
+
+      // --- Keyboard nav ---
+      // Single document.keydown listener handles ESC (close overlays), '/' (focus
+      // search), and arrow nav. Keeping it as one listener avoids cross-browser
+      // ordering races between two registered listeners.
+      document.addEventListener('keydown', e => {
+        // ESC closes whichever overlay is open. Lightbox first, then legend modal.
+        // Returning here prevents arrow nav from also firing when the user is just
+        // dismissing an overlay.
+        if (e.key === 'Escape') {
+          if (overlay.classList.contains('open')) { closeLightbox(); return; }
+          if (!legend.hasAttribute('hidden'))     { closeLegend();   return; }
+        }
+
+        const inInput = e.target && /^(INPUT|TEXTAREA)$/.test(e.target.tagName);
+
+        if (e.key === '/' && !inInput) {
+          e.preventDefault();
+          searchEl.focus();
+          return;
+        }
+
+        if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !inInput) {
+          const visible = rows.filter(isVisible);
+          if (visible.length === 0) return;
+
+          const currentIdx = visible.findIndex(r => r.classList.contains('selected'));
+
+          // No current selection within the visible set (e.g. selection was filtered
+          // out and reconciliation hasn't run, or URL hash didn't match anything).
+          // Pick the first visible row deterministically rather than relying on
+          // Math.max(0, -1 - 1) clamping.
+          if (currentIdx === -1) {
+            e.preventDefault();
+            visible[0].scrollIntoView({ block: 'nearest' });
+            selectById(visible[0].dataset.pid);
+            return;
+          }
+
+          const nextIdx = e.key === 'ArrowDown'
+            ? Math.min(visible.length - 1, currentIdx + 1)
+            : Math.max(0, currentIdx - 1);
+          if (nextIdx !== currentIdx) {
+            e.preventDefault();
+            const target = visible[nextIdx];
+            target.scrollIntoView({ block: 'nearest' });
+            selectById(target.dataset.pid);
+          }
+        }
+      });
+    })();
+  </script>
+  <style>
+    /* Replay viewer (see replay-viewer.client.js) — matches report house style */
+    .replay-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+    .replay-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+                    background: var(--ink); color: var(--surface); }
+    .replay-badge[data-tier="trace"] { background: var(--surface); color: var(--ink);
+                    border: 1px solid var(--line); }
+    .replay-stage { position: relative; overflow: hidden; background: var(--surface);
+                    border: 1px solid var(--line); border-radius: 4px; }
+    .replay-frame { position: absolute; top: 0; left: 0; border: 0; }
+    .replay-overlay { position: absolute; top: 0; left: 0; pointer-events: none; }
+    .replay-neutral { background: #e8e6e0; }
+    .replay-neutral-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+                            color: var(--dim); font-size: 13px; }
+    .replay-lane { display: block; margin-top: 6px; border-radius: 2px; }
+    .replay-scrub { display: block; margin: 2px 0 4px; }
+    .replay-ticker { font: 12px/1.3 ui-monospace, SFMono-Regular, 'IBM Plex Mono', monospace;
+                     color: var(--dim); font-variant-numeric: tabular-nums;
+                     height: 1.4em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .replay-note { font-size: 12px; color: var(--dim); }
+    .replay-warn { color: var(--hard); }
+    /* Controls share the report's flat, line-bordered button style */
+    .replay-play, .replay-load-btn, .replay-css-btn, .replay-trial-select, .replay-speed {
+      padding: 4px 10px; border: 1px solid var(--line); background: var(--surface);
+      color: var(--ink); border-radius: 4px; cursor: pointer; font-size: 13px; }
+    .replay-play:hover, .replay-load-btn:hover, .replay-css-btn:hover { background: var(--bg); }
+    .replay-play:disabled, .replay-load-btn:disabled { opacity: 0.6; cursor: default; }
+    .replay-css-btn { font-size: 12px; padding: 2px 8px; }
+    .replay-clock { font: 12px/1.3 ui-monospace, SFMono-Regular, 'IBM Plex Mono', monospace;
+                    font-variant-numeric: tabular-nums; }
+  </style>
+  <script>
+// src/cli/renderers/replay-viewer.client.js
+// Browser-side replay viewer, embedded verbatim into the HTML report by
+// html-index.js (readFileSync at render time — file://-safe, no fetch).
+//
+// Contract: window.initChReplayViewer(mountEl, model) where model is the
+// viewer model emitted by replay-assets.js (trial-relative event times,
+// per-trial camera seeds, marker attribute name, legacy flag).
+//
+// Coordinate model (cursor-alignment fix):
+//   The stage shows the RECORD-TIME VIEWPORT, not the document. A camera
+//   state (window scroll + viewport size) is maintained at the playhead from
+//   the trial's seed + its scroll/resize events; the iframe is sized to the
+//   record-time layout (clientWidth/Height), scrolled to the record-time
+//   scroll, and letterboxed into a fixed stage box. Cursor/trail draw in
+//   CLIENT space: new recordings carry cx/cy per event; legacy recordings
+//   re-project page coords minus the running scroll (reduced guarantees,
+//   surfaced by a persistent banner).
+//
+//   Every anchored interaction runs an alignment self-check (marker
+//   resolution + camera assertions + recorded-vs-replayed rect + containment
+//   + hit-test). Failures NEVER stay silent: header status, lane marks, an
+//   uncertain cursor glyph, and a terminated trail.
+//
+// Anatomy per mount:
+//   header   tier badge · trial <select> · play/pause · speed · clock · status chips
+//   stage    tier 'dom': sandboxed <iframe srcdoc> rebuilt per trial/seek
+//            tier 'trace': neutral gray stage with a label
+//            + <canvas> overlay (cursor trail, click ripples)
+//   lane     per-trial marker lane (clipboard/mutations/bands/check marks)
+//   scrub    <input type=range> in ms, wired both ways with the play loop
+//   ticker   text line of the events nearest the playhead
+
+(function () {
+  'use strict';
+
+  var MARKER_COLORS = {
+    paste: '#d32f2f', 'ch:drop': '#7b1fa2', copy: '#f57c00', cut: '#f57c00',
+    'ch:guard_violation': '#d32f2f', 'ch:capture_stopped': '#616161',
+    mutation: '#1976d2', input: '#388e3c'
+  };
+  var UNCERTAIN_COLOR = '#b26a00';
+
+  // Self-check tolerances (CSS px, unscaled): camera ±1; rect edges ±3
+  // conjunctive with containment (2px allowance) AND hit-test; stage
+  // transform ±2.
+  var TOL_CAMERA = 1;
+  var TOL_RECT = 3;
+  var TOL_CONTAIN = 2;
+  var TOL_STAGE = 2;
+
+  var DISCRETE_KINDS = {
+    mousedown: true, mouseup: true, click: true, touchstart: true, touchend: true
+  };
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  function fmtClock(ms) {
+    var s = Math.max(0, ms) / 1000;
+    var m = Math.floor(s / 60);
+    var rem = (s - m * 60).toFixed(1);
+    return m + ':' + (rem < 10 ? '0' : '') + rem;
+  }
+
+  // ── DOM reconstruction (tier 'dom') ──
+  // The recorded DOM is UNTRUSTED (an adversarial participant or extension
+  // may have injected markup). sandbox="" already blocks scripts; the CSP
+  // meta below additionally kills frames, form posts, fetch/XHR-carrying
+  // elements, and plugin content, while still allowing images/media/styles
+  // and fonts — the carriers of visual fidelity. Residual (documented):
+  // a participant-injected <img src> can still fire a GET to its host when
+  // the analyst loads the replay. no-referrer strips the analyst context.
+  function srcdocCsp(allowExternalCss) {
+    return "default-src 'none'; img-src * data: blob:; media-src * data: blob:; " +
+      (allowExternalCss ? "style-src 'unsafe-inline' https: http:; " : "style-src 'unsafe-inline'; ") +
+      "font-src * data:; " +
+      "form-action 'none'; frame-src 'none'; connect-src 'none'; base-uri 'none';";
+  }
+
+  function attrEscape(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  }
+
+  function buildSrcdoc(model, trial, allowExternalCss) {
+    var styles = '';
+    (model.stylesheets || []).forEach(function (sheet) {
+      if (sheet.css) {
+        styles += '<style>' + sheet.css.replace(/<\//g, '<\\/') + '</style>';
+      } else if (allowExternalCss && sheet.href && /^https?:/i.test(sheet.href)) {
+        styles += '<link rel="stylesheet" href="' + attrEscape(sheet.href) + '">';
+      }
+    });
+    // NOTE deliberately ABSENT: the old `html,body{margin:0}` override. It
+    // came AFTER the captured CSS and silently overrode the page's own body
+    // margins (including `margin:auto` centering) — the single largest
+    // cursor-misalignment source on the acceptance fixture (~390px). The
+    // reconstruction must lay out exactly as the recorded page did, UA
+    // defaults included.
+    // The frame is sized to the RECORD-TIME layout width (clientWidth =
+    // innerWidth minus any classic scrollbar), so the frame's own root
+    // scrollbar must not subtract a second gutter on classic-scrollbar
+    // platforms. Hiding the ROOT scroller's bar (scrolling still works
+    // programmatically) keeps layout width == camera width everywhere;
+    // inner containers keep their bars.
+    var gutterFix = '<style>html{scrollbar-width:none}' +
+      'html::-webkit-scrollbar{width:0;height:0}</style>';
+    return '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+      '<meta http-equiv="Content-Security-Policy" content="' + srcdocCsp(allowExternalCss) + '">' +
+      '<meta name="referrer" content="no-referrer">' + gutterFix + styles +
+      '</head><body>' + (trial.initialDom || '') + '</body></html>';
+  }
+
+  function resolvePath(root, path) {
+    if (!path) return null;
+    var cur = root;
+    for (var i = 0; i < path.length; i++) {
+      if (!cur || !cur.childNodes) return null;
+      cur = cur.childNodes[path[i]];
+    }
+    return cur || null;
+  }
+
+  window.initChReplayViewer = function (mount, model) {
+    if (!mount || !model) return;
+    if (mount._chReplayInit) return;   // double-click guard
+    mount._chReplayInit = true;
+    mount.textContent = '';
+
+    var trials = model.trials || [];
+    if (trials.length === 0) {
+      mount.appendChild(el('p', 'replay-note', 'Recording contains no trials.'));
+      return;
+    }
+    // Session scrollbar delta for legacy resize events (see buildViewerModel).
+    var sbW = (model.scrollbar && model.scrollbar.w) || 0;
+    var sbH = (model.scrollbar && model.scrollbar.h) || 0;
+
+    // ── State ──
+    var trialIdx = 0;
+    var playhead = 0;          // trial-relative ms
+    var playing = false;
+    var speed = 1;
+    var appliedIdx = 0;        // events applied so far (in trial event order)
+    var iframeGen = 0;         // increments per rebuild; stale onloads bail
+    var domReady = false;
+    var markerMap = new Map(); // marker id (string) → element, per frame gen
+    var counters = { patchFailures: 0, scrollFailures: 0 };
+    // Camera at the applied position: window scroll + viewport dims.
+    var cam = null;            // {x, y, w, h, cw, ch}
+    var pendingCamSize = false; // viewport dims changed since last flush
+    var stageW = 0, stageH = 0; // stage box (fixed per trial)
+    var k = 1, ox = 0, oy = 0;  // iframe scale + letterbox origin
+
+    function trial() { return trials[trialIdx]; }
+
+    function seedCamera() {
+      var seed = trial().camera || {};
+      cam = {
+        x: seed.x || 0, y: seed.y || 0,
+        w: seed.w || 1280, h: seed.h || 800,
+        cw: seed.cw || seed.w || 1280, ch: seed.ch || seed.h || 800
+      };
+    }
+
+    // ── Header ──
+    var header = el('div', 'replay-header');
+    var badge = el('span', 'replay-badge', model.tier === 'dom' ? 'DOM replay' : 'Trace replay');
+    badge.setAttribute('data-tier', model.tier === 'dom' ? 'dom' : 'trace');
+    badge.setAttribute('role', 'status');
+    var trialSel = el('select', 'replay-trial-select');
+    trials.forEach(function (t, i) {
+      var opt = el('option', null,
+        'Trial ' + (t.index != null ? t.index : i) + ' — ' + (t.id || '?') +
+        ' (' + fmtClock(t.durMs) + ')');
+      opt.value = String(i);
+      trialSel.appendChild(opt);
+    });
+    var playBtn = el('button', 'replay-play', '▶');
+    playBtn.setAttribute('aria-label', 'Play');
+    var speedSel = el('select', 'replay-speed');
+    [1, 2, 4, 8].forEach(function (s) {
+      var o = el('option', null, s + '×'); o.value = String(s); speedSel.appendChild(o);
+    });
+    var clock = el('span', 'replay-clock', '0:00.0 / 0:00.0');
+    header.appendChild(badge);
+    header.appendChild(trialSel);
+    header.appendChild(playBtn);
+    header.appendChild(speedSel);
+    header.appendChild(clock);
+    if (!model.scoring) {
+      header.appendChild(el('span', 'replay-note',
+        'Integrity scoring not available (standalone recording)'));
+    }
+    if (model.captureStopped) {
+      header.appendChild(el('span', 'replay-note replay-warn',
+        'Capture stopped early (buffer cap)'));
+    }
+    // Alignment status chips — the "never fail silently" surface.
+    var alignChip = el('span', 'replay-note', '');
+    alignChip.setAttribute('role', 'status');
+    alignChip.setAttribute('data-ch-align', '');
+    header.appendChild(alignChip);
+    if (model.legacy) {
+      var legacyChip = el('span', 'replay-note replay-warn',
+        'Legacy recording — reduced alignment guarantees (re-projected coordinates, unverified)');
+      legacyChip.setAttribute('data-ch-legacy', '');
+      header.appendChild(legacyChip);
+    }
+    var iframeChip = el('span', 'replay-note replay-warn',
+      'Contains iframe content that was NOT captured — interactions inside it are invisible');
+    iframeChip.setAttribute('data-ch-iframe-warn', '');
+    iframeChip.style.display = 'none';
+    header.appendChild(iframeChip);
+    var shadowChip = el('span', 'replay-note replay-warn',
+      'Contains shadow-DOM content that was NOT captured — those areas replay hollow');
+    shadowChip.setAttribute('data-ch-shadow-warn', '');
+    shadowChip.style.display = 'none';
+    header.appendChild(shadowChip);
+    var failChip = el('span', 'replay-note replay-warn', '');
+    failChip.setAttribute('data-ch-apply-failures', '');
+    failChip.style.display = 'none';
+    header.appendChild(failChip);
+    // Declared-limitation advisories (loud, not blocking): DPR-conditional
+    // styling cannot be reproduced inside an iframe; CSS animations run on
+    // viewer time. Both set per trial / model.
+    var dprChip = el('span', 'replay-note', '');
+    dprChip.setAttribute('data-ch-dpr-note', '');
+    dprChip.style.display = 'none';
+    header.appendChild(dprChip);
+    var animChip = el('span', 'replay-note', '');
+    animChip.setAttribute('data-ch-anim-note', '');
+    animChip.style.display = 'none';
+    var hasKeyframes = (model.stylesheets || []).some(function (sh) {
+      return sh.css && /@keyframes/i.test(sh.css);
+    });
+    if (hasKeyframes) {
+      animChip.textContent = 'Page uses CSS animations — they replay on viewer time; animated positions are approximate';
+      animChip.style.display = '';
+    }
+    header.appendChild(animChip);
+
+    var allowExternalCss = false;
+    var omittedSheets = (model.stylesheets || []).filter(function (sh) { return !sh.css; }).length;
+    if (omittedSheets > 0) {
+      var cssNote = el('span', 'replay-note',
+        omittedSheets + ' external stylesheet(s) not loaded — layout may differ. ');
+      var cssBtn = el('button', 'replay-css-btn', 'Load external CSS');
+      cssBtn.title = 'Fetches the recorded stylesheet URLs from their origins (network requests leave this machine).';
+      cssBtn.addEventListener('click', function () {
+        allowExternalCss = true;
+        cssBtn.remove();
+        cssNote.textContent = omittedSheets + ' external stylesheet(s) loaded from their origins.';
+        if (iframe) rebuildFrame(playhead);
+      });
+      cssNote.appendChild(cssBtn);
+      header.appendChild(cssNote);
+    }
+    mount.appendChild(header);
+
+    // ── Stage ──
+    var stage = el('div', 'replay-stage');
+    var iframe = null;
+    if (model.tier === 'dom') {
+      iframe = document.createElement('iframe');
+      // allow-same-origin WITHOUT allow-scripts: scripts stay blocked (both
+      // by the sandbox and by the srcdoc CSP), but the document keeps a
+      // reachable origin so the player can apply mutation/input state via
+      // contentDocument. sandbox="" would make the origin opaque and freeze
+      // every dom-tier replay at its first frame.
+      iframe.setAttribute('sandbox', 'allow-same-origin');
+      iframe.className = 'replay-frame';
+      // Non-interactive: an analyst click inside the reconstruction would
+      // act on live untrusted DOM (submit a form, navigate the frame).
+      iframe.style.pointerEvents = 'none';
+      iframe.setAttribute('tabindex', '-1');
+      iframe.style.transformOrigin = '0 0';
+      stage.appendChild(iframe);
+    } else {
+      stage.classList.add('replay-neutral');
+      stage.appendChild(el('div', 'replay-neutral-label',
+        'Trace-only recording — DOM not captured at this tier'));
+    }
+
+    var overlay = document.createElement('canvas');
+    overlay.className = 'replay-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    stage.appendChild(overlay);
+    mount.appendChild(stage);
+    var ctx = overlay.getContext('2d');
+
+    // ── Marker lane + scrub ──
+    var lane = document.createElement('canvas');
+    lane.className = 'replay-lane';
+    lane.height = 18;
+    lane.setAttribute('aria-hidden', 'true');
+    mount.appendChild(lane);
+
+    var scrub = document.createElement('input');
+    scrub.type = 'range';
+    scrub.min = '0';
+    scrub.step = '10';
+    scrub.className = 'replay-scrub';
+    scrub.setAttribute('aria-label', 'Playhead position');
+    mount.appendChild(scrub);
+
+    var ticker = el('div', 'replay-ticker', '');
+    mount.appendChild(ticker);
+
+    // ── Stage geometry ──
+    // The stage BOX is fixed per trial (sized from the trial's seed camera
+    // aspect) so playback never reflows the report page; camera changes
+    // re-letterbox the iframe INSIDE the box.
+    function sizeStage() {
+      stageW = Math.min(mount.clientWidth || 720, 960);
+      var seed = trial().camera || {};
+      var scw = seed.cw || seed.w || 1280;
+      var sch = seed.ch || seed.h || 800;
+      stageH = Math.round(sch * (stageW / scw));
+      stage.style.width = stageW + 'px';
+      stage.style.height = stageH + 'px';
+      overlay.width = stageW;
+      overlay.height = stageH;
+      lane.width = stageW;
+      scrub.style.width = stageW + 'px';
+    }
+
+    // Apply the current camera's viewport dims to the iframe + transform.
+    // Called lazily: before each anchored self-check and once per applied
+    // batch — a 240-event resize storm costs a handful of real reflows, not
+    // 240 (Sol round-1 finding 11).
+    function flushCamSize() {
+      pendingCamSize = false;
+      // Scale + letterbox apply to the OVERLAY too — trace-tier replays have
+      // no iframe but still project the cursor onto the scaled stage.
+      k = Math.min(stageW / cam.cw, stageH / cam.ch);
+      ox = Math.round((stageW - cam.cw * k) / 2);
+      oy = Math.round((stageH - cam.ch * k) / 2);
+      if (!iframe) return;
+      var wpx = cam.cw + 'px', hpx = cam.ch + 'px';
+      if (iframe.style.width !== wpx) iframe.style.width = wpx;
+      if (iframe.style.height !== hpx) iframe.style.height = hpx;
+      var tf = 'translate(' + ox + 'px,' + oy + 'px) scale(' + k + ')';
+      if (iframe.style.transform !== tf) iframe.style.transform = tf;
+    }
+
+    function applyCamScroll() {
+      if (!iframe || !domReady) return;
+      var doc = iframe.contentDocument;
+      if (doc && doc.defaultView && typeof doc.defaultView.scrollTo === 'function') {
+        try { doc.defaultView.scrollTo(cam.x, cam.y); } catch (e) { /* best-effort */ }
+      }
+    }
+
+    // ── Marker harvesting ──
+    // Markers arrive as data-chn-<nonce> attributes in the serialized HTML.
+    // They are harvested into an out-of-band Map and REMOVED immediately, so
+    // no marker attribute ever participates in a layout we measure and page
+    // CSS/attributes can never hijack resolution.
+    function harvestMarkers(scope) {
+      if (!model.markerAttr || !scope || !scope.querySelectorAll) return;
+      var found;
+      try { found = scope.querySelectorAll('[' + model.markerAttr + ']'); }
+      catch (e) { return; }
+      for (var i = 0; i < found.length; i++) {
+        var node = found[i];
+        markerMap.set(node.getAttribute(model.markerAttr), node);
+        node.removeAttribute(model.markerAttr);
+      }
+      if (scope.getAttribute && scope.getAttribute(model.markerAttr) != null) {
+        markerMap.set(scope.getAttribute(model.markerAttr), scope);
+        scope.removeAttribute(model.markerAttr);
+      }
+    }
+
+    // LATCHED per trial selection: an iframe (or shadow host) that existed at
+    // ANY point in the trial keeps its warning even after a removal patch —
+    // the invisible interactions don't become visible because the frame left.
+    var trialHadIframe = false;
+    var trialHadShadow = false;
+    function updateIframeWarning(doc) {
+      try {
+        if (doc && doc.querySelector('[data-ch-iframe]')) trialHadIframe = true;
+        if (doc && doc.querySelector('[data-ch-shadow]')) trialHadShadow = true;
+      } catch (e) { /* keep latches */ }
+      iframeChip.style.display = trialHadIframe ? '' : 'none';
+      shadowChip.style.display = trialHadShadow ? '' : 'none';
+    }
+
+    // Resolve a mutation/anchor reference: marker first (validated by tag +
+    // connectedness), then the legacy child-index path, then raw id. The
+    // path fallback is TAG-VALIDATED whenever the reference carries an
+    // expected tag: a failed marker means the reconstruction diverged (e.g.
+    // the parser dropped an invalid-but-real construct like nested forms),
+    // and an unvalidated raw-index path would silently patch whatever node
+    // now sits at those indices. Legacy references (no tag) keep the
+    // original unvalidated behavior.
+    function resolveRef(doc, ref) {
+      if (ref.n != null) {
+        var byMarker = markerMap.get(String(ref.n));
+        if (byMarker && byMarker.isConnected &&
+            (!ref.tag || byMarker.tagName.toLowerCase() === ref.tag)) {
+          return byMarker;
+        }
+      }
+      var byPath = resolvePath(doc.body, ref.path);
+      if (byPath && (!ref.tag ||
+          (byPath.tagName && byPath.tagName.toLowerCase() === ref.tag))) {
+        return byPath;
+      }
+      if (ref.id && doc.getElementById) {
+        var byId = doc.getElementById(ref.id);
+        if (byId && (!ref.tag || byId.tagName.toLowerCase() === ref.tag)) return byId;
+      }
+      return null;
+    }
+
+    // ── DOM state at playhead ──
+    function rebuildFrame(thenSeekTo, isRevalidation) {
+      if (!iframe) return;
+      iframeGen++;
+      var gen = iframeGen;
+      domReady = false;
+      appliedIdx = 0;
+      markerMap = new Map();
+      counters.patchFailures = 0;
+      counters.scrollFailures = 0;
+      seedCamera();
+      pendingCamSize = true;
+      // Reset check caches — they are recomputed deterministically during
+      // forward re-application.
+      trial().events.forEach(function (e) { if (e.__chk) delete e.__chk; });
+      iframe.onload = function () {
+        if (gen !== iframeGen) return;   // superseded by a newer rebuild
+        domReady = true;
+        var doc = iframe.contentDocument;
+        harvestMarkers(doc && doc.body);
+        updateIframeWarning(doc);
+        flushCamSize();
+        applyCamScroll();
+        applyDomUpTo(thenSeekTo);
+        drawOverlay();
+        updateStatusChips();
+        // Late-layout revalidation: web fonts settling after the first
+        // layout can shift geometry and stale an initially-passing check.
+        // One revalidation pass per user-initiated rebuild (guarded against
+        // rebuild→fonts.ready→rebuild loops).
+        if (!isRevalidation && doc && doc.fonts && doc.fonts.ready &&
+            typeof doc.fonts.ready.then === 'function') {
+          doc.fonts.ready.then(function () {
+            if (gen === iframeGen) rebuildFrame(playhead, true);
+          }).catch(function () { /* fonts API absent/failed — skip */ });
+        }
+      };
+      iframe.srcdoc = buildSrcdoc(model, trial(), allowExternalCss);
+    }
+
+    // Restores form state from an 'input' event. Form values are element
+    // PROPERTIES — mutation snapshots never carry them — so without this
+    // step every replayed form would look untouched.
+    function applyInput(doc, e) {
+      var target = null;
+      var wantTag = e.el ? String(e.el).split('#')[0].toUpperCase() : null;
+      // Marker first: getElementById returns the FIRST duplicate, which can
+      // restore the typed value into the wrong control silently.
+      if (e.n != null) {
+        target = resolveRef(doc, {
+          n: e.n, tag: wantTag ? wantTag.toLowerCase() : null, path: null, id: null
+        });
+      }
+      if (!target && e.id) {
+        var byId = doc.getElementById(e.id);
+        if (byId && (!wantTag || byId.tagName === wantTag)) target = byId;
+      }
+      if (!target && e.el) {
+        try { target = doc.querySelector(e.el); } catch (err) { /* bad selector */ }
+      }
+      if (!target) return;
+      if (e.redacted) {
+        target.value = new Array((e.value_len || 0) + 1).join('•');
+      } else if (e.value != null) {
+        target.value = e.value;
+      }
+      if (e.checked != null) target.checked = e.checked;
+    }
+
+    function applyMutation(doc, patch) {
+      var target = resolveRef(doc, patch);
+      if (!target) { counters.patchFailures++; return; }
+      if (patch.op === 'childList') {
+        target.innerHTML = patch.html;
+        harvestMarkers(target);
+        updateIframeWarning(doc);
+      } else if (patch.op === 'attributes') {
+        // Refuse event-handler and malformed attribute names even if an
+        // artifact (older recorder, third-party #3661 file) carries them.
+        if (!/^[a-zA-Z_:][-a-zA-Z0-9_:.]*$/.test(patch.name) || /^on/i.test(patch.name)) return;
+        if (patch.value === null) target.removeAttribute && target.removeAttribute(patch.name);
+        else target.setAttribute && target.setAttribute(patch.name, patch.value);
+      } else if (patch.op === 'characterData') {
+        target.textContent = patch.value;
+      }
+    }
+
+    // Element scroll restore (window scrolls are camera state, handled in
+    // the application loop). Redacted scrolls are unresolvable BY DESIGN.
+    function applyElementScroll(doc, e) {
+      if (e.redacted) return;
+      var target = null;
+      if (e.n != null || e.id) {
+        target = resolveRef(doc, { n: e.n, id: e.id, tag: null, path: null });
+      }
+      if (!target && e.el) {
+        try { target = doc.querySelector(e.el); } catch (err) { /* bad selector */ }
+      }
+      if (!target) { counters.scrollFailures++; return; }
+      try { target.scrollTop = e.y || 0; target.scrollLeft = e.x || 0; }
+      catch (err) { counters.scrollFailures++; }
+    }
+
+    // ── Alignment self-check (per anchored discrete event) ──
+    // Compares INDEPENDENT coordinate systems (Sol round-2 finding 10):
+    //   camera assertions  — applied scroll/dims vs requested (±1px)
+    //   rect               — recorded client rect vs replayed rect (±3px/edge)
+    //   containment        — projected point inside replayed rect (2px)
+    //   hit-test           — elementFromPoint resolves the anchor family
+    //   stage transform    — iframe's REAL on-page offset vs computed (±2px)
+    // Any failed predicate ⇒ status 'uncertain' with reasons, surfaced by
+    // chips + lane + glyph. Redacted anchors are 'redacted' (unverifiable).
+    function evaluateCheck(e) {
+      if (!iframe || !domReady) return;
+      var doc = iframe.contentDocument;
+      if (!doc) return;
+      var t = e.target;
+      if (t.redacted) { e.__chk = { status: 'redacted', reasons: ['redacted target'] }; return; }
+      var reasons = [];
+      // Event-time shadow retargeting (recorder saw a composed path deeper
+      // than e.target): the visible thing that was clicked is not in the
+      // reconstruction, whatever the host's geometry says. Latches the
+      // trial-level warning too — a post-snapshot attachShadow() leaves no
+      // serialized marker for updateIframeWarning to find.
+      if (t.shadow) {
+        reasons.push('shadow content not captured');
+        trialHadShadow = true;
+        updateIframeWarning(doc);
+      }
+
+      // camera assertions
+      var view = doc.defaultView;
+      if (view) {
+        if (Math.abs((view.scrollX || 0) - cam.x) > TOL_CAMERA ||
+            Math.abs((view.scrollY || 0) - cam.y) > TOL_CAMERA) {
+          reasons.push('applied scroll diverges (' +
+            (view.scrollX || 0) + ',' + (view.scrollY || 0) + ' vs ' + cam.x + ',' + cam.y + ')');
+        }
+        var de = doc.documentElement;
+        if (de && Math.abs(de.clientWidth - cam.cw) > TOL_CAMERA) {
+          reasons.push('frame layout width ' + de.clientWidth + ' vs camera ' + cam.cw);
+        }
+      }
+
+      // anchor resolution
+      var target = null;
+      if (t.n != null || t.id) {
+        target = resolveRef(doc, { n: t.n, id: t.id, tag: t.tag, path: null });
+      }
+      if (!target) {
+        reasons.push('anchor unresolved (' + (t.tag || '?') + (t.id ? '#' + t.id : '') + ')');
+      } else if (target.hasAttribute && target.hasAttribute('data-ch-shadow')) {
+        // The interaction retargeted to a shadow host whose content was not
+        // captured — geometry would "verify" against a hollow box. Refuse.
+        reasons.push('shadow content not captured');
+      } else {
+        var rr = null;
+        try { rr = target.getBoundingClientRect(); } catch (err) { /* leave null */ }
+        // recorded vs replayed rect, all four edges (conjunctive)
+        if (rr && t.rect) {
+          var dL = Math.abs(rr.left - t.rect[0]);
+          var dT = Math.abs(rr.top - t.rect[1]);
+          var dR = Math.abs((rr.left + rr.width) - (t.rect[0] + t.rect[2]));
+          var dB = Math.abs((rr.top + rr.height) - (t.rect[1] + t.rect[3]));
+          if (dL > TOL_RECT || dT > TOL_RECT || dR > TOL_RECT || dB > TOL_RECT) {
+            reasons.push('target rect moved (Δ ' +
+              Math.round(Math.max(dL, dT, dR, dB)) + 'px)');
+          }
+        }
+        // containment of the projected point
+        var px = e.cx, py = e.cy;
+        if (px == null) { px = (e.x || 0) - cam.x; py = (e.y || 0) - cam.y; }
+        if (rr && !(px >= rr.left - TOL_CONTAIN && px <= rr.left + rr.width + TOL_CONTAIN &&
+                    py >= rr.top - TOL_CONTAIN && py <= rr.top + rr.height + TOL_CONTAIN)) {
+          reasons.push('cursor outside target');
+        }
+        // independent hit-test
+        if (doc.elementFromPoint && px != null) {
+          var under = null;
+          try { under = doc.elementFromPoint(px, py); } catch (err) { /* skip */ }
+          if (under && under !== target &&
+              !(target.contains && target.contains(under)) &&
+              !(under.contains && under.contains(target))) {
+            reasons.push('hit-test resolves ' +
+              (under.id ? under.tagName.toLowerCase() + '#' + under.id : under.tagName.toLowerCase()));
+          }
+        }
+      }
+
+      // stage transform: the iframe's REAL rendered offset must match the
+      // computed letterbox (catches viewer CSS/transform regressions).
+      try {
+        var ir = iframe.getBoundingClientRect();
+        var sr = stage.getBoundingClientRect();
+        if (Math.abs(ir.left - sr.left - ox) > TOL_STAGE ||
+            Math.abs(ir.top - sr.top - oy) > TOL_STAGE) {
+          reasons.push('stage transform drift');
+        }
+      } catch (err) { /* measuring failed — not evidence of misalignment */ }
+
+      e.__chk = reasons.length > 0
+        ? { status: 'uncertain', reasons: reasons }
+        : { status: 'ok', reasons: [] };
+    }
+
+    // Applies DOM patches AND folds camera state up to T. The camera fold
+    // runs at BOTH tiers — trace-tier replays have no reconstruction but the
+    // cursor projection still needs scroll/resize/snapshot state and the
+    // stage transform. DOM operations are conditional on `doc`.
+    function applyDomUpTo(T) {
+      var doc = null;
+      if (iframe) {
+        if (!domReady) return;
+        doc = iframe.contentDocument;
+        if (!doc) return;
+      }
+      var events = trial().events;
+      for (; appliedIdx < events.length; appliedIdx++) {
+        var e = events[appliedIdx];
+        if (e.t > T) break;
+        if (e.kind === 'mutation') {
+          if (doc) applyMutation(doc, e);
+        } else if (e.kind === 'input') {
+          if (doc) applyInput(doc, e);
+        } else if (e.kind === 'scroll') {
+          if (e.el != null || e.redacted) {
+            if (doc) applyElementScroll(doc, e);
+          } else {
+            cam.x = e.x || 0; cam.y = e.y || 0;
+            applyCamScroll();
+          }
+        } else if (e.kind === 'resize') {
+          cam.w = e.w != null ? e.w : cam.w;
+          cam.h = e.h != null ? e.h : cam.h;
+          // Layout dims: recorded cw/ch when present; legacy events fall
+          // back to the embedded visualViewport width, then to w minus the
+          // session scrollbar delta — the SAME chain buildViewerModel uses
+          // for cross-trial folding, so in-trial state can't diverge from
+          // the seeds.
+          cam.cw = e.cw != null ? e.cw
+            : (e.vv && e.vv.width != null ? e.vv.width
+              : (e.w != null ? e.w - sbW : cam.cw));
+          cam.ch = e.ch != null ? e.ch
+            : (e.vv && e.vv.height != null ? e.vv.height
+              : (e.h != null ? e.h - sbH : cam.ch));
+          pendingCamSize = true;   // folded — applied lazily, not per event
+        } else if (DISCRETE_KINDS[e.kind]) {
+          // Camera snapshot on the interaction is AUTHORITATIVE: scroll and
+          // resize notifications dispatch asynchronously after programmatic
+          // scrolls, so the snapshot may know state whose notification event
+          // arrives later in the stream (which then applies as a no-op).
+          if (e.sx != null) {
+            if (e.sx !== cam.x || e.sy !== cam.y) {
+              cam.x = e.sx; cam.y = e.sy;
+              applyCamScroll();
+            }
+            if (e.cw != null && (e.cw !== cam.cw || e.ch !== cam.ch)) {
+              cam.cw = e.cw; cam.ch = e.ch;
+              cam.w = e.vw != null ? e.vw : cam.w;
+              cam.h = e.vh != null ? e.vh : cam.h;
+              pendingCamSize = true;
+            }
+          }
+          if (doc && e.target && e.__chk == null) {
+            if (pendingCamSize) { flushCamSize(); applyCamScroll(); }
+            evaluateCheck(e);
+          }
+        }
+      }
+      if (pendingCamSize) { flushCamSize(); applyCamScroll(); }
+    }
+
+    function seek(T, fromScrub) {
+      var wasBehind = T < playhead;
+      playhead = Math.max(0, Math.min(T, trial().durMs));
+      if (!fromScrub) scrub.value = String(playhead);
+      if (iframe) {
+        // Backward seek: patches are state snapshots but attribute /
+        // characterData patches aren't reversible — rebuild from the
+        // initial DOM and re-apply forward. Cheap for typical trials.
+        if (wasBehind) rebuildFrame(playhead);
+        else applyDomUpTo(playhead);
+      } else {
+        // Trace tier: no reconstruction, but the camera fold still runs so
+        // the cursor projection tracks scroll/resize state.
+        if (wasBehind) { seedCamera(); appliedIdx = 0; pendingCamSize = true; }
+        applyDomUpTo(playhead);
+      }
+      drawOverlay();
+      drawLane();
+      drawTicker();
+      updateStatusChips();
+      clock.textContent = fmtClock(playhead) + ' / ' + fmtClock(trial().durMs);
+      scrub.setAttribute('aria-valuetext',
+        fmtClock(playhead) + ' of ' + fmtClock(trial().durMs));
+    }
+
+    // ── Overlay drawing ──
+    // Everything draws in CLIENT space then letterboxes onto the stage:
+    // stagePt = (ox + clientX·k, oy + clientY·k). New recordings carry
+    // cx/cy; legacy events re-project page − runningScroll at each point's
+    // OWN timestamp (the scan folds scroll state as it walks). Trail
+    // segments break at camera discontinuities (resize) and at uncertain
+    // interactions — a confident-looking trail must never bridge a state
+    // change it can't vouch for.
+    function projectEvent(e, scroll) {
+      var cx = e.cx != null ? e.cx : (e.x || 0) - scroll.x;
+      var cy = e.cy != null ? e.cy : (e.y || 0) - scroll.y;
+      return { x: ox + cx * k, y: oy + cy * k };
+    }
+
+    function drawOverlay() {
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      var events = trial().events;
+      var seed = trial().camera || {};
+      var scroll = { x: seed.x || 0, y: seed.y || 0 };
+      var segments = [[]];       // trail polyline segments (break on state change)
+      var lastPos = null;
+      var lastPosUncertain = false;
+      var ripples = [];
+      for (var i = 0; i < events.length; i++) {
+        var e = events[i];
+        if (e.t > playhead) break;
+        if (e.kind === 'scroll' && e.el == null && !e.redacted) {
+          scroll.x = e.x || 0; scroll.y = e.y || 0;
+          if (e.cx == null) segments.push([]);   // legacy trail: camera jump
+        } else if (DISCRETE_KINDS[e.kind] && e.sx != null &&
+                   (e.sx !== scroll.x || e.sy !== scroll.y)) {
+          // Interaction camera snapshots update the running scroll for the
+          // legacy projection path too (async-notification gap).
+          scroll.x = e.sx; scroll.y = e.sy;
+        } else if (e.kind === 'resize') {
+          segments.push([]);                     // camera discontinuity
+        } else if (e.kind === 'mousemove' || e.kind === 'touchmove') {
+          var p = projectEvent(e, scroll);
+          p.t = e.t;
+          if (e.t >= playhead - 2500) segments[segments.length - 1].push(p);
+          lastPos = p;
+        } else if (e.kind === 'click' || e.kind === 'mousedown' || e.kind === 'touchstart') {
+          var q = projectEvent(e, scroll);
+          q.t = e.t;
+          lastPos = q;
+          lastPosUncertain = !!(e.__chk && e.__chk.status !== 'ok');
+          if (lastPosUncertain) segments.push([]);   // sever the trail
+          if (e.t >= playhead - 600) ripples.push(q);
+        }
+      }
+      // Cursor trail: fading polyline per segment
+      segments.forEach(function (seg) {
+        for (var s = 1; s < seg.length; s++) {
+          var age = (playhead - seg[s].t) / 2500;
+          ctx.strokeStyle = 'rgba(211,47,47,' + (0.85 * (1 - age)).toFixed(3) + ')';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(seg[s - 1].x, seg[s - 1].y);
+          ctx.lineTo(seg[s].x, seg[s].y);
+          ctx.stroke();
+        }
+      });
+      // Click ripples: expanding rings over 600ms
+      ripples.forEach(function (r) {
+        var frac = (playhead - r.t) / 600;
+        ctx.strokeStyle = 'rgba(25,118,210,' + (1 - frac).toFixed(3) + ')';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, 4 + frac * 22, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+      // Cursor: confident filled dot, or the uncertain glyph (dashed amber
+      // ring + hollow center) when the latest interaction failed its check.
+      if (lastPos) {
+        if (lastPosUncertain) {
+          ctx.strokeStyle = UNCERTAIN_COLOR;
+          ctx.lineWidth = 2;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.arc(lastPos.x, lastPos.y, 7, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = UNCERTAIN_COLOR;
+          ctx.beginPath();
+          ctx.arc(lastPos.x, lastPos.y, 2, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.fillStyle = '#d32f2f';
+          ctx.beginPath();
+          ctx.arc(lastPos.x, lastPos.y, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+      }
+    }
+
+    // ── Marker lane (per trial; redrawn per seek so check marks appear) ──
+    function drawLane() {
+      var lctx = lane.getContext('2d');
+      lctx.clearRect(0, 0, lane.width, lane.height);
+      lctx.fillStyle = '#f1efe9';
+      lctx.fillRect(0, 0, lane.width, lane.height);
+      var dur = Math.max(trial().durMs, 1);
+      var events = trial().events;
+      // Away-bands first (blur→focus, hidden→visible), then point markers.
+      var awayStart = null;
+      for (var i = 0; i < events.length; i++) {
+        var e = events[i];
+        if (e.kind === 'blur' || (e.kind === 'visibility' && e.hidden)) {
+          if (awayStart === null) awayStart = e.t;
+        } else if (e.kind === 'focus' || (e.kind === 'visibility' && !e.hidden)) {
+          if (awayStart !== null) {
+            lctx.fillStyle = 'rgba(245,124,0,0.45)';
+            lctx.fillRect(awayStart / dur * lane.width, 0,
+              Math.max(2, (e.t - awayStart) / dur * lane.width), lane.height);
+            awayStart = null;
+          }
+        }
+      }
+      if (awayStart !== null) {   // still away at trial end
+        lctx.fillStyle = 'rgba(245,124,0,0.45)';
+        lctx.fillRect(awayStart / dur * lane.width, 0,
+          lane.width - awayStart / dur * lane.width, lane.height);
+      }
+      events.forEach(function (e) {
+        var color = MARKER_COLORS[e.kind];
+        // Alignment-check marks: uncertain interactions paint amber so the
+        // analyst can SCRUB TO the exact failing moment.
+        if (e.__chk && e.__chk.status !== 'ok') color = UNCERTAIN_COLOR;
+        if (!color) return;
+        lctx.fillStyle = color;
+        lctx.fillRect(e.t / dur * lane.width - 1, 2, 2, lane.height - 4);
+      });
+    }
+
+    function checkSummary() {
+      var events = trial().events;
+      var ok = 0, uncertain = 0, redacted = 0;
+      for (var i = 0; i < events.length; i++) {
+        var c = events[i].__chk;
+        if (!c) continue;
+        if (c.status === 'ok') ok++;
+        else if (c.status === 'redacted') redacted++;
+        else uncertain++;
+      }
+      return { ok: ok, uncertain: uncertain, redacted: redacted };
+    }
+
+    function updateStatusChips() {
+      var s = checkSummary();
+      if (model.tier !== 'dom') {
+        alignChip.textContent = '';
+      } else if (model.legacy) {
+        alignChip.textContent = '';   // the legacy chip already says it all
+      } else if (s.uncertain > 0) {
+        alignChip.textContent = '⚠ ' + s.uncertain + ' interaction(s) failed the alignment self-check';
+        alignChip.className = 'replay-note replay-warn';
+      } else if (s.redacted > 0 && s.ok === 0) {
+        alignChip.textContent = 'alignment unverified (redacted interactions)';
+        alignChip.className = 'replay-note';
+      } else if (s.ok > 0) {
+        alignChip.textContent = 'alignment verified (' + s.ok + ' check' + (s.ok === 1 ? '' : 's') +
+          (s.redacted > 0 ? ', ' + s.redacted + ' redacted' : '') + ')';
+        alignChip.className = 'replay-note';
+      } else {
+        alignChip.textContent = '';
+      }
+      var fails = counters.patchFailures + counters.scrollFailures;
+      if (fails > 0) {
+        failChip.textContent = '⚠ ' + fails + ' recorded change(s) could not be re-applied — replay may diverge';
+        failChip.style.display = '';
+      } else {
+        failChip.style.display = 'none';
+      }
+    }
+
+    function drawTicker() {
+      var events = trial().events;
+      var recent = [];
+      for (var i = events.length - 1; i >= 0 && recent.length < 3; i--) {
+        var e = events[i];
+        if (e.t > playhead) continue;
+        if (e.kind === 'mousemove' || e.kind === 'touchmove') continue;
+        var label = e.kind;
+        if (e.kind === 'paste' || e.kind === 'ch:drop') label += ' (' + (e.len == null ? '?' : e.len) + ' ch)';
+        if (e.kind === 'keydown' && e.key) label += ' ' + JSON.stringify(e.key);
+        if (e.kind === 'input') label += e.redacted ? ' [redacted, ' + e.value_len + ' ch]' : (' "' + String(e.value || '').slice(0, 24) + '"');
+        if (e.__chk && e.__chk.status === 'uncertain') label += ' ⚠(' + e.__chk.reasons[0] + ')';
+        recent.unshift('[' + fmtClock(e.t) + '] ' + label);
+      }
+      ticker.textContent = recent.join('   ·   ') || '—';
+    }
+
+    // ── Playback loop ──
+    var lastFrame = null;
+    function tick(ts) {
+      if (!playing) return;
+      if (lastFrame != null) {
+        seek(playhead + (ts - lastFrame) * speed);
+      }
+      lastFrame = ts;
+      if (playhead >= trial().durMs) {
+        playing = false;
+        playBtn.textContent = '▶';
+        playBtn.setAttribute('aria-label', 'Play');
+        return;
+      }
+      requestAnimationFrame(tick);
+    }
+
+    playBtn.addEventListener('click', function () {
+      if (playing) {
+        playing = false;
+        playBtn.textContent = '▶';
+        playBtn.setAttribute('aria-label', 'Play');
+        return;
+      }
+      if (playhead >= trial().durMs) seek(0);
+      playing = true;
+      playBtn.textContent = '❚❚';
+      playBtn.setAttribute('aria-label', 'Pause');
+      lastFrame = null;
+      requestAnimationFrame(tick);
+    });
+    speedSel.addEventListener('change', function () { speed = Number(speedSel.value) || 1; });
+    scrub.addEventListener('input', function () { seek(Number(scrub.value), true); });
+    scrub.addEventListener('keydown', function (ev) {
+      var step = trial().durMs * 0.05;
+      if (ev.key === 'PageUp') { seek(playhead + step); ev.preventDefault(); }
+      else if (ev.key === 'PageDown') { seek(playhead - step); ev.preventDefault(); }
+      else if (ev.key === 'Home') { seek(0); ev.preventDefault(); }
+      else if (ev.key === 'End') { seek(trial().durMs); ev.preventDefault(); }
+    });
+    function selectTrial(i) {
+      trialIdx = i;
+      playing = false;
+      playBtn.textContent = '▶';
+      playBtn.setAttribute('aria-label', 'Play');
+      scrub.max = String(trial().durMs);
+      trialHadIframe = false;
+      trialHadShadow = false;
+      seedCamera();
+      sizeStage();
+      // DPR advisory: resolution-conditional CSS cannot be reproduced in an
+      // iframe that inherits the analyst's DPR (declared limitation, loud).
+      var recDpr = (trial().camera && trial().camera.dpr) ||
+        (model.viewport && model.viewport.dpr) || null;
+      if (recDpr && window.devicePixelRatio && recDpr !== window.devicePixelRatio) {
+        dprChip.textContent = 'Recorded at DPR ' + recDpr + ', viewing at DPR ' +
+          window.devicePixelRatio + ' — resolution-dependent styling may differ';
+        dprChip.style.display = '';
+      } else {
+        dprChip.style.display = 'none';
+      }
+      if (iframe) {
+        rebuildFrame(0);
+      } else {
+        appliedIdx = 0;
+        pendingCamSize = true;
+        flushCamSize();   // trace tier: transform initializes from the seed
+      }
+      seek(0);
+    }
+    trialSel.addEventListener('change', function () {
+      selectTrial(Number(trialSel.value) || 0);
+    });
+
+    // Analyst-side resizes (report sidebar, browser zoom, window resize)
+    // re-derive the stage box and transform — the reconstruction must track
+    // its container, not just the recording (Sol round-1 finding 11).
+    if (typeof ResizeObserver !== 'undefined') {
+      var ro = new ResizeObserver(function () {
+        var newW = Math.min(mount.clientWidth || 720, 960);
+        if (newW === stageW) return;
+        sizeStage();
+        pendingCamSize = true;
+        flushCamSize();
+        drawOverlay();
+        drawLane();
+      });
+      ro.observe(mount);
+    }
+
+    // Test/debug surface (used by the alignment battery; not a public API).
+    mount._chReplayDebug = {
+      seek: function (t) { seek(t); },
+      selectTrial: selectTrial,
+      getChecks: function () {
+        return trial().events
+          .filter(function (e) { return e.__chk; })
+          .map(function (e) {
+            return { t: e.t, kind: e.kind, status: e.__chk.status, reasons: e.__chk.reasons };
+          });
+      },
+      getCamera: function () { return { x: cam.x, y: cam.y, cw: cam.cw, ch: cam.ch, k: k, ox: ox, oy: oy }; },
+      getCounters: function () { return { patchFailures: counters.patchFailures, scrollFailures: counters.scrollFailures }; },
+      frameReady: function () { return iframe ? domReady : true; }
+    };
+
+    // ── Boot ──
+    selectTrial(0);
+  };
+})();
+
+  </script>
+  <script>
+    // Lazy loader: replay models are heavy (dom tier ≈ MBs), so each
+    // participant's model script loads only when the analyst asks for it.
+    // Script-tag injection works under file:// where fetch() is blocked.
+    (function () {
+      document.addEventListener('click', function (e) {
+        const btn = e.target.closest('.replay-load-btn');
+        if (!btn) return;
+        const block = btn.closest('.replay-block');
+        const src = block.dataset.replaySrc;
+        const pid = block.dataset.pid;
+        const mount = block.querySelector('.replay-mount');
+        btn.disabled = true;
+        btn.textContent = 'Loading…';
+        mount.setAttribute('aria-busy', 'true');
+        const fail = function (msg) {
+          mount.removeAttribute('aria-busy');
+          const p = document.createElement('p');
+          p.className = 'replay-note replay-warn';
+          p.textContent = msg;
+          mount.textContent = '';
+          mount.appendChild(p);
+        };
+        const s = document.createElement('script');
+        s.src = src;
+        s.onload = function () {
+          mount.removeAttribute('aria-busy');
+          const model = (window.__chReplay || {})[pid];
+          if (!model) { fail('Replay data failed to load (' + src + ').'); return; }
+          mount.textContent = '';
+          window.initChReplayViewer(mount, model);
+        };
+        s.onerror = function () {
+          fail('Replay asset missing (' + src + ') — was the report generated with the replay artifacts present?');
+        };
+        document.body.appendChild(s);
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -329,6 +329,16 @@
 
     // Camera at the applied position: window scroll + viewport dims.
     var cam = null;            // {x, y, w, h, cw, ch}
+    // The §6 camera fields that describe WHAT THE PARTICIPANT SAW rather than
+    // where the page was: `dpr`, `vv_scale`, `vv_offset_x/y`. They are not
+    // alignment inputs — pinch zoom moves neither client coordinates nor
+    // `getBoundingClientRect`, and DPR moves neither — so nothing in the five
+    // §8 predicates reads them and nothing should. What they ARE is the
+    // difference between the analyst's view and the participant's, which is the
+    // same class as the DPR advisory and belongs in the same place. Tracked at
+    // the PLAYHEAD (an interaction recorded mid-pinch is a moment, not a
+    // segment), rebuilt by every restore like the rest of the walk's state.
+    var camView = null;        // {dpr, scale, ox, oy} from the last event camera
     var pendingCamSize = false;
     var stageW = 0, stageH = 0;
     var k = 1, ox = 0, oy = 0;  // iframe scale + letterbox origin
@@ -526,6 +536,14 @@
     dprChip.setAttribute('data-ch-dpr-note', '');
     dprChip.style.display = 'none';
     header.appendChild(dprChip);
+    // Pinch/zoom state at the playhead. A pinched participant is looking at a
+    // magnified sub-rectangle of the same layout, so the reconstruction is
+    // geometrically right and visually wrong, and only saying so makes the
+    // difference visible.
+    var zoomChip = el('span', 'replay-note', '');
+    zoomChip.setAttribute('data-ch-zoom-note', '');
+    zoomChip.style.display = 'none';
+    header.appendChild(zoomChip);
     // Media is rendered as STATE, never played (design §7) — the forensic
     // posture, and the fork's too. Saying so is part of the rendering: a badge
     // reading "paused at 4.0s" over a silent element would otherwise read as a
@@ -864,6 +882,17 @@
         cam.cw = c.client_w;
         cam.ch = num(c.client_h) != null ? c.client_h : cam.ch;
         pendingCamSize = true;
+      }
+      // The remaining three §6 fields. Nothing here changes the reconstruction:
+      // they are read so the viewer can SAY what the participant's own view was
+      // at this moment (see `camView`).
+      if (num(c.dpr) != null || num(c.vv_scale) != null) {
+        camView = {
+          dpr: num(c.dpr) != null ? c.dpr : (camView ? camView.dpr : null),
+          scale: num(c.vv_scale) != null ? c.vv_scale : 1,
+          ox: num(c.vv_offset_x) || 0,
+          oy: num(c.vv_offset_y) || 0
+        };
       }
     }
 
@@ -1409,6 +1438,10 @@
       var doc = frameDoc();
       segIdx = targetSeg;
       var s = segments[targetSeg];
+      // The participant's own view state is a function of the playhead, like
+      // the canvas composites and the check memo below, so it is rebuilt by the
+      // walk rather than carried across a restore.
+      camView = null;
 
       // A continuation with `dom.*` events and no keyframe before it is a §3
       // violation. The model marks it; the viewer refuses to play it with a
@@ -1478,6 +1511,16 @@
       // 3. seed initial_state — AFTER the mount (a form write on a node the
       //    tree has not created yet is a silent no-op) and BEFORE the events.
       seedInitialState(start);
+      // The placeholder latch is sampled HERE as well as at the end of every
+      // applied batch, because the walk below is one batch: a `dom.remove`
+      // landing at tRel 0 of the target segment is applied inside the very
+      // first `applyUpTo`, so an element that the KEYFRAME had would never be
+      // seen by a latch that only samples afterwards. The chip's contract is
+      // "existed at ANY point in this span" (§13 absence-of-evidence), and that
+      // must not depend on where a removal falls relative to a sample. Found by
+      // the alignment battery on WebKit, whose 1 ms timer granularity makes the
+      // tRel-0 removal reachable from a real recording. (T5.8)
+      updatePlaceholderChips();
       // 4. walk the span, merged with the session streams at §7 precedence
       walk = buildWalk(walkStart, walkEnd);
       appliedIdx = 0;
@@ -1956,7 +1999,46 @@
       return { ok: ok, uncertain: uncertain, redacted: redacted, noAnchor: noAnchor };
     }
 
+    // What the PARTICIPANT was looking at, at the playhead — as distinct from
+    // where the page was, which is the camera. Both advisories read the last
+    // per-event §6 block the walk has passed, falling back to the segment seed
+    // before the first one: an interaction recorded mid-zoom is a MOMENT, and a
+    // seed-scoped reading calls a session that zoomed halfway through by
+    // whichever value happened to be true at the segment origin. (T5.6's M-6:
+    // `dpr`, `vv_scale` and `vv_offset_*` had no reader anywhere; this is it.)
+    function updateViewChips() {
+      var seedDpr = (seg().camera && num(seg().camera.dpr) != null ? seg().camera.dpr : null);
+      if (seedDpr == null) seedDpr = (model.viewport && num(model.viewport.dpr) != null) ? model.viewport.dpr : null;
+      var recDpr = camView && num(camView.dpr) != null ? camView.dpr : seedDpr;
+      var mine = window.devicePixelRatio;
+      // Resolution-conditional CSS cannot be reproduced in an iframe that
+      // inherits the analyst's DPR (declared limitation, loud).
+      if (recDpr && mine && recDpr !== mine) {
+        dprChip.textContent = 'Recorded at DPR ' + recDpr + ', now viewing at DPR ' +
+          mine + '. Resolution-dependent styling may differ.';
+        dprChip.style.display = '';
+      } else {
+        dprChip.style.display = 'none';
+      }
+      // Pinch zoom is not a layout change — client coordinates and
+      // `getBoundingClientRect` are layout-viewport relative in every engine —
+      // so the reconstruction is CORRECT and the five §8 predicates pass. What
+      // it changes is what the participant could actually see, and a
+      // reconstruction that silently replays a pinched moment at 1× is the
+      // "aligned but not what they saw" case this chip exists for.
+      var sc = camView && num(camView.scale) != null ? camView.scale : null;
+      if (sc != null && Math.abs(sc - 1) > 0.01) {
+        zoomChip.textContent = 'The participant was pinch-zoomed to ' + sc + '× here ' +
+          '(visual viewport offset ' + camView.ox + ',' + camView.oy + '). ' +
+          'The reconstruction replays the full layout at 1×.';
+        zoomChip.style.display = '';
+      } else {
+        zoomChip.style.display = 'none';
+      }
+    }
+
     function updateStatusChips() {
+      updateViewChips();
       var s = checkSummary();
       // Reset the class every time, not only the text: without this the chip
       // keeps `replay-warn` from whichever segment last held an uncertain
@@ -2104,17 +2186,6 @@
       // Check caches are cleared by `restore()`, span-wide — see there.
       seedCamera(seg().spanStart != null ? seg().spanStart : i);
       sizeStage();
-      // DPR advisory: resolution-conditional CSS cannot be reproduced in an
-      // iframe that inherits the analyst's DPR (declared limitation, loud).
-      var recDpr = (seg().camera && seg().camera.dpr) ||
-        (model.viewport && model.viewport.dpr) || null;
-      if (recDpr && window.devicePixelRatio && recDpr !== window.devicePixelRatio) {
-        dprChip.textContent = 'Recorded at DPR ' + recDpr + ', now viewing at DPR ' +
-          window.devicePixelRatio + '. Resolution-dependent styling may differ.';
-        dprChip.style.display = '';
-      } else {
-        dprChip.style.display = 'none';
-      }
       if (shellReady || !iframe) restore(i, 0);
       scrub.value = '0';
       redraw();

@@ -1327,3 +1327,113 @@ describe('T5.5 — §5.7 truncation and the capture-failure surface', () => {
     assert.equal(boot(fixture('canonical-core')).chip('data-ch-capture-failures').style.display, 'none');
   });
 });
+
+// ── the participant's own view state (T5.8) ────────────────────────────────
+// `dpr`, `vv_scale` and `vv_offset_*` are three §6 camera fields that had NO
+// reader anywhere: `foldEventCamera` read six of ten and stopped, and the DPR
+// advisory read the SEGMENT SEED, so an interaction recorded mid-pinch or
+// mid-zoom replayed at 1× with nothing said. They are deliberately NOT
+// alignment inputs — pinch zoom moves neither client coordinates nor
+// `getBoundingClientRect` — so what they buy is an advisory, and it has to be
+// playhead-scoped because a zoom is a moment inside a segment, not a property
+// of one. Geometry across a real pinch is the Playwright battery's
+// (`cursor-alignment.battery.mjs`, B-pinch); this file pins the state machine.
+describe('T5.8 — per-event dpr / vv_scale / vv_offset_* drive a playhead-scoped advisory', () => {
+  const camera = (over) => Object.assign({
+    scroll_x: 0, scroll_y: 0, viewport_w: 1000, viewport_h: 800,
+    client_w: 1000, client_h: 800, dpr: 1, vv_scale: 1, vv_offset_x: 0, vv_offset_y: 0,
+  }, over);
+
+  const pinchRecording = () => baseRecording({
+    segments: [segment({
+      t_end: 1000,
+      initial_dom: bodyKeyframe([
+        { id: 2, kind: 'element', tag: 'button', attrs: { id: 'b' }, children: [] },
+      ]),
+      events: [
+        { type: 'mouse.click', t: 100, x: 5, y: 5, button: 0, target: 2, camera: camera() },
+        { type: 'mouse.click', t: 300, x: 5, y: 5, button: 0, target: 2,
+          camera: camera({ dpr: 3, vv_scale: 2.5, vv_offset_x: 120, vv_offset_y: 64 }) },
+        { type: 'mouse.click', t: 500, x: 5, y: 5, button: 0, target: 2, camera: camera() },
+      ],
+    })],
+  });
+
+  it('names the pinch state at the interaction and clears it afterwards', () => {
+    const v = boot(pinchRecording());
+    const zoom = () => v.chip('data-ch-zoom-note');
+    v.dbg.seek(150);
+    assert.equal(zoom().style.display, 'none', 'silent before the pinch');
+    v.dbg.seek(350);
+    assert.equal(zoom().style.display, '', 'shown at the pinched interaction');
+    assert.match(zoom().textContent, /2\.5×/);
+    assert.match(zoom().textContent, /120,64/);
+    v.dbg.seek(550);
+    assert.equal(zoom().style.display, 'none', 'quiet again once the pinch ends');
+  });
+
+  it('reads the DPR advisory off the PLAYHEAD, not the segment seed', () => {
+    const v = boot(pinchRecording());
+    const dpr = () => v.chip('data-ch-dpr-note');
+    // The seed says DPR 1 and so does the viewer's own window, so a
+    // seed-scoped advisory is silent for the whole segment — which is the
+    // defect: the middle interaction was recorded at DPR 3.
+    v.dbg.seek(150);
+    assert.equal(dpr().style.display, 'none');
+    v.dbg.seek(350);
+    assert.equal(dpr().style.display, '', 'the mid-segment DPR change is reported where it happens');
+    assert.match(dpr().textContent, /Recorded at DPR 3/);
+    v.dbg.seek(550);
+    assert.equal(dpr().style.display, 'none');
+  });
+
+  it('rebuilds the view state on a restore rather than carrying it', () => {
+    // A backward seek is a restore, and a restore to a position BEFORE any
+    // camera block has no view state at all. Carrying the last one would tell
+    // the analyst the recording was pinched at a moment it was not.
+    const v = boot(pinchRecording());
+    v.dbg.seek(350);
+    assert.equal(v.chip('data-ch-zoom-note').style.display, '');
+    v.dbg.seek(0);
+    assert.equal(v.chip('data-ch-zoom-note').style.display, 'none');
+    assert.equal(v.chip('data-ch-dpr-note').style.display, 'none');
+  });
+
+  it('falls back to the segment seed before the first camera block', () => {
+    // A recording whose SESSION viewport states DPR 2 and whose events say
+    // nothing: the advisory still fires, from the seed, exactly as it did
+    // before this change.
+    const rec = pinchRecording();
+    rec.viewport.dpr = 2;
+    rec.segments[0].events = [];
+    const v = boot(rec);
+    assert.equal(v.chip('data-ch-dpr-note').style.display, '');
+    assert.match(v.chip('data-ch-dpr-note').textContent, /Recorded at DPR 2/);
+  });
+});
+
+// ── the §13 placeholder latch cannot depend on sample timing (T5.8) ────────
+describe('T5.8 — a placeholder removed at tRel 0 still latches its chip', () => {
+  it('latches from the span keyframe, before the walk applies anything', () => {
+    // FOUND BY THE PLAYWRIGHT BATTERY, on WebKit: its timer granularity is
+    // 1 ms, so a removal in the same millisecond as the segment origin rounds
+    // to tRel 0 and is applied inside the FIRST `applyUpTo` — before a latch
+    // that only samples at batch boundaries has looked. The chip's contract is
+    // "existed at ANY point in this span", and "any point" has to include the
+    // keyframe itself.
+    const rec = baseRecording({
+      segments: [segment({
+        t_end: 1000,
+        initial_dom: bodyKeyframe([
+          { id: 2, kind: 'element', tag: 'iframe', attrs: { id: 'f' }, children: [] },
+        ]),
+        events: [{ type: 'dom.remove', t: 0, node: 2 }],
+      })],
+    });
+    const v = boot(rec);
+    assert.equal(v.doc().querySelector('iframe, [data-ch-placeholder="iframe"]'), null,
+      'the placeholder really is gone from the reconstruction');
+    assert.notEqual(v.chip('data-ch-iframe-warn').style.display, 'none',
+      'and the warning is still there — the interactions inside it are still invisible');
+  });
+});
