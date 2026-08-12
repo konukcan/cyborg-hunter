@@ -90,114 +90,136 @@ const recording = await page.evaluate(() => window.CH_E2E.finish());
 check(!!recording && typeof recording === 'object',
   'the scripted session ran against the built dist and returned a recording');
 
-// ── T3-T5 red window: revived by A2 ────────────────────────────────────────
-// Everything below asserts the V1 WIRE FORMAT — `schema_version === 1`,
-// `metadata.*`, `trials[]`, flat `kind` names, `initial_dom` as an HTML string,
-// `ch_extensions` at the top level. T3 replaced all of it with
-// SessionRecording v2, so these are not failing tests, they are tests of a
-// format this recorder no longer speaks.
-//
-// They are skipped rather than rewritten because the same claims are already
-// pinned against v2, by suites that were written for it:
-//   tests/replay/capture-e2e.test.js        whole assembly, six §8 leak channels
-//   tests/replay/capture-trace.test.js      event vocabulary + privacy floors
-//   tests/replay/serializer.test.js         wire shape, every test strict-validated
-//   tests/browser/replay/capture-fork-smoke.mjs        real capture → validator → fork
-//   tests/browser/replay/capture-chromium.battery.mjs  Chromium-only capture semantics
-// What is genuinely NOT re-covered elsewhere, and is what A2 should revive
-// here, is the pair of adversarial cases at the end: hostile participant-
-// injected markup arriving defanged, and the gzip round trip.
-console.log('▶ SKIPPED (T3-T5 red window: revived by A2) — v1-wire capture assertions:');
-for (const item of [
-  'schema_version / participant_id / tier / end_reason on metadata',
-  'implicit + two bracketed trials, __session__ first',
-  'v1 event kinds: mousemove, click, keydown/input, paste, mutation, blur/focus',
-  'paste length-only and no content',
-  'input value / password redaction / checkbox state as v1 `input` events',
-  'characterData + attribute mutations as v1 `mutation` events',
-  'honeypot bait stripped from the v1 initial_dom HTML string',
-  'ch_extensions merge (scoring, preset, guard_violations)',
-  'ch:guard_violation events with pre_scramble_dom',
-  'adversarial DOM defanging (handler attrs, escaped </script>, selector-unsafe id)',
-  'gzip round-trip of the recording blob',
-]) console.log('  ⊘ ' + item);
-await browser.close();
-if (failures > 0) {
-  console.error(`\n${failures} FAILURE(S)`);
-  process.exit(1);
-}
-console.log('\nReplay integration: live capture drive passed; v1-wire assertions skipped (red window).');
-process.exit(0);
+// ── v2 wire assertions (T3-T5 red window CLOSED here, T5 Task 10(c)) ───────
+// These were skipped from T3 (when the recorder moved to SessionRecording v2)
+// until T5 (when the viewer followed). They are the SAME eleven claims the
+// skip list named, re-pointed at the v2 wire: dotted event types, integer
+// node ids, DomNode keyframes, `extensions['cyborg-hunter']` in place of
+// `ch_extensions`. Two of them are covered nowhere else and are the reason
+// this half had to come back rather than be deleted: adversarial
+// participant-injected markup (now the stronger never-parsed claim) and the
+// gzip round trip.
+console.log('▶ schema + identity');
+check(recording.schema_version === 2, 'schema_version is 2');
+check(recording.recorder && recording.recorder.name === 'cyborg-hunter-replay',
+  'recorder identity names this recorder (v1 stamped a metadata.recorder string)');
+check(typeof recording.recorder.version === 'string' && recording.recorder.version.length > 0,
+  'recorder version present');
+check(recording.participant_id === 'E2E-P1', 'participant_id carried at the top level');
+check(recording.end_reason === 'finished', 'end_reason finished');
+check(!('metadata' in recording), 'no v1 metadata block survives anywhere on the wire');
+const chExt = (recording.extensions || {})['cyborg-hunter'] || {};
+check(chExt.tier === 'dom', 'tier recorded in the cyborg-hunter extension');
 
-console.log('▶ schema + capture assertions');
-check(recording.schema_version === 1, 'schema_version is 1');
-check(recording.metadata.participant_id === 'E2E-P1', 'participant_id carried');
-check(recording.metadata.tier === 'dom', 'tier recorded');
-check(recording.metadata.end_reason === 'finished', 'end_reason finished');
-// Three trials: the implicit one (guard violation fires between
-// startSession and the first startTrial) plus the two bracketed ones.
-check(recording.trials.length === 3, 'implicit + two bracketed trials (' + recording.trials.length + ')');
-check(recording.trials[0].trial_id === '__session__', 'first trial is the implicit one');
+console.log('▶ segments');
+// v1 recorded THREE trials here — an implicit `__session__` first, because the
+// guard violation arrived as an EVENT before startTrial and opened a trial for
+// itself. §5.8 removed that event type (violations are extension data now), so
+// nothing reaches the buffer before the first bracketed segment and the
+// implicit segment is correctly absent. The claim is re-pointed, not dropped:
+// what the recording says about its own structure must still be true.
+check(recording.segments.length === 2,
+  'two bracketed segments, no implicit one (' + recording.segments.length + ')');
+check(recording.segments[0].label === 'trial-1' && recording.segments[1].label === 'trial-2',
+  'segment labels carry the trial ids');
+check(recording.segments.every((s, i) => s.index === i), 'segment index equals array position');
+const seg1 = recording.segments[0];
+const seg2 = recording.segments[1];
+check(seg1.initial_dom && typeof seg1.initial_dom === 'object' && seg1.initial_dom.tag === 'body',
+  'segment 1 opens a span with a DomNode keyframe (v1 carried an HTML string)');
+check(seg2.initial_dom === null,
+  'segment 2 is a continuation of the same span, not a second snapshot');
 
-const t1 = recording.trials.find(t => t.trial_id === 'trial-1');
-const kinds = new Set(t1.events.map(e => e.kind));
-check(kinds.has('mousemove'), 'trial 1 has mousemove events');
-check(kinds.has('click'), 'trial 1 has click events');
-check(kinds.has('keydown') || kinds.has('input'), 'trial 1 has typing evidence');
-check(kinds.has('paste'), 'trial 1 has the paste event');
-check(kinds.has('mutation'), 'trial 1 has DOM mutations');
-check(kinds.has('blur') && kinds.has('focus'), 'trial 1 has blur/focus pair');
+console.log('▶ event vocabulary (dotted types, integer node ids)');
+const types = new Set(seg1.events.map(e => e.type));
+check(types.has('mouse.move'), 'segment 1 has mouse.move events');
+check(types.has('mouse.click'), 'segment 1 has mouse.click events');
+check(types.has('input.value') || types.has('key.down'), 'segment 1 has typing evidence');
+check(types.has('clipboard.paste'), 'segment 1 has the paste event');
+check(types.has('blur') && types.has('focus'), 'segment 1 has blur/focus pair');
+check(!seg1.events.some(e => 'kind' in e), 'no v1 `kind` field survives on any event');
+check(seg1.events.every(e => typeof e.t === 'number' && isFinite(e.t)), 'every event carries a numeric t');
+check(seg1.events.every((e, i, a) => i === 0 || a[i - 1].t <= e.t), 'events are time-sorted');
 
-const pasteEv = t1.events.find(e => e.kind === 'paste');
-check(pasteEv.len === 'pasted answer text'.length, 'paste length only (no content)');
-check(!('text' in pasteEv), 'paste content never recorded');
+console.log('▶ DOM mutations arrive as dom.* patches against integer ids');
+// v1 recorded `mutation` events carrying HTML fragments. v2 records the
+// operation: the feedback text lands as a dom.add of a text node (the element
+// was empty, so there was no text node to update), the card flip as a dom.attr.
+const patches = seg1.events.filter(e => e.type.startsWith('dom.'));
+check(patches.length > 0, 'segment 1 carries dom.* patches (' + patches.length + ')');
+// `dom.add` names its insertion point (`parent`, `before`) by id and carries
+// the new subtree as a DomNode; every other patch names its target `node`.
+check(patches.every(e => e.type === 'dom.add'
+  ? Number.isInteger(e.parent) && (e.before === null || Number.isInteger(e.before))
+  : Number.isInteger(e.node)),
+  'every patch addresses its target by integer id — no selectors, no markup');
+const feedbackPatch = patches.find(e => e.type === 'dom.add' &&
+  e.node && e.node.kind === 'text' && e.node.text === 'Correct!');
+check(!!feedbackPatch, 'the feedback text mutation was captured as a dom.add of a text node');
+check(!!patches.find(e => e.type === 'dom.attr' && e.name === 'class' && /flipped/.test(e.value || '')),
+  'card class flip captured as a dom.attr patch');
 
-const inputEvents = t1.events.filter(e => e.kind === 'input');
-const answerInput = inputEvents.filter(e => e.el === 'input#answer').pop();
+console.log('▶ privacy floors on the wire');
+const pasteEv = seg1.events.find(e => e.type === 'clipboard.paste');
+check(pasteEv.len === 'pasted answer text'.length, 'paste length only (' + pasteEv.len + ')');
+check(pasteEv.text == null && pasteEv.html == null, 'paste content never recorded');
+const valueEvents = seg1.events.filter(e => e.type === 'input.value');
+const answerInput = valueEvents.filter(e => !e.redacted).pop();
 check(!!answerInput && answerInput.value === 'king of hearts', 'input value captured');
-const secretInput = inputEvents.filter(e => e.el === 'input#secret').pop();
-check(!!secretInput && secretInput.redacted === true && secretInput.value === undefined,
-  'password input redacted unconditionally');
-check(secretInput && secretInput.value_len === 'hunter2'.length, 'password length preserved');
-const confident = inputEvents.filter(e => e.el === 'input#confident').pop();
-check(!!confident && confident.checked === true, 'checkbox checked state captured');
+const secretInput = valueEvents.filter(e => e.redacted === true).pop();
+check(!!secretInput && secretInput.value === undefined,
+  'password input redacted unconditionally (no value key)');
+check(!!secretInput && secretInput.value_len === 'hunter2'.length, 'password length preserved');
+const checkedEv = seg1.events.filter(e => e.type === 'input.checked').pop();
+check(!!checkedEv && checkedEv.checked === true, 'checkbox state captured as input.checked');
+// The whole-file sentinel: a redaction that holds per-event but leaks through
+// some other channel (a keyframe attribute, a patch, an extension block) is
+// not a redaction. v1 asserted this per event only.
+const wholeFile = JSON.stringify(recording);
+check(!wholeFile.includes('hunter2'), 'the password appears NOWHERE in the artifact');
+check(!wholeFile.includes('pasted answer text'), 'the pasted text appears NOWHERE in the artifact');
 
-const mutations = t1.events.filter(e => e.kind === 'mutation');
-check(mutations.some(m => m.op === 'characterData' || (m.op === 'childList' && /Correct!/.test(m.html || ''))),
-  'feedback text mutation captured');
-check(mutations.some(m => m.op === 'attributes' && m.name === 'class' && /flipped/.test(m.value || '')),
-  'card class flip captured as attribute mutation');
-
-console.log('▶ honeypot cooperation (DOM stripping)');
-check(t1.initial_dom.length > 100, 'initial DOM snapshot present');
-check(!t1.initial_dom.includes('fg-honeypot') && !t1.initial_dom.includes('fg-ai-bait'),
-  'honeypot bait stripped from initial_dom');
-check(!mutations.some(m => (m.html || '').includes('fg-ai-bait')),
-  'honeypot bait never appears in mutation snapshots');
+console.log('▶ honeypot cooperation (DomNode stripping)');
+const keyframeJson = JSON.stringify(seg1.initial_dom);
+check(keyframeJson.length > 100, 'keyframe tree present (' + keyframeJson.length + ' chars)');
+check(!keyframeJson.includes('fg-honeypot') && !keyframeJson.includes('fg-ai-bait'),
+  'honeypot bait stripped from the keyframe tree');
+check(!wholeFile.includes('fg-ai-bait'),
+  'honeypot bait never appears in any patch or extension block either');
 const baitTagged = await page.evaluate(() =>
   document.querySelectorAll('[data-ch-role="honeypot"]').length);
 check(baitTagged >= 3, 'live honeypot elements carry data-ch-role (' + baitTagged + ')');
 
-console.log('▶ ch_extensions merge');
-check(recording.ch_extensions.scoring !== null, 'CH scoring merged from session report');
-check(recording.ch_extensions.preset === 'standard', 'preset carried');
-check(Array.isArray(recording.ch_extensions.guard_violations), 'guard violations array present');
+console.log('▶ extensions["cyborg-hunter"] merge (v1: ch_extensions)');
+check(!('ch_extensions' in recording), 'the v1 ch_extensions block is gone');
+check(chExt.scoring !== null && typeof chExt.scoring === 'object', 'CH scoring merged from session report');
+check(chExt.preset === 'standard', 'preset carried');
+check(Array.isArray(chExt.guard_violations), 'guard violations array present');
+check(Array.isArray(chExt.capture_failures) && chExt.capture_failures.length === 0,
+  'no capture channel went dark during the scripted session');
 
 console.log('▶ guard-friction violation capture (observe mode)');
-// blur in observe mode → violation start → replay records ch:guard_violation
-// with a pre-scramble DOM snapshot taken synchronously in the callback.
-const guardEvents = recording.trials.flatMap(t => t.events).filter(e => e.kind === 'ch:guard_violation');
-check(guardEvents.length > 0, 'guard violation events recorded (' + guardEvents.length + ')');
-const startEv = guardEvents.find(e => e.phase === 'start');
-check(!!startEv && typeof startEv.pre_scramble_dom === 'string' && startEv.pre_scramble_dom.length > 100,
-  'violation start carries a clean pre-scramble DOM snapshot');
-check(startEv && !startEv.pre_scramble_dom.includes('guard-friction-overlay'),
+// v1 recorded a `ch:guard_violation` EVENT with a pre_scramble_dom HTML
+// string. §5.8 forbids a vendor event type in the shared stream, so the
+// violation moved into the vendor extension — where its pre-scramble snapshot
+// is a DomNode tree like every other snapshot.
+check(!wholeFile.includes('ch:guard_violation'),
+  'no ch:guard_violation event type survives in the stream (§5.8)');
+check(chExt.guard_violations.length > 0,
+  'guard violation recorded in the extension (' + chExt.guard_violations.length + ')');
+const startEv = chExt.guard_violations.find(v => v.phase === 'start');
+check(!!startEv && startEv.pre_scramble_dom && typeof startEv.pre_scramble_dom === 'object',
+  'violation start carries a DomNode pre-scramble snapshot');
+check(startEv && !JSON.stringify(startEv.pre_scramble_dom).includes('guard-friction-overlay'),
   'pre-scramble snapshot does not contain the friction overlay');
 
 console.log('▶ adversarial DOM (participant-injected hostile markup)');
+// NOT covered anywhere else — and stronger under v2 than it was under v1.
+// v1's defence was escaping: the hostile markup was serialized into an HTML
+// string and the string had to survive being parsed again at replay time.
+// v2 never produces a string: the participant's DOM arrives as structured
+// data, so there is no parse step for a `</script>` to break out of.
 const hostile = await page.evaluate(() => {
-  // Simulates an adversarial participant/extension injecting hostile DOM,
-  // then records it — the artifact must come out defanged.
   const zone = document.createElement('div');
   zone.id = 'hostile';
   zone.innerHTML =
@@ -212,7 +234,7 @@ const hostile = await page.evaluate(() => {
     participantId: 'ADV', tier: 'dom', autoSave: { mode: 'none' } });
   rec2.startSession();
   rec2.startTrial({ trialId: 'adv-1' });
-  // trigger an input on the weird-id field so the id lands in the stream
+  // trigger an input on the weird-id field so the node lands in the stream
   const weird = zone.querySelector('input');
   weird.value = 'typed';
   weird.dispatchEvent(new Event('input', { bubbles: true }));
@@ -225,16 +247,30 @@ const hostile = await page.evaluate(() => {
     resolve(r);
   }));
 });
-const advDom = hostile.trials[0].initial_dom;
-check(!/\son(error|load|click|mouseover|focus)\s*=/.test(advDom),
-  'handler attributes stripped from initial_dom');
-check(advDom.includes('&lt;/script&gt;') && !advDom.includes('</script>'),
-  'literal </script> text arrives escaped');
-check(/href="javascript:/.test(advDom) === false || true,
-  'javascript: href present is inert under sandbox+CSP (documented)');
-const advInput = hostile.trials[0].events.find(e => e.kind === 'input');
-check(!!advInput && advInput.id === 'a:b c',
-  'selector-unsafe id captured raw for getElementById resolution');
+const advTree = hostile.segments[0].initial_dom;
+check(advTree && typeof advTree === 'object' && !Array.isArray(advTree),
+  'the hostile page is recorded as a DomNode tree, never as markup');
+const advJson = JSON.stringify(advTree);
+check(!/"on(error|load|click|mouseover|focus)"\s*:/.test(advJson),
+  'handler attributes stripped at capture');
+// Walk to the node that carries the hostile text: it must be a TEXT node whose
+// value is the literal string. Nothing escapes it, because nothing parses it.
+function walk(n, out = []) { out.push(n); (n.children || []).forEach(c => walk(c, out)); return out; }
+const advNodes = walk(advTree);
+const scriptText = advNodes.find(n => n.kind === 'text' && n.text === 'text with </script> inside');
+check(!!scriptText, 'literal </script> arrives verbatim as TEXT-node data, unescaped and unparsed');
+const weirdIdNode = advNodes.find(n => n.attrs && n.attrs.id === 'a:b c');
+check(!!weirdIdNode, 'selector-unsafe id captured raw as an attribute value');
+const advInput = hostile.segments[0].events.find(e => e.type === 'input.value');
+check(!!advInput && advInput.node === weirdIdNode.id,
+  'the event addresses that node by INTEGER id — no selector is ever built from participant data');
+// Fidelity, stated rather than assumed: capture does NOT rewrite a
+// `javascript:` href. It is refused at INSTANTIATION by the viewer's §12
+// filter (pinned in tests/replay/dom-instantiate.test.js), which is where a
+// defence belongs — a recording that silently edits what the page contained
+// would be a worse artifact.
+const jsHref = advNodes.find(n => n.attrs && /^javascript:/.test(n.attrs.href || ''));
+check(!!jsHref, 'a javascript: href is recorded verbatim (the viewer, not capture, refuses it)');
 
 console.log('▶ gzip round-trip');
 const gzipInfo = await page.evaluate(async () => {
@@ -250,10 +286,13 @@ const gzipInfo = await page.evaluate(async () => {
   if (blob.type !== 'application/gzip') return { supported: false, fallback: true, size: blob.size };
   const ds = new DecompressionStream('gzip');
   const text = await new Response(blob.stream().pipeThrough(ds)).text();
-  return { supported: true, roundTrip: JSON.parse(text).schema_version === 1, gz: blob.size, raw: rawLen };
+  const parsed = JSON.parse(text);
+  return { supported: true, roundTrip: parsed.schema_version === 2,
+    recorder: parsed.recorder && parsed.recorder.name, gz: blob.size, raw: rawLen };
 });
 if (gzipInfo.supported) {
-  check(gzipInfo.roundTrip, 'gzip blob decompresses back to schema v1 JSON');
+  check(gzipInfo.roundTrip, 'gzip blob decompresses back to schema v2 JSON');
+  check(gzipInfo.recorder === 'cyborg-hunter-replay', 'the decompressed artifact is intact');
   check(gzipInfo.gz < gzipInfo.raw, `gzip smaller than raw (${gzipInfo.gz} < ${gzipInfo.raw})`);
 } else {
   check(gzipInfo.fallback === true, 'CompressionStream absent — plain fallback Blob produced');

@@ -116,5 +116,12 @@ There is no CH-v1 playback path and no v1→v2 converter (T5 non-goals). To play
 tag. Reports already generated on disk are unaffected by any of this: a CH
 report inlines its own viewer copy and its own models.
 
+**What happens if a v1 artifact reaches today's CLI** (T5 Task 10's decision):
+ingest attaches it with a version warning, `renderReplayAssets` skips that
+participant rather than aborting the cohort's report, the CLI prints
+`replay/ — skipped <pid>: <reason>`, and the participant's replay section
+says *"Replay artifact could not be loaded"* with the §11 reason and the
+filename. The rest of the cohort renders normally.
+
 
 Note (Task-8 confirmation): the frozen fixture holds NO discrete mouse event with `target: null` or a missing anchor (all 18 segments swept), so part P's `mouse.move` substitution for part A's no-target-click claim was FORCED by the corpus, not preferred; the `noAnchor` bucket half is pinned in `alignment-viewer-model.test.js` instead.

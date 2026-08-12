@@ -22,6 +22,7 @@
 import { VERSION, sanitizeId } from '../../shared/constants.js';
 import { decomposeScore } from '../analyzers/triage.js';
 import { getByPath } from '../../shared/paths.js';
+import { inferTier } from '../../replay/viewer-model.js';
 
 /**
  * Renders the report's index.html as a string. `opts.replayClientSrc` is the
@@ -33,7 +34,16 @@ import { getByPath } from '../../shared/paths.js';
  * pre-split renderHtmlIndex always rendered).
  */
 export async function renderIndexHtml(summaries, triage, participants, config, visualsRendered, opts = {}) {
-  const replayClientSrc = opts.replayClientSrc ?? '';
+  // Inlining JS into an HTML <script> means owning the one sequence the HTML
+  // parser reacts to: it ends the element at the first "</script", wherever
+  // it appears — inside a string, inside a comment, anywhere. `<\/script` is
+  // the same characters to the JS parser (an identity escape in a string; raw
+  // text in a comment) and invisible to the HTML one, so the viewer arrives
+  // whole. Without this, one comment discussing "</script> breakouts" (two of
+  // the v2 replay modules do) truncates the whole viewer and the report boots
+  // with a SyntaxError. demo/replay-host.js does the same for its own
+  // inlining; this is the report's copy of that duty.
+  const replayClientSrc = (opts.replayClientSrc ?? '').replace(/<\/(script)/gi, '<\\/$1');
   const visualsUnavailableNote = opts.visualsUnavailableNote
     ?? 'Visual renderers not available (install the canvas package).';
   const imageSources = opts.imageSources ?? null;       // pid → {typingProfile, sessionTimeline, trajectories} data URIs (null entry = omit that img)
@@ -740,7 +750,7 @@ export async function renderIndexHtml(summaries, triage, participants, config, v
     .replay-note { font-size: 12px; color: var(--dim); }
     .replay-warn { color: var(--hard); }
     /* Controls share the report's flat, line-bordered button style */
-    .replay-play, .replay-load-btn, .replay-css-btn, .replay-trial-select, .replay-speed {
+    .replay-play, .replay-load-btn, .replay-css-btn, .replay-segment-select, .replay-speed {
       padding: 4px 10px; border: 1px solid var(--line); background: var(--surface);
       color: var(--ink); border-radius: 4px; cursor: pointer; font-size: 13px; }
     .replay-play:hover, .replay-load-btn:hover, .replay-css-btn:hover { background: var(--bg); }
@@ -1048,9 +1058,20 @@ function renderReplaySection(participant, sanitized, demoModel = null, replaySho
   if (!participant) return '';
   const replay = participant?.replay;
   if ((replay && replay.recording) || demoModel) {
+    // Tier badge. The recording branch reads the v2 site
+    // (extensions['cyborg-hunter'].tier) and falls back to the structural
+    // inference, through the SAME helper the viewer model uses — reading the
+    // tier off a v1 `metadata` block badged every v2 recording "trace",
+    // because v2 has no such block (the tier moved in serializer.js:145).
+    // The demo branch takes `demoModel.tier`: `inlineReplayModels` holds
+    // VIEWER MODELS (see the opts docblock above), and a viewer model has
+    // never had a `metadata` block in any version — that read resolved to
+    // "trace" for every model ever passed. Suspected-dead branch
+    // (demo/tests/tour.spec.js:420 records that the demo stopped passing
+    // inlineReplayModels), fixed rather than deleted.
     const tier = demoModel
-      ? (demoModel.metadata?.tier || 'trace')
-      : (replay.recording.metadata?.tier || 'trace');
+      ? (demoModel.tier || 'trace')
+      : inferTier(replay.recording);
     // assetPath is stamped by replay-assets.js (collision-deduped filename)
     // and must be preferred — recomputing from the sanitized pid here would
     // resurrect the lossy-name collision the assets renderer just resolved.
@@ -1071,9 +1092,18 @@ function renderReplaySection(participant, sanitized, demoModel = null, replaySho
     </div>`;
   }
   if (replay && replay.error) {
+    // Two ways an attached artifact fails to reach the viewer, and the
+    // analyst needs to tell them apart: 'parse_failed' (ingest could not read
+    // the file at all) and 'unloadable' (the file parsed but the §11 tolerant
+    // profile rejected it — a CH-v1 artifact is the common case, and there is
+    // no v1 playback path). Calling a readable v1 file "corrupted" would send
+    // the analyst looking for a truncated upload.
+    const lead = replay.error === 'unloadable'
+      ? 'Replay artifact could not be loaded'
+      : 'Replay artifact corrupted';
     return `<div class="image-block replay-block">
       <h4 class="section-heading">Session replay</h4>
-      <p class="replay-note replay-warn">Replay artifact corrupted (${esc(replay.reason || replay.error)}) — file: ${esc(replay.file || 'unknown')}</p>
+      <p class="replay-note replay-warn">${lead} (${esc(replay.reason || replay.error)}) — file: ${esc(replay.file || 'unknown')}</p>
     </div>`;
   }
   const meta = participant?.trials?.[0]?.integrityReplayMeta;

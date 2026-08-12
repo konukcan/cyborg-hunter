@@ -13,8 +13,9 @@ import {
 import { renderHtmlIndex } from '../../src/cli/renderers/html-index.js';
 
 // SessionRecording v2 (spec r2). Re-pointed from the v1 wire in T5 Task 1,
-// when buildViewerModel became v2-only; Task 10 rewrites this file to cover
-// all four replay-section states against v2 input.
+// when buildViewerModel became v2-only; rewritten here (T5 Task 10) to cover
+// all four replay-section states, the tier line, and the unloadable-artifact
+// decision against v2 input.
 function wireRecording() {
   return {
     schema_version: 2,
@@ -61,6 +62,38 @@ function wireRecording() {
         guard_violations: [],
       },
     },
+  };
+}
+
+// A foreign producer's v2 file: carries a keyframe but states no CH tier.
+// The badge must be INFERRED structurally rather than defaulted to "trace"
+// (design §10). It still carries the `cyborg-hunter` namespace, because the
+// T4 converter stamps provenance there — presence of the namespace is not
+// evidence about the producer.
+function foreignRecording() {
+  const rec = wireRecording();
+  rec.recorder = { name: 'jspsych-record', version: '1.0.0' };
+  rec.extensions = { 'cyborg-hunter': { converter: { tool: 'x', version: '1' } } };
+  return rec;
+}
+
+// Trace tier under v2: `initial_dom: null` on every segment and no stated
+// tier. Not a §3 defect — "null before any keyframe = trace-only so far".
+function traceRecording() {
+  const rec = foreignRecording();
+  rec.segments[0].initial_dom = null;
+  rec.segments[0].events = [{ type: 'mouse.move', t: 1500, x: 10, y: 20 }];
+  return rec;
+}
+
+// A CH-v1 artifact. The §11 tolerant profile rejects it and buildViewerModel
+// throws (there is no v1 playback path — design §12). What the CLI does when
+// one reaches it is Task 10(b)'s decision, pinned below.
+function v1Recording() {
+  return {
+    schema_version: 1,
+    metadata: { participant_id: 'P1', tier: 'dom', recorder: 'cyborg-hunter-replay@0.7.0' },
+    trials: [{ trial_id: 't1', initial_dom: '<body></body>', events: [] }],
   };
 }
 
@@ -149,6 +182,41 @@ describe('renderReplayAssets', () => {
       assert.ok(!existsSync(join(sub, 'replay')));
     } finally { rmSync(sub, { recursive: true, force: true }); }
   });
+
+  // ── Task 10(b): the buildViewerModel throw ────────────────────────────────
+  // buildViewerModel throws on the §11 rejection set, and one unloadable
+  // artifact must not cost a cohort its whole report. DECIDED: skip that
+  // participant, stamp the failure where the report already has a state for
+  // it (renderReplaySection's error branch), and keep going.
+  it('skips an unloadable artifact and still writes the rest of the cohort', () => {
+    const sub = mkdtempSync(join(tmpdir(), 'ch-replay-unloadable-'));
+    try {
+      const participants = [
+        { participantId: 'BAD', replay: { recording: v1Recording(), file: 'BAD-replay-1.json', meta: null } },
+        { participantId: 'GOOD', replay: { recording: wireRecording(), file: 'GOOD-replay-2.json', meta: null } },
+      ];
+      const res = renderReplayAssets(participants, sub);
+      assert.strictEqual(res.count, 1, 'the healthy participant still gets an asset');
+      assert.deepStrictEqual(readdirSync(join(sub, 'replay')), ['GOOD.replay.js']);
+      assert.strictEqual(res.skipped.length, 1);
+      assert.strictEqual(res.skipped[0].participantId, 'BAD');
+      assert.match(res.skipped[0].reason, /schema_version/,
+        'the §11 rejection reason travels, not a bare "failed"');
+    } finally { rmSync(sub, { recursive: true, force: true }); }
+  });
+
+  it('stamps the skipped participant so the report can say why', () => {
+    const sub = mkdtempSync(join(tmpdir(), 'ch-replay-stamp-'));
+    try {
+      const p = { participantId: 'BAD', replay: { recording: v1Recording(), file: 'BAD-replay-1.json', meta: null } };
+      renderReplayAssets([p], sub);
+      assert.strictEqual(p.replay.error, 'unloadable');
+      assert.match(p.replay.reason, /schema_version must be the integer 2/);
+      assert.strictEqual(p.replay.file, 'BAD-replay-1.json');
+      assert.ok(!p.replay.recording,
+        'the recording must be cleared, or the index renders a load button for an asset that was never written');
+    } finally { rmSync(sub, { recursive: true, force: true }); }
+  });
 });
 
 describe('html-index replay section', () => {
@@ -164,15 +232,17 @@ describe('html-index replay section', () => {
     }];
   }
 
-  async function render(participant) {
+  async function renderAll(participants) {
     const config = { outputDir: dir };
     await renderHtmlIndex(
-      [participant.summary || { participantId: participant.participantId, trialCount: 1 }],
-      baseTriage(participant.participantId),
-      [participant], config, false);
+      participants.map(p => p.summary || { participantId: p.participantId, trialCount: 1 }),
+      participants.flatMap(p => baseTriage(p.participantId)),
+      participants, config, false);
     return readFileSync(join(dir, 'index.html'), 'utf8');
   }
+  const render = (participant) => renderAll([participant]);
 
+  // ── State 1: attached ─────────────────────────────────────────────────────
   it('renders a lazy-loading replay block when a recording is attached', async () => {
     const html = await render({
       participantId: 'P1', trials: [{}],
@@ -183,6 +253,46 @@ describe('html-index replay section', () => {
     assert.match(html, /initChReplayViewer/, 'viewer client must be embedded');
   });
 
+  // ── The tier line (Task 10(a)) ────────────────────────────────────────────
+  // v2 has no `metadata` block: the tier moved to
+  // extensions['cyborg-hunter'].tier (serializer.js:145). Reading `metadata`
+  // badged EVERY v2 recording "trace".
+  it('reads the tier from the cyborg-hunter extension, not a v1 metadata block', async () => {
+    const html = await render({
+      participantId: 'P1', trials: [{}],
+      replay: { recording: wireRecording(), file: 'x.json', meta: null },
+    });
+    assert.match(html, /\(dom tier\)/);
+    assert.doesNotMatch(html, /\(trace tier\)/);
+  });
+
+  it('infers the tier structurally for a foreign file that states none', async () => {
+    const html = await render({
+      participantId: 'P1', trials: [{}],
+      replay: { recording: foreignRecording(), file: 'x.json', meta: null },
+    });
+    assert.match(html, /\(dom tier\)/, 'a keyframe means a reconstruction exists');
+  });
+
+  it('badges a trace recording as trace', async () => {
+    const html = await render({
+      participantId: 'P1', trials: [{}],
+      replay: { recording: traceRecording(), file: 'x.json', meta: null },
+    });
+    assert.match(html, /\(trace tier\)/);
+  });
+
+  it('lets a stated tier win over the structural inference', async () => {
+    const rec = wireRecording();
+    rec.extensions['cyborg-hunter'].tier = 'trace';   // keyframe present, tier says trace
+    const html = await render({
+      participantId: 'P1', trials: [{}],
+      replay: { recording: rec, file: 'x.json', meta: null },
+    });
+    assert.match(html, /\(trace tier\)/);
+  });
+
+  // ── State 2: corrupted ────────────────────────────────────────────────────
   it('renders a corruption note for parse-failed artifacts', async () => {
     const html = await render({
       participantId: 'P1', trials: [{}],
@@ -191,6 +301,28 @@ describe('html-index replay section', () => {
     assert.match(html, /Replay artifact corrupted/i);
   });
 
+  // ── State 2b (Task 10(b)): unloadable, and the cohort survives it ─────────
+  it('renders the unloadable note for a rejected artifact while the rest of the cohort loads', async () => {
+    const participants = [
+      { participantId: 'BAD', trials: [{}],
+        replay: { recording: v1Recording(), file: 'BAD-replay-1.json', meta: null } },
+      { participantId: 'GOOD', trials: [{}],
+        replay: { recording: wireRecording(), file: 'GOOD-replay-2.json', meta: null } },
+    ];
+    // Real report order: assets first (report.js:149), index second (:156),
+    // over the SAME participant array — which is how the stamp travels.
+    renderReplayAssets(participants, dir);
+    const html = await renderAll(participants);
+    assert.match(html, /Replay artifact could not be loaded/i);
+    assert.match(html, /schema_version must be the integer 2/);
+    assert.match(html, /BAD-replay-1\.json/);
+    assert.doesNotMatch(html, /Replay artifact corrupted \(schema_version/i,
+      'a readable v1 file is not "corrupted" — say what actually happened');
+    assert.match(html, /data-replay-src="replay\/GOOD\.replay\.js"/,
+      'one unloadable artifact must not cost the cohort its report');
+  });
+
+  // ── State 3: absent, with the saved_to reason ─────────────────────────────
   it('renders a placeholder with the saved_to reason when absent', async () => {
     const html = await render({
       participantId: 'P1',
@@ -199,6 +331,50 @@ describe('html-index replay section', () => {
     });
     assert.match(html, /No replay artifact/i);
     assert.match(html, /download/i, 'saved_to reason surfaces to the analyst');
+  });
+
+  // ── State 4: nothing at all ───────────────────────────────────────────────
+  it('says recording was not enabled when there is no artifact and no meta', async () => {
+    const html = await render({ participantId: 'P1', trials: [{}], replay: null });
+    assert.match(html, /recording was not enabled/i);
+  });
+});
+
+describe('the inlined viewer client survives HTML parsing', () => {
+  // The report inlines the whole assembled client into one <script> tag. An
+  // HTML parser ends that tag at the FIRST "</script" in the text — including
+  // one inside a comment or a string — so an unescaped occurrence truncates
+  // the viewer mid-source and the report boots with a SyntaxError and no
+  // player. Found by the revived e2e dogfood (T5 Task 10(c)): two of the v2
+  // modules discuss "</script> breakouts" in their comments, so the report
+  // shipped a viewer that could not parse. demo/replay-host.js already
+  // neutralizes the sequence for its own inlining; the report did not.
+  let dir;
+  before(() => { dir = mkdtempSync(join(tmpdir(), 'ch-replay-inline-')); });
+  after(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it('parses as JavaScript when cut the way a browser cuts it', async () => {
+    await renderHtmlIndex(
+      [{ participantId: 'P1', trialCount: 1 }],
+      [{ participantId: 'P1', score: 0, reason: 'clean', hardTriggered: false,
+        softFlagged: false, edgeExitCount: 0, summary: { participantId: 'P1', trialCount: 1 } }],
+      [{ participantId: 'P1', trials: [{}],
+        replay: { recording: wireRecording(), file: 'x.json', meta: null } }],
+      { outputDir: dir }, false);
+    const html = readFileSync(join(dir, 'index.html'), 'utf8');
+    // Exactly the browser's rule: from the tag open to the first closer.
+    const blocks = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script/g)].map(m => m[1]);
+    const viewerBlock = blocks.find(b => b.includes('initChReplayViewer'));
+    assert.ok(viewerBlock, 'the viewer client is inlined');
+    assert.doesNotThrow(() => new Function(viewerBlock),
+      'the inlined viewer must still be complete JavaScript after the parser cuts it');
+    assert.match(viewerBlock, /window\.initChReplayViewer\s*=/,
+      'the assignment that boots the viewer must be inside the surviving block');
+    // The report's <style> block is a hand-kept copy of the viewer's rules, so
+    // a renamed control loses its styling silently. `replay-trial-select` was
+    // the v1 name; the client emits `replay-segment-select` since Task 4.
+    assert.match(html, /\.replay-segment-select/, 'the report styles the control the client emits');
+    assert.doesNotMatch(html, /\.replay-trial-select/, 'no rule for a class nothing emits');
   });
 });
 

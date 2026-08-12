@@ -150,6 +150,12 @@ export async function run(args) {
   if (replayAssets.count > 0) {
     console.log(`  replay/ — ${replayAssets.count} session replays (${(replayAssets.totalBytes / 1024 / 1024).toFixed(1)} MB)`);
   }
+  // A skipped artifact is already visible in the report (the participant's
+  // replay section says why), but an analyst watching the CLI must not have
+  // to open the HTML to learn a recording did not make it.
+  for (const s of replayAssets.skipped) {
+    console.log(`  replay/ — skipped ${s.participantId}: ${s.reason}`);
+  }
 
   // HTML index page — references images/ folder (not base64-embedded)
   const { renderHtmlIndex } = await import('./renderers/html-index.js');

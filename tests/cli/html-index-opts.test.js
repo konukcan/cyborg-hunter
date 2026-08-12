@@ -41,8 +41,15 @@ test('imageSources with a missing plot omits that img entirely', async () => {
   assert.ok(!html.includes('images/typing_profile_'));
 });
 
+// `inlineReplayModels` holds VIEWER MODELS (html-index-core.js:40), so the
+// shape below is a viewer model's: `tier` at the top level, `segments`, and
+// no `metadata` block — a viewer model has never had one in any version.
+// These tests used to pass a model with a v1-shaped `metadata` block, which
+// is why the demo branch that read the tier out of one looked pinned while it
+// in fact resolved to "trace" for every model the demo could ever have
+// passed (T5 Task 10(a)).
 test('inlineReplayModels embeds models, renders the replay section, and short-circuits the loader', async () => {
-  const model = { schema: 1, frames: [], metadata: { tier: 'dom' } };
+  const model = { schemaVersion: 2, tier: 'dom', segments: [] };
   const html = await renderIndexHtml(summaries, triage, [p], config, false, {
     inlineReplayModels: { [PID]: model },
   });
@@ -54,7 +61,7 @@ test('inlineReplayModels embeds models, renders the replay section, and short-ci
   // when the model came from inlineReplayModels rather than a real artifact.
   assert.ok(html.includes('data-replay-preloaded="true"'));
   assert.ok(html.includes('class="replay-mount"'));
-  assert.ok(html.includes('(dom tier)'));  // metadata.tier flows into the badge text
+  assert.ok(html.includes('(dom tier)'));  // the model's own tier flows into the badge text
   // Loader short-circuit — pin the functional line itself (the preloaded-first
   // window.__chReplay lookup), so deleting the short-circuit fails this test
   // even while the data attribute above still renders.
@@ -65,7 +72,7 @@ test('inlineReplayModels without a matching participant renders without throwing
   // Regression: the demo-model lookup keys off the triage row, so a model can
   // exist for a pid with no participant object. renderReplaySection used to
   // crash on participant.participantId; now it must skip the section.
-  const model = { schema: 1, frames: [], metadata: { tier: 'dom' } };
+  const model = { schemaVersion: 2, tier: 'dom', segments: [] };
   const html = await renderIndexHtml(summaries, triage, [], config, false, {
     inlineReplayModels: { [PID]: model },
   });
@@ -74,7 +81,7 @@ test('inlineReplayModels without a matching participant renders without throwing
 });
 
 test('adversarial inlineReplayModels payload cannot break out of the inline script tag', async () => {
-  const model = { schema: 1, frames: [], metadata: { tier: 'dom' },
+  const model = { schemaVersion: 2, tier: 'dom', segments: [],
     payload: '</script><!--"boom' };
   const html = await renderIndexHtml(summaries, triage, [p], config, false, {
     inlineReplayModels: { [PID]: model },

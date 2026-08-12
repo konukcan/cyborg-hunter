@@ -54,6 +54,34 @@ const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
 // derived time is re-rounded to the same precision.
 const round1 = (v) => Math.round(v * 10) / 10;
 
+// A keyframe is a DomNode OBJECT. A primitive (a v1 HTML string, say) or an
+// array carries none of a DomNode's fields, so treating it as a keyframe
+// would hand `mountTree` something it cannot instantiate and would license
+// later `dom.*` patches against a snapshot that does not exist. Same test as
+// the strict profile's `isKeyframe` (validator.js:203-204).
+const isKeyframe = (s) => s.initial_dom != null && typeof s.initial_dom === 'object'
+  && !Array.isArray(s.initial_dom);
+
+/**
+ * The badge a recording earns: the stated tier wins, otherwise infer it
+ * structurally so a foreign file gets an honest badge instead of "trace"
+ * (design §10). Exported because the report's index renders the same badge
+ * from the RECORDING (html-index-core.js) while the viewer renders it from
+ * the MODEL — one reading of the rule, in one place, or the two drift.
+ *
+ * Safe on anything: the index calls it on an artifact that has not been
+ * through the §11 profile yet.
+ *
+ * @param {object} recording  a parsed SessionRecording v2, any producer
+ * @returns {'dom'|'trace'|string} the stated tier, or the inferred one
+ */
+export function inferTier(recording) {
+  const ext = (recording && recording.extensions && recording.extensions['cyborg-hunter']) || {};
+  if (ext.tier) return ext.tier;
+  const segs = (recording && Array.isArray(recording.segments)) ? recording.segments : [];
+  return segs.some((s) => s && isKeyframe(s)) ? 'dom' : 'trace';
+}
+
 /**
  * @param {object} recording  a parsed SessionRecording v2, any producer
  * @returns {object} the viewer model (design §9)
@@ -99,16 +127,6 @@ export function buildViewerModel(recording) {
 
   // ── segments ────────────────────────────────────────────────────────────
   const rawSegments = rec.segments;
-  // A keyframe is a DomNode OBJECT. A primitive (a v1 HTML string, say) or an
-  // array carries none of a DomNode's fields, so treating it as a keyframe
-  // would hand `mountTree` something it cannot instantiate and would license
-  // later `dom.*` patches against a snapshot that does not exist. Same test as
-  // the strict profile's `isKeyframe` (validator.js:203-204).
-  const isKeyframe = (s) => s.initial_dom != null && typeof s.initial_dom === 'object'
-    && !Array.isArray(s.initial_dom);
-  // Only for the TIER inference: "does this recording carry a reconstruction
-  // anywhere", which is a different question from segment legality below.
-  const anyKeyframe = rawSegments.some((s) => s && isKeyframe(s));
 
   let spanStart = null;      // index of the keyframe the current span opens at
   const segments = rawSegments.map((s, i) => {
@@ -269,8 +287,9 @@ export function buildViewerModel(recording) {
     foreign: rec.recorder.name !== 'cyborg-hunter-replay',
 
     // Stated tier wins; otherwise infer structurally so a foreign file gets an
-    // honest badge instead of "trace" (design §10).
-    tier: ext.tier || (anyKeyframe ? 'dom' : 'trace'),
+    // honest badge instead of "trace" (design §10). Shared with the report's
+    // index, which badges the same recording before any model exists.
+    tier: inferTier(rec),
     keys: ext.keys || null,
     chVersion: ext.ch_version || null,
     preset: ext.preset || null,

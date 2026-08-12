@@ -44,6 +44,33 @@ function recording(pid, startEpoch) {
   };
 }
 
+// SessionRecording v2 (spec r2) — what the recorder has emitted since T3.
+// The content sniff has to recognise it or a fresh capture is parsed as a
+// participant file and never reaches the viewer (T5 Task 10).
+function recordingV2(pid, startEpoch) {
+  return {
+    schema_version: 2,
+    recorder: { name: 'cyborg-hunter-replay', version: '0.7.5' },
+    host: null,
+    participant_id: pid,
+    recording_started_at: new Date(startEpoch).toISOString(),
+    recording_started_at_perf: 0,
+    user_agent: 'test-agent',
+    viewport: { w: 100, h: 100, dpr: 1, scale: 1, offset_x: 0, offset_y: 0 },
+    observed_root: null,
+    stylesheets: [], stylesheet_events: [], viewport_changes: [],
+    rng: null, rng_calls: null,
+    ended_at_perf: 100, end_reason: 'finished', truncated: false,
+    segments: [{
+      index: 0, label: 'r1', plugin: 'x',
+      t_start: null, t_dom_ready: null, t_load: 0, t_end: 100,
+      initial_dom: { id: 1, kind: 'element', tag: 'body', attrs: {}, children: [] },
+      initial_state: null, events: [], host_data: {}, extensions: null,
+    }],
+    extensions: { 'cyborg-hunter': { replay_version: '0.7.5', tier: 'dom', keys: 'full' } },
+  };
+}
+
 describe('replay artifact ingest', () => {
   let dir;
   before(() => { dir = mkdtempSync(join(tmpdir(), 'ch-replay-ingest-')); });
@@ -126,12 +153,54 @@ describe('replay artifact ingest', () => {
 
   it('warns on unknown schema_version but still attaches', async () => {
     writeFileSync(join(dir, 'P7.json'), participantFile('P7'));
-    const v2 = recording('P7', 1751600000000);
-    v2.schema_version = 2;
-    writeFileSync(join(dir, 'P7-replay-1751600000000.json'), JSON.stringify(v2));
+    const odd = recording('P7', 1751600000000);
+    odd.schema_version = 3;                        // neither the v1 era nor v2
+    writeFileSync(join(dir, 'P7-replay-1751600000000.json'), JSON.stringify(odd));
     const { participants, warnings } = await ingest({ ...config(), singleParticipant: 'P7' });
     assert.ok(participants[0].replay.recording, 'still attached');
     assert.ok(warnings.some(w => String(w.warnings).match(/schema_version/)));
+  });
+
+  // ── SessionRecording v2 (T5 Task 10) ──────────────────────────────────────
+  // The sniff keyed on v1's `metadata.recorder` / v1 `trials[]`, so a v2
+  // artifact matched neither: it was routed into the PARTICIPANT pass as
+  // "contains participant data" and p.replay stayed null. Nothing downstream
+  // could recover — a fresh capture never reached the report.
+  it('attaches a v2 artifact and keeps it out of the participant pass', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-replay-v2-'));
+    try {
+      writeFileSync(join(d, 'V2P.json'), participantFile('V2P'));
+      writeFileSync(join(d, 'V2P-replay-1751600000000.json'),
+        JSON.stringify(recordingV2('V2P', 1751600000000)));
+      const { participants, warnings } = await ingest({
+        dataDir: d, filePattern: '*.json',
+        integrityField: 'integrity', participantIdField: 'participantId',
+      });
+      assert.strictEqual(participants.length, 1,
+        'the v2 artifact must not be ingested as a participant file');
+      assert.ok(participants[0].replay && participants[0].replay.recording, 'v2 replay must attach');
+      assert.strictEqual(participants[0].replay.recording.schema_version, 2);
+      assert.ok(!warnings.some(w => String(w.warnings).match(/replay-artifact naming pattern/i)),
+        'a v2 artifact is not a misnamed participant export');
+      assert.ok(!warnings.some(w => String(w.warnings).match(/schema_version/)),
+        'v2 is the version this CLI targets — warning about it is noise');
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('warns that a v1 artifact is below the targeted version', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-replay-v1warn-'));
+    try {
+      writeFileSync(join(d, 'V1P.json'), participantFile('V1P'));
+      writeFileSync(join(d, 'V1P-replay-1751600000000.json'),
+        JSON.stringify(recording('V1P', 1751600000000)));
+      const { participants, warnings } = await ingest({
+        dataDir: d, filePattern: '*.json',
+        integrityField: 'integrity', participantIdField: 'participantId',
+      });
+      assert.ok(participants[0].replay.recording, 'still attached — ingest never drops data');
+      assert.ok(warnings.some(w => String(w.warnings).match(/schema_version 1/)),
+        'the analyst learns the viewer will not play it before opening the report');
+    } finally { rmSync(d, { recursive: true, force: true }); }
   });
 
   it('rejects an artifact whose embedded participant_id mismatches (sanitization collision)', async () => {

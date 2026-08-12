@@ -50,7 +50,7 @@ var REPLAY_RULES_CSS = `
                  height: 1.4em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .replay-note { font-size: 12px; color: var(--dim); }
 .replay-warn { color: var(--hard); }
-.replay-play, .replay-load-btn, .replay-css-btn, .replay-trial-select, .replay-speed {
+.replay-play, .replay-load-btn, .replay-css-btn, .replay-segment-select, .replay-speed {
   padding: 4px 10px; border: 1px solid var(--line); background: var(--surface);
   color: var(--ink); border-radius: 4px; cursor: pointer; font-size: 13px; }
 .replay-play:hover, .replay-load-btn:hover, .replay-css-btn:hover { background: var(--bg); }

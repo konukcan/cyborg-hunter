@@ -20,6 +20,7 @@
     "test:replay": "node --test tests/replay/*.test.js",
     "test:schema": "node --test tests/replay/schema-v2/*.test.js",
     "test:browser:replay": "node tests/browser/replay/run-replay-tests.mjs",
+    "test:browser:e2e": "node tests/browser/replay/e2e-dogfood.mjs",
     "test:browser:alignment": "node tests/browser/replay/cursor-alignment.battery.mjs",
     "test:browser:boot": "node tests/browser/replay/viewer-boot.battery.mjs",
     "test:browser:canvas": "node tests/browser/replay/viewer-canvas.battery.mjs",

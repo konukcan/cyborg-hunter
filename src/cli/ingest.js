@@ -24,16 +24,26 @@ import { extractIntegrityData, ruleChronologicalCompare } from './extract-core.j
 // never enter the participant-file pass.
 const REPLAY_FILE_RE = /-replay-\d+\.json(\.gz)?$/i;
 
-// Content sniff: replay artifacts (ours, or #3661-shaped files from
-// jsPsych's in-development recorder) are identified by structure, not just
-// filename — schema_version plus either our recorder stamp or a
-// #3661-shaped trials array. Foreign recordings attach for bookkeeping;
-// the viewer renders CH recordings only until the joint v2 format lands.
+// Content sniff: replay artifacts are identified by structure, not just
+// filename. Three shapes qualify:
+//   - SessionRecording v2 (spec r2, ANY producer): schema_version 2 with a
+//     `recorder` identity and a `segments` array. Same three keys the §11
+//     tolerant loader identifies a recording by (viewer-model.js), so the
+//     sniff and the loader cannot disagree about what a recording is.
+//   - the v1 era: our own `metadata.recorder` stamp, or
+//   - a #3661-shaped `trials` array from jsPsych's in-development recorder.
+// (T5 Task 10) The v2 arm is new, and without it a fresh capture matched
+// nothing here: it was routed into the participant pass as a misnamed export
+// and never reached the report. Attaching a v2 file is all this does — the
+// rest of the v2 ingest work (ownership from the top-level participant_id,
+// session pick from recording_started_at, jsPsych-v1 by conversion) is A3's.
 function looksLikeReplayArtifact(text) {
   try {
     const j = JSON.parse(text);
     return j && typeof j === 'object' && 'schema_version' in j &&
-      (String(j.metadata?.recorder || '').startsWith('cyborg-hunter-replay') ||
+      ((j.schema_version === 2 && !!j.recorder && typeof j.recorder.name === 'string' &&
+          Array.isArray(j.segments)) ||
+        String(j.metadata?.recorder || '').startsWith('cyborg-hunter-replay') ||
         (Array.isArray(j.trials) && j.trials.length > 0 &&
           j.trials.every(t => t && 'events' in t && 'initial_dom' in t)));
   } catch (e) {
@@ -292,9 +302,14 @@ function attachReplayArtifacts(participants, config, warnings) {
     };
     owned.sort((a, b) => sessionEpoch(a) - sessionEpoch(b));
     const chosen = owned[owned.length - 1];
-    if (chosen.recording.schema_version !== 1) {
+    // (T5 Task 10) The targeted version is 2: the viewer is v2-only and a v1
+    // artifact is skipped with a note when the report is built
+    // (replay-assets.js). Warning "this CLI targets 1" was the previous
+    // era's sentence and is now exactly backwards. Attach either way —
+    // ingest never drops participant data on a version judgement.
+    if (chosen.recording.schema_version !== 2) {
       warnings.push({ file: join(dir, chosen.file),
-        warnings: [`Replay schema_version ${chosen.recording.schema_version} (this CLI targets 1) — attaching anyway; the viewer may degrade.`] });
+        warnings: [`Replay schema_version ${chosen.recording.schema_version} (this CLI targets 2) — attaching anyway; the viewer plays v2 only and will report this artifact as unloadable.`] });
     }
     p.replay = { recording: chosen.recording, file: chosen.file, meta };
   }

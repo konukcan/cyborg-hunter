@@ -15,7 +15,7 @@ import { ingest } from '../../src/cli/ingest.js';
 const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'demo');
 
 describe('demo download-trio fixture (real ingest)', () => {
-  it('resolves exactly one participant with zero warnings and an attached replay', async () => {
+  it('resolves exactly one participant with the v1 version warning and an attached replay', async () => {
     const config = {
       dataDir: FIXTURE_DIR,
       filePattern: 'DEMO-*.json',
@@ -25,8 +25,17 @@ describe('demo download-trio fixture (real ingest)', () => {
 
     const { participants, warnings } = await ingest(config);
 
-    assert.strictEqual(warnings.length, 0,
-      `expected zero ingest warnings, got: ${JSON.stringify(warnings, null, 2)}`);
+    // The committed trio's replay artifact is a v1 recording, and since T5
+    // the CLI targets v2 — so ingest says so (once) and attaches it anyway.
+    // The warning is TRUE of this fixture, not a regression: the v2 viewer
+    // cannot play it, and the report would render it as unloadable. A6
+    // regenerates the demo assets with the v2 pipeline, at which point this
+    // expectation goes back to zero.
+    const versionWarnings = warnings.filter(w => String(w.warnings).match(/schema_version 1/));
+    assert.strictEqual(versionWarnings.length, 1,
+      'exactly one v1-version warning, for the committed v1 replay artifact');
+    assert.strictEqual(warnings.length, 1,
+      `expected no OTHER ingest warnings, got: ${JSON.stringify(warnings, null, 2)}`);
 
     assert.strictEqual(participants.length, 1,
       'expected exactly one participant from the fixture trio');
