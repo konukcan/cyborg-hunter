@@ -828,12 +828,18 @@ function startTour(participantId, capabilities, manifest) {
       // to return.
       var recording = finalizeReplay();
       if (!recording) return null;
-      // Epoch from the recording's own meta when present (mirrors
-      // persistence.js's replayFilename(), which isn't exposed on the
-      // standalone window.CyborgHunterReplay global) else Date.now().
+      // Epoch from the recording's own start field (mirrors persistence.js's
+      // replayFilename(), which isn't exposed on the standalone
+      // window.CyborgHunterReplay global) else Date.now(). SessionRecording v2
+      // carries the start as a top-level `recording_started_at` ISO string
+      // (serializer.js); the pre-v2 `metadata.start_time` reading landed here
+      // as Date.now() on every v2 recording, so the downloaded replay filename
+      // no longer matched what the CLI derives — hence the A6 fix.
       var epoch = Date.now();
-      if (recording.metadata && recording.metadata.start_time) {
-        var parsedEpoch = Date.parse(recording.metadata.start_time);
+      var startedAt = recording.recording_started_at ||
+        (recording.metadata && recording.metadata.start_time);
+      if (startedAt) {
+        var parsedEpoch = Date.parse(startedAt);
         if (!isNaN(parsedEpoch)) epoch = parsedEpoch;
       }
       return {

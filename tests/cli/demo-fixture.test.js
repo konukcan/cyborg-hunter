@@ -15,7 +15,7 @@ import { ingest } from '../../src/cli/ingest.js';
 const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'demo');
 
 describe('demo download-trio fixture (real ingest)', () => {
-  it('resolves exactly one participant with the v1 version warning and an attached replay', async () => {
+  it('resolves exactly one participant with a clean, v2 replay attached', async () => {
     const config = {
       dataDir: FIXTURE_DIR,
       filePattern: 'DEMO-*.json',
@@ -25,17 +25,16 @@ describe('demo download-trio fixture (real ingest)', () => {
 
     const { participants, warnings } = await ingest(config);
 
-    // The committed trio's replay artifact is a v1 recording, and since T5
-    // the CLI targets v2 — so ingest says so (once) and attaches it anyway.
-    // The warning is TRUE of this fixture, not a regression: the v2 viewer
-    // cannot play it, and the report would render it as unloadable. A6
-    // regenerates the demo assets with the v2 pipeline, at which point this
-    // expectation goes back to zero.
-    const versionWarnings = warnings.filter(w => String(w.warnings).match(/schema_version 1/));
-    assert.strictEqual(versionWarnings.length, 1,
-      'exactly one v1-version warning, for the committed v1 replay artifact');
-    assert.strictEqual(warnings.length, 1,
-      `expected no OTHER ingest warnings, got: ${JSON.stringify(warnings, null, 2)}`);
+    // A6 regenerated the trio via the fresh-capture path (the current v2
+    // recorder), so the committed replay artifact is now a SessionRecording
+    // v2 — the format the CLI's viewer targets. There is nothing for ingest
+    // to warn about: no version mismatch (it's v2), no conversion (it's native
+    // v2, not jsPsych-v1), a resolvable embedded participant_id, one session.
+    // The pre-A6 era committed a v1 artifact and this expected the one
+    // "schema_version 1 … will report this artifact as unloadable" warning;
+    // taking that to zero is the last owed A6 item.
+    assert.strictEqual(warnings.length, 0,
+      `expected a clean ingest with no warnings, got: ${JSON.stringify(warnings, null, 2)}`);
 
     assert.strictEqual(participants.length, 1,
       'expected exactly one participant from the fixture trio');
@@ -45,7 +44,8 @@ describe('demo download-trio fixture (real ingest)', () => {
     // successfully attached replay carries { recording, file, meta }.
     assert.ok(participants[0].replay, 'expected a replay artifact attached');
     assert.ok(participants[0].replay.recording, 'expected the replay recording to be parsed');
-    assert.strictEqual(participants[0].replay.recording.schema_version, 1);
-    assert.strictEqual(participants[0].replay.recording.metadata.participant_id, 'DEMO-FIXT');
+    assert.strictEqual(participants[0].replay.recording.schema_version, 2);
+    // v2 carries the id at the top level (serializer.js), not under metadata.*.
+    assert.strictEqual(participants[0].replay.recording.participant_id, 'DEMO-FIXT');
   });
 });

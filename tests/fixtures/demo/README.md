@@ -1,151 +1,126 @@
 # demo download-trio fixture
 
 Purpose-made synthetic artifact (spec: "purpose-made synthetic artifacts...
-internal research bench traces are NOT used as-is"). This is the real
-three-file output of one real run of the live demo tour (`demo/index.html`),
-captured 2026-07-29 against the tour as it stood then (12 steps, jsPsych
-finale still present). A real browser ran a short, deterministic subset of
-those steps and saved the same three files the "Replicate locally" step
-offers for download. Every field in these files comes from the actual
-library code running in a real page; none of it is hand-written. The tour
-has since become a 13-step map with no jsPsych finale and no vendored
-jsPsych — the capture-era sections below are accurate history; "How to
-regenerate" reflects the current tour.
+internal research bench traces are NOT used as-is"). The three files are the
+output of the live demo tour (`demo/index.html`): the same three files the
+"Replicate locally" step offers for download. Every field comes from the actual
+library code running in a real page; none of it is hand-written. Only identity
+fields are rewritten after capture (see "The participant-id rewrite").
+
+`tests/cli/demo-fixture.test.js` runs the real `ingest()` (`src/cli/
+ingest.js`) over this directory and asserts: exactly one participant, id
+`DEMO-FIXT`, **zero** ingest warnings, and a successfully attached v2 replay
+artifact.
+
+Two files are frozen and one is regenerable:
+
+- **`DEMO-FIXT.json` (session) and `cyborg-hunter.config.json` are FROZEN.**
+  `tests/cli/plot-cores.test.js` and `tests/cli/html-index-snapshot.test.js`
+  bake this exact session's trial ids, counts, timings, and window geometry into
+  hand-derived assertions and committed draw snapshots. These files carry no
+  `schema_version` and are unaffected by the replay wire migration, so they stay
+  as first captured (2026-07-29). Changing them means rewriting those tests.
+- **`DEMO-FIXT-replay-<epoch>.json` (replay) is regenerable** via
+  `tools/gen-demo-fixture.mjs` (see "How to regenerate"). Regenerated 2026-08-12
+  for A6 (jsPsych harmonization Phase A): the recorder now serializes
+  SessionRecording **v2**, so the artifact is `schema_version: 2` rather than the
+  pre-A6 v1 — which is what took the demo-fixture ingest version-warning to zero.
 
 ## Files
 
 - `DEMO-FIXT.json`: session data (Shape 1: `{ participantId, trials,
   metadata }`), matching `demo/payload.js`'s `buildPayload()` output.
-- `DEMO-FIXT-replay-<epoch>.json`: replay artifact (`schema_version: 1`),
-  matching what `CyborgHunterReplay.attach({ autoSave: { mode: 'none' } })`
-  produces when the welcome screen's "Record a replay of this session too"
-  toggle is on.
+- `DEMO-FIXT-replay-<epoch>.json`: replay artifact (`schema_version: 2`, DOM
+  tier), matching what `CyborgHunterReplay.attach({ tier: 'dom' })` serializes.
+  v2 carries the id at the top level (`participant_id`), not under `metadata.*`.
 - `cyborg-hunter.config.json`: the config the demo hands out verbatim
-  (`{ dataDir: '.', filePattern: 'DEMO-*.json', participantIdField:
-  'participantId' }`). It carries no participant id, so it needed no
-  rewriting.
+  (`{ dataDir, filePattern, participantIdField }`). It carries no participant id.
 
-`tests/cli/demo-fixture.test.js` runs the real `ingest()` (`src/cli/
-ingest.js`) over this directory and asserts: exactly one participant, id
-`DEMO-FIXT`, zero ingest warnings, and a successfully attached replay
-artifact.
+The replay and the session are NOT a 1:1 trial mapping — the recorder and the
+integrity monitor bracket trials under different schemes, so the replay (8
+segments: the five act-1 tasks, the two act-2 steps, and a trailing implicit
+`__session__`) does not line up trial-for-trial with the session's six. `ingest`
+attaches the replay by `participant_id` alone, which is all the fixture relies
+on.
 
-## Session profile (what's actually in here)
+## Session profile (frozen — what's in DEMO-FIXT.json)
 
-A short, deliberately small subset of the capture-era 12-step tour, run
-against the assembled site as it was then (`demo/*` plus a built `dist/`
-plus the since-removed vendored jsPsych, served locally). Step numbers
-below are capture-era; the Alt+S shortcut and the jsPsych finale named in
-items 7 and 10-12 no longer exist in the tour:
-
-1. Welcome: replay opt-in toggled on, "Start the tour".
-2. Baseline typing: real per-character keystrokes, no signals. This is the
-   library's own clean-baseline case.
-3. Copy-paste: two real `paste` events land on the answer field, crossing
-   the standard preset's paste HARD threshold (2).
-4. Tab-away: one tab-away of about 11.2s, clearing the >=10s "long" bucket.
-5-6. Sidebar/resize and autotype: skipped. Every task is an invitation, not
-   a gate; advancing without doing them is a normal, supported path.
-7. Guard fair-warning: skipped via the always-available Alt+S "skip to
-   finale" shortcut, so Act 2 was never entered (`act2Skipped: true`, no
-   `guardFriction.violations`).
-10-12. Finale, results, replicate-locally: advanced through normally. All
-   three download buttons produced this fixture's three files.
-
-Net signal profile: `pasteCount: 2` (hard-triggered), one `tabAwayEvents`
-entry (about 11.2s, type `windowBlur`), `anyHardTriggered: true`, no guard
-violations, no synthetic insertions.
+A short, deliberately small subset of the tour, run against the assembled site.
+Net signal profile: `pasteCount: 2` (hard-triggered), one `tabAwayEvents` entry
+(~11.2s, type `windowBlur`, `tabAwaySums: [11202]`), `anyHardTriggered: true`,
+no guard violations, no synthetic insertions. Six trials: `act1-baseline`,
+`act1-paste`, `act1-tabaway`, `act1-sidebar`, `act1-autotype`,
+`act2-fullscreen-entry`.
 
 Two mechanical notes on how specific signals were produced, for anyone
-regenerating this fixture:
+regenerating the session (a much larger job — the frozen tests above depend on
+these exact numbers):
 
-- **Paste**: real OS-clipboard Ctrl+C/Ctrl+V proved unreliable under
-  headless automation in the environment used to capture this fixture (zero
-  paste events landed). The regeneration script dispatches genuine
-  `ClipboardEvent` `'paste'` events instead, carrying real text in a
-  `DataTransfer`, at the answer textarea. That exercises the actual
-  `src/core/signals/clipboard.js` listener with real event data; only the
-  OS clipboard subsystem gets bypassed.
-- **Tab-away**: headless Chromium does not change `document.visibilityState`
-  when a second tab is brought to front, because there is no real OS window
-  manager. So the library's mechanism-1 listener (`visibilitychange`) never
-  fires under headless automation. Mechanism 2 does work:
-  `src/core/signals/focus.js`'s plain `window` `blur`/`focus` listeners
-  don't check `event.isTrusted`, so a real `Event('blur')` followed about
-  11.2s later by a real `Event('focus')`, both dispatched on `window`,
-  produces a `type: "windowBlur"` tab-away record. That's one of the two
-  mechanisms the library itself documents, with a correctly measured
-  `performance.now()`-based duration. Nothing about the duration or the
-  detection code path is faked; only the trigger mechanism was chosen to be
-  headless-safe. (The task brief that produced this fixture called for a
-  frozen clock for the 11s wait. In practice a real ~11.2s wait was used
-  instead, so every other timestamp in the fixture, including trial
-  durations, mouse-event timing, and the replay's own event stream, stays
-  internally consistent instead of getting partially clock-mocked.)
+- **Paste**: real OS-clipboard Ctrl+C/Ctrl+V is unreliable under headless
+  automation. A genuine `ClipboardEvent` `'paste'` carrying real text in a
+  `DataTransfer` is dispatched at the answer textarea instead, exercising the
+  actual `src/core/signals/clipboard.js` listener; only the OS clipboard
+  subsystem is bypassed.
+- **Tab-away**: headless Chromium does not change `document.visibilityState`, so
+  mechanism 1 (`visibilitychange`) never fires. Mechanism 2 does: a real
+  `Event('blur')` followed ~11.2s later by a real `Event('focus')` on `window`
+  produces a `type: "windowBlur"` tab-away with a correctly measured
+  `performance.now()` duration. Only the trigger mechanism is chosen to be
+  headless-safe; the detection code path and duration are real.
 
 ## The participant-id rewrite
 
-The demo assigns a random participant id per session (`'DEMO-' + 4
-base36 chars`, `demo/demo.js`'s `randomParticipantId()`). A committed
-fixture needs a stable id so the test doesn't depend on incidental random
-output. After capture, the id was rewritten to `DEMO-FIXT` in place of
-whatever the session actually generated:
+The demo assigns a random participant id per session (`'DEMO-' + 4 base36
+chars`, `demo/demo.js`'s `randomParticipantId()`). A committed fixture needs a
+stable id, so every occurrence of the captured id is replaced with `DEMO-FIXT`.
 
-- `DEMO-FIXT.json`: top-level `participantId`, each trial's
-  `trials[].integrity.participantId` (present on some trial reports), and
-  the nested `metadata.integritySession.config.participantId`. The monitor
-  echoes its init config into the session report, which makes this one easy
-  to miss; a first regeneration did miss it.
-- `DEMO-FIXT-replay-<epoch>.json`: the filename's pid segment, the embedded
-  `metadata.participant_id`, and the pid text inside each trial's
-  `initial_dom` snapshot (the topbar renders the pid, so the DOM capture
-  embeds it; grep the whole file for the old id rather than trusting a
-  field list). `ingest.js`'s `attachReplayArtifacts()` cross-checks the
-  embedded `metadata.participant_id` against the filename/participant
-  record, so those two must agree or the replay silently fails to attach.
-- `cyborg-hunter.config.json`: untouched. It carries no participant id.
+For the replay, `gen-demo-fixture.mjs` does this automatically: a whole-file
+string swap of the full `DEMO-xxxx` token (distinctive enough that collisions
+are impossible) covers the top-level `participant_id` and the pid text the
+topbar renders into each segment's DOM snapshot. `ingest.js`'s
+`attachReplayArtifacts()` cross-checks the embedded `participant_id` against the
+filename/participant record, so those must agree or the replay silently fails to
+attach; the generator asserts the old id appears nowhere before writing.
 
-After rewriting, verify completeness with a whole-directory grep for the
-capture session's original random id. It must return nothing.
+For the frozen session file, the id was rewritten once at capture in three
+places: top-level `participantId`, each trial's `trials[].integrity.
+participantId`, and the nested `metadata.integritySession.config.participantId`
+(the monitor echoes its init config into the session report). The config file
+carries no id.
 
-The epoch in the replay filename stays as the real capture timestamp; only
-the participant id segment was rewritten.
+## Pinned replay epoch
+
+`recording_started_at` (the replay's wall-clock anchor) is pinned to the
+existing filename epoch `1785352263344`, so the artifact overwrites in place
+under the same name each run instead of churning to a fresh epoch. Only the
+anchor is pinned; the recording's relative event timeline (perf-now offsets,
+segment origins, durations) is the untouched real capture, so playback is
+exactly what the recorder produced. This mirrors the fixed-`EPOCH` discipline in
+`tools/gen-example-fixtures.mjs`.
 
 ## How to regenerate
 
-Regenerate this fixture whenever the payload assembler changes shape
-(`demo/payload.js`, `demo/demo.js`'s `buildDownloadFile()`) or the replay
-artifact's wire shape changes (`src/jspsych/extension-cyborg-hunter-replay.js`,
-`src/replay/*`).
+Regenerate the **replay artifact** whenever the replay wire shape changes
+(`src/replay/*`, the jsPsych replay extension) or the demo's replay download
+seam changes (`demo/demo.js`'s `buildDownloadFile()`):
 
-1. Build the assembled site locally: `node tools/assemble-demo-site.mjs`.
-   That one script builds `dist/` if stale, rebuilds `demo/preview-core.js`,
-   and copies `demo/*` (minus `demo/tests/`) plus `dist/` into `.demo-site/`
-   — the same assembly Pages CI runs. There is no vendoring step any more
-   (the jsPsych finale and `npm run demo:vendor` left the tour). Serve
-   `.demo-site/` with `python3 -m http.server`.
-2. Drive a real browser through the current 13-step tour (`demo/steps.js`
-   is the step map), reproducing the same signal profile. The critical
-   bits: real per-character typing on the baseline step (never
-   `element.value =` or a single bulk `fill()`, which the library correctly
-   flags as a synthetic insertion), two dispatched `paste` events on the
-   copy-paste step, a real ~11s `blur`->`focus` window-event pair on the
-   tab-away step, then the three download-button clicks on the final
-   "Replicate locally" step (now step 13). Two capture-era mechanics are
-   gone: replay is now always-on (no welcome-screen opt-in toggle), and
-   there is no Alt+S — Act 2 can now only be skipped through the
-   fullscreen-fallback "Skip" link, so a regenerated fixture will either
-   include Act 2 data or reach `act2Skipped: true` by that path instead.
-   A pinned, deterministic drive script for the 13-step tour is deferred
-   to the D1 E2E rewrite; until it lands, follow `demo/steps.js` rather
-   than the capture-era step numbers above.
-3. Rewrite the participant id to `DEMO-FIXT` per the section above: a small
-   one-off script that parses the two participant-carrying JSON files,
-   replaces the id in the three locations listed, and renames the replay
-   file.
-4. Overwrite the three files in this directory and re-run `node --test
-   tests/cli/demo-fixture.test.js`. It must report zero ingest warnings. If
-   it doesn't, fix the fixture or the payload assembler, never the test's
-   assertions, until it does.
+```
+node tools/gen-demo-fixture.mjs
+node --test tests/cli/demo-fixture.test.js   # must report zero ingest warnings
+```
 
-Captured: 2026-07-29.
+`gen-demo-fixture.mjs` assembles `.demo-site/` (the same artifact Pages CI and
+the Playwright suite use), serves it, walks the full tour, captures the replay
+download, rewrites the pid, pins the epoch, and overwrites the replay file here.
+It leaves the session and config frozen. It uses `playwright-core` (resolved
+from openclaw when the repo has no local install), the same direct-drive pattern
+as `tests/browser/replay/e2e-dogfood.mjs`.
+
+Regenerating the **session file** is out of scope for that tool and is a larger
+job: `plot-cores.test.js` and `html-index-snapshot.test.js` would have to be
+rewritten to the new capture's numbers. If the payload assembler
+(`demo/payload.js`) changes shape, do that deliberately, never by editing the
+tests' assertions to fit a broken fixture.
+
+First captured 2026-07-29 (session + v1 replay); replay regenerated 2026-08-12
+(v2, A6).
