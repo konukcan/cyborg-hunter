@@ -39,13 +39,22 @@
 // the recording states no `t_end`, and that is a BOUND, not an equality — the
 // post-seek playhead identity below is what catches an arithmetic slip anyway.
 //
-// THE PLAYER BINDING (the one import that is not package-portable). This
-// directory is package-shaped and imports nothing else from CH — except here.
-// An executor has to drive a player, and a player is implementation-specific by
-// definition: the fork's copy of this contract binds its own `Player` the same
-// way. On a package lift the checkpoint FORMAT and the bounds arithmetic travel;
-// this import block is what each implementation re-supplies. It is kept to one
-// block, at the top, for exactly that reason. (README records the same.)
+// THE ONE IMPORT THAT IS NOT PACKAGE-PORTABLE. This directory is package-shaped
+// and imports nothing else from CH — except here. On a package lift the
+// checkpoint FORMAT, the bounds arithmetic and the placement guard travel; this
+// block is what each adopting implementation re-supplies, and it owes THREE
+// symbols, not one (review M-4 — the label used to say "player binding" and
+// name only the first):
+//   `boot`          — the genuine player binding. The fork's copy of this
+//                     contract binds its own `Player` at the same seam.
+//   `baseRecording` — a minimal valid v2 recording. Format-level, not
+//                     CH-specific except for its `recorder.name` and
+//                     `extensions['cyborg-hunter']` defaults, both overridable.
+//   `segment`       — the same for one segment.
+// The last two are used by ONE self-test (the §3 continuation refusal), which
+// needs a recording no fixture contains. A lift that moves them into the
+// package would leave a single-symbol binding; until someone does, the label
+// has to name all three.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -53,7 +62,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// ── the player binding ─────────────────────────────────────────────────────
+// ── the non-portable block: player binding + two recording constructors ────
 import { boot, baseRecording, segment } from '../support/viewer-harness.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -314,25 +323,37 @@ test('enrollment: every authored checkpoint ran', () => {
 test('no authored checkpoint depends on the 0.1 ms quantisation for its placement', () => {
   // FOUND THE HARD WAY, at authoring time (T5.7). `t=2972.15` on jspsych-full's
   // segment 6 sat midway between five `dom.attr` writes at 2972.0999999046326
-  // and the `dom.remove` teardown at 2972.199999809265 — 0.05 ms of clearance
-  // on each side, which reads as safe and is not. The two events are 0.0999998
-  // ms apart, BELOW the wire's own 0.1 ms grid, so no t between them survives
-  // `round1`: the difference from the origin landed a hair above the .15
-  // midpoint, rounded UP, and CH placed the checkpoint after the teardown while
-  // the fork — which compares raw floats — placed it before. Same recording,
-  // same reconstruction, two moments.
+  // and the `dom.remove` teardown at 2972.1999998092651 — 0.05 ms of clearance
+  // on each side, which reads as safe and is not. The two events are
+  // 0.0999999046325 ms apart, BELOW the wire's own 0.1 ms grid, so no t between
+  // them survives `round1`: the difference from the origin landed a hair above
+  // the .15 midpoint, rounded UP, and CH placed the checkpoint after the
+  // teardown while the fork — which compares raw floats — placed it before.
+  // Same recording, same reconstruction, two moments.
   //
   // Neither reading is wrong; the checkpoint was. So the property asserted here
   // is that the authored t names a moment that exists at BOTH resolutions: the
   // event prefix CH's quantised rule selects is the prefix an exact comparison
   // selects. Any t that fails this is unplaceable, and the fix is to move it
   // onto an event's own rounded time rather than into a sub-quantum gap.
+  //
+  // THE ORIGIN COMES FROM THE MODEL, never from a second reading of §3 here.
+  // This guard is the thing that has to be right when something else is wrong,
+  // so it must not carry its own copy of the rule the viewer rebases by: a
+  // hand-rolled chain keeps validating placements against the old order the day
+  // the model's moves, and green-lights a checkpoint the viewer misplaces. Its
+  // sibling test below ("rebases with the model's own forward rule") exists to
+  // stop exactly that, and this loop was quietly exempt from it (review M-2).
   for (const { file, exp } of EXPECTATIONS) {
     if (!Array.isArray(exp.checkpoints) || !FIXTURES.has(file)) continue;
     const rec = recordingFor(file);
+    const model = boot(rec).model;
     for (const cp of exp.checkpoints) {
+      // Raw wire events, model origin: the model's own event copies are already
+      // rebased, and what this compares is which RAW events fall inside the
+      // checkpoint under each reading.
       const s = rec.segments[cp.segment];
-      const origin = s.t_load ?? s.t_dom_ready ?? s.t_start ?? (s.events[0] ? s.events[0].t : 0);
+      const origin = model.segments[cp.segment].origin;
       const cpRel = round1(cp.t - origin);
       const quantised = s.events.map((e, i) => i).filter((i) => round1(s.events[i].t - origin) <= cpRel);
       const exact = s.events.map((e, i) => i).filter((i) => s.events[i].t <= cp.t);

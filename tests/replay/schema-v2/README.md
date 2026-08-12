@@ -13,12 +13,14 @@ by tools/convert/jspsych-v1-to-v2.mjs — T4; more in T7).
 
 ONE FILE IMPORTS CH, AND IT HAS TO. Everything here is repo-independent except
 `checkpoints.test.js`, which reconstructs each fixture and reads state off it,
-and reconstruction needs a player. Its player binding is one import block at the
-top of the file (`../support/viewer-harness.js` → the shipped report viewer).
-On a package lift the checkpoint format, the bounds arithmetic and the
-placement guard travel; each implementation re-supplies that block, exactly as
-the fork does in its own copy of the same contract. Everything else in this
-directory still lifts unchanged.
+and reconstruction needs a player. That dependency is one import block at the
+top of the file (`../support/viewer-harness.js`) carrying three symbols: `boot`
+(the player binding proper — the fork binds its own `Player` at the same seam)
+plus `baseRecording` and `segment`, two v2 recording constructors that one
+self-test needs because no fixture contains the shape it checks. On a package
+lift the checkpoint format, the bounds arithmetic and the placement guard
+travel; an adopting implementation re-supplies those three. Everything else in
+this directory still lifts unchanged.
 
 Checkpoint provenance is not optional. Any expectations file carrying a
 non-empty `checkpoints` array must state, in `notes.checkpoints`, which OTHER
