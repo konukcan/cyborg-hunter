@@ -51,6 +51,21 @@ function looksLikeReplayArtifact(text) {
   }
 }
 
+// Identity fields moved between the two wire versions: v1 kept them in a
+// `metadata` block, v2 states them at the top level under different names.
+// The read is VERSION-AWARE on purpose — a chain like `metadata?.x ?? x`
+// would let a stray `metadata` block on a v2 file (junk: v2 has no such
+// block) override the authoritative field, and both of these decide which
+// participant an artifact belongs to and which session is the latest.
+function ownField(recording, which) {
+  const v2 = recording.schema_version === 2;
+  if (which === 'participant_id') {
+    return v2 ? recording.participant_id : recording.metadata?.participant_id;
+  }
+  // 'start_time'
+  return v2 ? recording.recording_started_at : recording.metadata?.start_time;
+}
+
 export async function ingest(config) {
   const allFiles = findFiles(config.dataDir, config.filePattern);
   const participants = [];
@@ -259,9 +274,10 @@ function attachReplayArtifacts(participants, config, warnings) {
       // ownerless branch, which verifies by filename alone — and a file
       // recorded for 'a/b' but named for the sanitized 'a_b' would then
       // attach to the wrong participant, which is the one case this check
-      // exists for.
-      const embedded = cand.recording.metadata?.participant_id
-        ?? cand.recording.participant_id;
+      // exists for. VERSION-AWARE rather than a fallback chain: a v2 file has
+      // no `metadata` block (spec §2), so one appearing there is junk, and a
+      // chain that consulted it first would let that junk decide ownership.
+      const embedded = ownField(cand.recording, 'participant_id');
       if (embedded == null) {
         // Ownerless artifacts skip id verification entirely, so the filename
         // must match EXACT-case (our recorder writes sanitize(pid) verbatim).
@@ -299,15 +315,14 @@ function attachReplayArtifacts(participants, config, warnings) {
       continue;
     }
     // Latest-session pick tolerates non-ISO start times in third-party
-    // artifacts: v2's `recording_started_at` or v1's `metadata.start_time`,
+    // artifacts: the recording's own start field (per version, see ownField)
     // as an ISO string → a numeric epoch → the filename's own epoch. For a
     // CH artifact the filename epoch is DERIVED from the same field
     // (persistence.js), so the fallback agrees rather than guesses — but a
     // producer that names files differently would have been ordered by
     // whatever its filename happened to contain.
     const sessionEpoch = (cand) => {
-      const v = cand.recording.metadata?.start_time
-        ?? cand.recording.recording_started_at;
+      const v = ownField(cand.recording, 'start_time');
       const n = typeof v === 'number' ? v : Date.parse(v);
       if (Number.isFinite(n)) return n;
       const m = cand.file.match(/-replay-(\d+)\.json/i);

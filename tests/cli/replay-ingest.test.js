@@ -225,6 +225,48 @@ describe('replay artifact ingest', () => {
     } finally { rmSync(d, { recursive: true, force: true }); }
   });
 
+  // A v2 recording has no `metadata` block (spec §2), so one appearing on a
+  // v2 file is junk — hand-edited, half-converted, or a producer's leftover.
+  // Reading it in preference to the authoritative top-level field would let
+  // that junk decide ownership, which is a cross-participant attachment.
+  // Selection is therefore VERSION-AWARE, not a fallback chain.
+  // (Second commit-hook finding on the Task 10 fix round.)
+  it('ignores a stray v1 metadata block on a v2 artifact when deciding ownership', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-replay-v2junk-'));
+    try {
+      writeFileSync(join(d, 'P12.json'), participantFile('P12'));
+      const rec = recordingV2('SOMEONE-ELSE', 1751600000000);
+      rec.metadata = { participant_id: 'P12' };     // junk that would claim ownership
+      writeFileSync(join(d, 'P12-replay-1751600000000.json'), JSON.stringify(rec));
+      const { participants, warnings } = await ingest({
+        dataDir: d, filePattern: '*.json', singleParticipant: 'P12',
+        integrityField: 'integrity', participantIdField: 'participantId',
+      });
+      assert.strictEqual(participants[0].replay, null,
+        'the top-level participant_id governs on a v2 file, and it says SOMEONE-ELSE');
+      assert.ok(warnings.some(w => String(w.warnings).match(/participant_id mismatch/i)));
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('ignores a stray v1 metadata start_time on a v2 artifact when picking the session', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-replay-v2junkt-'));
+    try {
+      writeFileSync(join(d, 'P13.json'), participantFile('P13'));
+      const older = recordingV2('P13', 1751600000000);
+      older.metadata = { start_time: new Date(1799999999999).toISOString() }; // junk: claims newest
+      writeFileSync(join(d, 'P13-replay-1751600000000.json'), JSON.stringify(older));
+      writeFileSync(join(d, 'P13-replay-1751600999999.json'),
+        JSON.stringify(recordingV2('P13', 1751600999999)));
+      const { participants } = await ingest({
+        dataDir: d, filePattern: '*.json', singleParticipant: 'P13',
+        integrityField: 'integrity', participantIdField: 'participantId',
+      });
+      assert.strictEqual(participants[0].replay.recording.recording_started_at,
+        new Date(1751600999999).toISOString(),
+        'the real latest session wins over a junk metadata.start_time');
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
   it('picks the latest v2 session by its own start time', async () => {
     const d = mkdtempSync(join(tmpdir(), 'ch-replay-v2latest-'));
     try {
