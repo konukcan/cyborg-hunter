@@ -90,6 +90,19 @@
   var TOL_CONTAIN = 2;
   var TOL_STAGE = 2;
 
+  // The §8 comparisons, by name, for the `skipped` array every check carries:
+  // which of them could not RUN on this event, because the recording did not
+  // state the data or the reconstruction could not be measured. SIX names for
+  // five predicates — check 1 is two comparisons over independent fields.
+  //
+  // A skip is NOT a failure and never reaches the chip, the lane or the glyph.
+  // It exists so that `status === 'ok' && skipped.length === 0` is the only
+  // combination meaning every comparison was made and every one held: without
+  // it, an event whose rect the recording never carried counts in the same
+  // "alignment verified (N checks)" numerator as one that was verified in full.
+  var ALL_PREDICATES = ['camera.scroll', 'camera.client_w', 'rect', 'containment',
+    'hit-test', 'stage'];
+
   // Keycast: how long a chip keeps fading after its key.up, in segment-relative
   // ms. Purely a function of playhead (like the click-ripple fade in
   // drawOverlay below), not real time, so seeking lands on the same visual
@@ -1308,6 +1321,20 @@
       var type = e.type;
       if (type === 'input.value' || type === 'input.checked' || type === 'input.select') {
         if (span) applyInput(e);
+        // Spec §5.2 puts these three in the same non-move input union as
+        // mouse/key/touch, so a producer MAY carry §6 blocks on them. CH's own
+        // `withAlignment` does not (capture-trace.js:505-551 covers
+        // mouse.down/up/click, non-repeat key.down and touch.start/end), but
+        // the conformance moment is this viewer playing a FOREIGN file
+        // (design §7): geometry the viewer receives and ignores is geometry it
+        // declined to check while the chip says "verified". (T5.6 fix)
+        //
+        // Offered only when the blocks are THERE, unlike the discrete branch
+        // below. A redacted `input.value` carries `{node, redacted, value_len}`
+        // and no alignment fields (§5.2): that is a VALUE withholding, and
+        // bucketing it as `redacted` would count it in a chip about geometry
+        // — `key.*`'s redacted variant is the one that withholds a target.
+        if (e.camera || e.anchor) offerToCheck(e);
       } else if (type === 'scroll.window') {
         cam.x = num(e.x) || 0; cam.y = num(e.y) || 0;
         applyCamScroll();
@@ -1320,15 +1347,19 @@
       } else if (KNOWN_TYPES[type] !== true) {
         noteUnknownType(type);
       } else if (DISCRETE_TYPES[type] === true) {
-        // Every non-move input event is OFFERED to the check; the §6 MAY-omit
-        // rule is decided inside it, in one place, because "no camera block
-        // means no check" is a statement about the check and not about the
-        // dispatch.
-        if (e.__chk == null) {
-          if (pendingCamSize) { flushCamSize(); applyCamScroll(); }
-          evaluateCheck(e);
-        }
+        offerToCheck(e);
       }
+    }
+
+    // Every non-move input event is OFFERED to the check; the §6 MAY-omit rule
+    // is decided inside `evaluateCheck`, in one place, because "no camera block
+    // means no check" is a statement about the check and not about the
+    // dispatch. The camera size is flushed first: the check reads the frame's
+    // layout box, and a pending resize would have it measure the previous one.
+    function offerToCheck(e) {
+      if (e.__chk != null) return;
+      if (pendingCamSize) { flushCamSize(); applyCamScroll(); }
+      evaluateCheck(e);
     }
 
     function applyEntry(w) {
@@ -1477,7 +1508,11 @@
     //   stage transform    — the iframe's REAL on-page offset vs the computed
     //                        letterbox (±2px); this one tests the viewer
     // Any failed predicate ⇒ 'uncertain' with reasons, surfaced by chips, lane
-    // and the cursor glyph.
+    // and the cursor glyph. Any predicate that could not RUN — the recording
+    // did not state the field, the event has no point, the box could not be
+    // measured — is named in `skipped` (see ALL_PREDICATES) and surfaced in
+    // `getChecks()` alone: a skip is not a failure, but a check with one is not
+    // a full verification either, and both of those have to stay sayable.
     //
     // Anchor resolution changed completely: `anchor.node` is an integer id
     // resolved through the span id map. No markers, no child-index path, no
@@ -1500,7 +1535,10 @@
       // redacted ANCHOR is a different thing and is CHECKED: §8 omits
       // `anchor.id` but keeps `anchor.node` and `anchor.rect`, which is
       // strictly more than v1 could verify.
-      if (e.redacted) { e.__chk = { status: 'redacted', reasons: ['redacted event'] }; return; }
+      if (e.redacted) {
+        e.__chk = { status: 'redacted', reasons: ['redacted event'], skipped: ALL_PREDICATES.slice() };
+        return;
+      }
       var camera = e.camera;
       var anchor = e.anchor;
       // §6 alignment fields are OPTIONAL and MAY be omitted on key.up and on
@@ -1509,19 +1547,39 @@
       // read as misalignment.
       if (!camera && !anchor) return;
       var reasons = [];
+      var skipped = [];
 
-      if (camera) {
-        var view = doc.defaultView;
-        if (view && (Math.abs((view.scrollX || 0) - cam.x) > TOL_CAMERA ||
-                     Math.abs((view.scrollY || 0) - cam.y) > TOL_CAMERA)) {
+      // Check 1a's comparand is the RECORDING's scroll, not `cam` — the fold is
+      // the viewer's own reading of it, so comparing the applied scroll against
+      // `cam.x/cam.y` compares a value against itself whenever the fold did not
+      // run. It does not always run: `foldEventCamera` requires a non-null
+      // `scroll_x` before it touches anything, so a block stating only
+      // `scroll_y` was folded nowhere, applied nowhere, and read `ok` over a
+      // frame 300px from where the recording put the page. Design §8 says
+      // "applied scrollX/scrollY vs camera.scroll_x/scroll_y"; this is that.
+      // An axis the recording does not state falls back to the fold rather than
+      // to 0, which would invent a divergence out of an absent field. (T5.6 fix)
+      var view = doc.defaultView;
+      var recX = camera && num(camera.scroll_x) != null ? camera.scroll_x : null;
+      var recY = camera && num(camera.scroll_y) != null ? camera.scroll_y : null;
+      if (view && (recX != null || recY != null)) {
+        var wantX = recX != null ? recX : cam.x;
+        var wantY = recY != null ? recY : cam.y;
+        if (Math.abs((view.scrollX || 0) - wantX) > TOL_CAMERA ||
+            Math.abs((view.scrollY || 0) - wantY) > TOL_CAMERA) {
           reasons.push('applied scroll diverges (' +
-            (view.scrollX || 0) + ',' + (view.scrollY || 0) + ' vs ' + cam.x + ',' + cam.y + ')');
+            (view.scrollX || 0) + ',' + (view.scrollY || 0) + ' vs ' + wantX + ',' + wantY + ')');
         }
-        var de = doc.documentElement;
-        if (de && num(camera.client_w) != null &&
-            Math.abs(de.clientWidth - camera.client_w) > TOL_CAMERA) {
+      } else {
+        skipped.push('camera.scroll');
+      }
+      var de = doc.documentElement;
+      if (de && camera && num(camera.client_w) != null) {
+        if (Math.abs(de.clientWidth - camera.client_w) > TOL_CAMERA) {
           reasons.push('frame layout width ' + de.clientWidth + ' vs camera ' + camera.client_w);
         }
+      } else {
+        skipped.push('camera.client_w');
       }
 
       // §7: null means "no applicable target node" — not a failure, and
@@ -1534,10 +1592,7 @@
       // carries, so the hole was not a corner. (T5.6)
       var noAnchor = !!(anchor && anchor.node == null);
       var target = anchor && !noAnchor ? resolveNode(anchor.node) : null;
-      if (anchor && !noAnchor && !target) {
-        reasons.push('anchor node ' + anchor.node + ' not held by this span (' +
-          (anchor.tag || '?') + (anchor.id ? '#' + anchor.id : '') + ')');
-      } else if (target) {
+      if (target) {
         if (target.hasAttribute && target.hasAttribute('data-ch-shadow')) {
           // The interaction retargeted to a shadow host whose content was not
           // captured — geometry would "verify" against a hollow box. Refuse.
@@ -1546,7 +1601,12 @@
         var rr = null;
         try { rr = target.getBoundingClientRect(); } catch (err) { /* leave null */ }
         var rect = anchor.rect;
-        if (rr && rect && num(rect.x) != null) {
+        // All FOUR edges or none: three of the deltas are NaN for a partial
+        // rect and `NaN > TOL` is false, so a half-stated rect used to run a
+        // comparison that could decide nothing and still counted as verified.
+        var full = !!(rect && num(rect.x) != null && num(rect.y) != null &&
+          num(rect.w) != null && num(rect.h) != null);
+        if (rr && full) {
           var dL = Math.abs(rr.left - rect.x);
           var dT = Math.abs(rr.top - rect.y);
           var dR = Math.abs((rr.left + rr.width) - (rect.x + rect.w));
@@ -1554,23 +1614,39 @@
           if (dL > TOL_RECT || dT > TOL_RECT || dR > TOL_RECT || dB > TOL_RECT) {
             reasons.push('target rect moved (Δ ' + Math.round(Math.max(dL, dT, dR, dB)) + 'px)');
           }
+        } else {
+          skipped.push('rect');
         }
         var px = eventX(e), py = eventY(e);
-        if (rr && px != null &&
-            !(px >= rr.left - TOL_CONTAIN && px <= rr.left + rr.width + TOL_CONTAIN &&
-              py >= rr.top - TOL_CONTAIN && py <= rr.top + rr.height + TOL_CONTAIN)) {
-          reasons.push('cursor outside target');
-        }
-        if (doc.elementFromPoint && px != null) {
-          var under = null;
-          try { under = doc.elementFromPoint(px, py); } catch (err) { /* skip */ }
-          if (under && under !== target &&
-              !(target.contains && target.contains(under)) &&
-              !(under.contains && under.contains(target))) {
-            reasons.push('hit-test resolves ' +
-              (under.id ? under.tagName.toLowerCase() + '#' + under.id : under.tagName.toLowerCase()));
+        var havePoint = px != null && py != null;
+        if (rr && havePoint) {
+          if (!(px >= rr.left - TOL_CONTAIN && px <= rr.left + rr.width + TOL_CONTAIN &&
+                py >= rr.top - TOL_CONTAIN && py <= rr.top + rr.height + TOL_CONTAIN)) {
+            reasons.push('cursor outside target');
           }
+        } else {
+          skipped.push('containment');
         }
+        var under;
+        if (doc.elementFromPoint && havePoint) {
+          try { under = doc.elementFromPoint(px, py); } catch (err) { under = undefined; }
+        }
+        // A point that resolves to NOTHING (outside the frame's own viewport)
+        // is not evidence either way, so it is a skip rather than silence.
+        if (under == null) {
+          skipped.push('hit-test');
+        } else if (under !== target &&
+            !(target.contains && target.contains(under)) &&
+            !(under.contains && under.contains(target))) {
+          reasons.push('hit-test resolves ' +
+            (under.id ? under.tagName.toLowerCase() + '#' + under.id : under.tagName.toLowerCase()));
+        }
+      } else {
+        if (anchor && !noAnchor) {
+          reasons.push('anchor node ' + anchor.node + ' not held by this span (' +
+            (anchor.tag || '?') + (anchor.id ? '#' + anchor.id : '') + ')');
+        }
+        skipped.push('rect', 'containment', 'hit-test');
       }
 
       try {
@@ -1580,11 +1656,13 @@
             Math.abs(ir.top - sr.top - oy) > TOL_STAGE) {
           reasons.push('stage transform drift');
         }
-      } catch (err) { /* measuring failed — not evidence of misalignment */ }
+      } catch (err) {
+        skipped.push('stage');   // measuring failed — not evidence of misalignment
+      }
 
       e.__chk = reasons.length > 0
-        ? { status: 'uncertain', reasons: reasons }
-        : { status: noAnchor ? 'no-anchor' : 'ok', reasons: [] };
+        ? { status: 'uncertain', reasons: reasons, skipped: skipped }
+        : { status: noAnchor ? 'no-anchor' : 'ok', reasons: [], skipped: skipped };
     }
 
     // Client coordinates are normative in v2 (§7), so there is no re-projection
@@ -1895,7 +1973,12 @@
       if (model.tier !== 'dom') {
         alignChip.textContent = '';
       } else if (s.uncertain > 0) {
-        alignChip.textContent = '⚠ ' + s.uncertain + ' interaction(s) failed the alignment self-check';
+        // The qualifier rides the WARNING branch too. It is the branch an
+        // analyst is most likely to be reading, and dropping it there hid three
+        // unverifiable interactions behind one failed one — the same over-claim
+        // as on the verified branch, one `else if` away. (T5.6 fix)
+        alignChip.textContent = '⚠ ' + s.uncertain + ' interaction(s) failed the alignment self-check' +
+          (qual.length ? ' (' + qual.join(', ') + ')' : '');
         alignChip.className = 'replay-note replay-warn';
       } else if (s.ok > 0) {
         alignChip.textContent = 'alignment verified (' + s.ok + ' check' + (s.ok === 1 ? '' : 's') +
@@ -2079,7 +2162,12 @@
         return seg().events
           .filter(function (e) { return e.__chk; })
           .map(function (e) {
-            return { t: e.t, type: e.type, status: e.__chk.status, reasons: e.__chk.reasons };
+            return {
+              t: e.t, type: e.type, status: e.__chk.status, reasons: e.__chk.reasons,
+              // Which §8 comparisons could not run. Diagnostic only — see
+              // ALL_PREDICATES. `ok` with an empty array is full verification.
+              skipped: e.__chk.skipped || []
+            };
           });
       },
       getCamera: function () { return { x: cam.x, y: cam.y, w: cam.w, h: cam.h, cw: cam.cw, ch: cam.ch, k: k, ox: ox, oy: oy }; },

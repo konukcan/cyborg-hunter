@@ -318,7 +318,8 @@ const MODELLED_SCROLLBAR = 15;
 
 // Options: `stageDrift` ({x, y} px added to the iframe's real on-page offset —
 // a page transform the viewer does not know about), `frozenScroll` (the frame
-// refuses to scroll, as a reconstruction shorter than the captured page does).
+// refuses to scroll, as a reconstruction shorter than the captured page does),
+// `breakStageMeasure` (the frame's box cannot be read at all).
 async function withLayout(v, opts, body) {
   const o = opts || {};
   const doc = v.doc();
@@ -347,6 +348,7 @@ async function withLayout(v, opts, body) {
     return await withProto(v.win, 'HTMLElement', 'getBoundingClientRect', {
       value: function () {
         if (this === iframeEl) {
+          if (o.breakStageMeasure) throw new Error('layout read refused');
           const t = translateOf(this);
           const d = o.stageDrift || { x: 0, y: 0 };
           return rect(t.x + (d.x || 0), t.y + (d.y || 0), px(this.style.width), px(this.style.height));
@@ -449,11 +451,14 @@ async function checksFor(recording, opts) {
 const only = (checks) => { assert.equal(checks.length, 1, 'exactly one check'); return checks[0]; };
 
 describe('T5.6 — the five predicates: clean reconstruction', () => {
-  it('a faithful reconstruction passes all five', async () => {
+  it('a faithful reconstruction passes all five, with nothing skipped', async () => {
     const { checks } = await checksFor(alignRecording([click()]));
     const c = only(checks);
-    assert.deepStrictEqual({ type: c.type, status: c.status, reasons: c.reasons },
-      { type: 'mouse.click', status: 'ok', reasons: [] });
+    assert.deepStrictEqual({ type: c.type, status: c.status, reasons: c.reasons, skipped: c.skipped },
+      { type: 'mouse.click', status: 'ok', reasons: [], skipped: [] });
+    // The invariant the `skipped` array exists for: `ok` AND empty means every
+    // §8 comparison was MADE and every one of them held. Without it, an event
+    // whose rect the recording never carried counts in the same numerator.
   });
 
   it('and passes them under a scroll the viewer had to apply first', async () => {
@@ -694,5 +699,209 @@ describe('T5.6 — the three anchor outcomes (§7) and the redacted bucket (§8)
     const bad = only((await checksFor(alignRecording([keyEvent(moved)]))).checks);
     assert.equal(bad.status, 'uncertain');
     assert.match(bad.reasons.join(' '), /target rect moved/);
+  });
+});
+
+// ── T5.6 fix round ─────────────────────────────────────────────────────────
+
+describe('T5.6 fix — check 1a compares against the RECORDING, not the fold', () => {
+  // The review's row 6: the comparand was `cam.x/cam.y`, the viewer's OWN
+  // folded camera, so a fold that never ran left both sides stale together and
+  // the check passed over a frame 300px from where the recording says the page
+  // was. Design §8 specifies "applied scrollX/scrollY vs
+  // camera.scroll_x/scroll_y", and the difference is only visible on an event
+  // the fold DECLINES — `foldEventCamera` requires a non-null `scroll_x` before
+  // it touches anything, so a block stating only `scroll_y` is folded nowhere,
+  // applied nowhere, and (before this fix) compared against itself.
+  //
+  // This is the population where check 2 cannot rescue the miss: camera-only
+  // events and `node: null` events have no recording-carried rect.
+  const partialScroll = camera({ scroll_x: null, scroll_y: 300 });
+
+  it('a camera stating a scroll the fold never applied is FLAGGED, not ok', async () => {
+    const rec = alignRecording([
+      { type: 'mouse.down', t: 400, x: 10, y: 10, button: 0, target: null, camera: partialScroll },
+    ]);
+    const { v, checks } = await checksFor(rec);
+    assert.equal(v.doc().defaultView.scrollY, 0, 'the fold declined the partial block');
+    const c = only(checks);
+    assert.equal(c.status, 'uncertain');
+    assert.match(c.reasons[0], /applied scroll diverges \(0,0 vs 0,300\)/,
+      'the reason quotes the RECORDING\'s 300, not the viewer\'s own 0');
+  });
+
+  it('and so is the same divergence on a no-anchor event', async () => {
+    const rec = alignRecording([
+      click({ camera: partialScroll, anchor: anchor({ node: null }) }),
+    ]);
+    const c = only((await checksFor(rec)).checks);
+    assert.equal(c.status, 'uncertain', 'not no-anchor with empty reasons');
+    assert.match(c.reasons.join(' '), /applied scroll diverges \(0,0 vs 0,300\)/);
+  });
+
+  it('a stated axis wins; an omitted one falls back to the fold rather than reading 0', async () => {
+    // `{scroll_x: null, scroll_y: 120}` on a frame the seed scrolled to (0,120):
+    // y matches the recording, x has nothing recorded to compare against, and
+    // treating the absent field as 0 would invent a divergence.
+    const rec = alignRecording(
+      [{ type: 'mouse.down', t: 400, x: 10, y: 10, button: 0, target: null,
+        camera: camera({ scroll_x: null, scroll_y: 120 }) }],
+      { initialState: { scroll: { x: 0, y: 120 }, element_scroll: [], media: [], form: [] } });
+    const { v, checks } = await checksFor(rec);
+    assert.equal(v.doc().defaultView.scrollY, 120);
+    assert.deepStrictEqual(only(checks).reasons, []);
+  });
+});
+
+describe('T5.6 fix — the chip qualifies the WARNING branch too', () => {
+  it('names the unverifiable interactions beside the failed ones', async () => {
+    // The branch an analyst is most likely to be looking at was the one branch
+    // that dropped the qualifier: "⚠ 1 interaction(s) failed" while three more
+    // went dark. Same over-claim as the one this task fixed on the verified
+    // branch, one `else if` away.
+    const { v, checks } = await checksFor(alignRecording([
+      click({ t: 200, x: 700, y: 600 }),                          // uncertain
+      click({ t: 300, anchor: anchor({ node: null }) }),          // no target
+      click({ t: 400, anchor: anchor({ node: null }) }),          // no target
+      { type: 'key.down', t: 500, redacted: true },               // redacted
+    ]));
+    assert.deepStrictEqual(checks.map((c) => c.status),
+      ['uncertain', 'no-anchor', 'no-anchor', 'redacted']);
+    assert.equal(v.chip('data-ch-align').textContent,
+      '⚠ 1 interaction(s) failed the alignment self-check (1 redacted, 2 with no target)');
+    assert.match(v.chip('data-ch-align').className, /replay-warn/, 'still the warning');
+  });
+});
+
+describe('T5.6 fix — which predicates could not RUN is visible', () => {
+  // The review's widened residual: five shapes bucket as `ok` with a predicate
+  // skipped for want of data, and all five feed "alignment verified (N
+  // checks)". No fifth status (there is no spec sentence behind one) and no
+  // chip change (a skip is not a failure) — the skip is simply named at the one
+  // surface that is meant to be diagnostic.
+  const skippedFor = async (recording) => (await checksFor(recording)).checks[0].skipped;
+
+  it('an anchor with no rect at all — capture emits this when the box read throws', async () => {
+    assert.deepStrictEqual(
+      await skippedFor(alignRecording([click({ anchor: { tag: 'button', id: 'go', node: 2 } })])),
+      ['rect']);
+  });
+
+  it('an anchor whose rect is present but incomplete', async () => {
+    // Three of the four edge deltas would be NaN, and `NaN > TOL` is false —
+    // the silent version of this was a comparison that ran and decided nothing.
+    assert.deepStrictEqual(
+      await skippedFor(alignRecording([click({ anchor: anchor({ rect: { x: BUTTON_BOX[0] } }) })])),
+      ['rect']);
+  });
+
+  it('a camera with no scroll state, and one with no client box', async () => {
+    assert.deepStrictEqual(
+      await skippedFor(alignRecording([click({ camera: camera({ scroll_x: null, scroll_y: null }) })])),
+      ['camera.scroll']);
+    assert.deepStrictEqual(
+      await skippedFor(alignRecording([click({ camera: camera({ client_w: null, client_h: null }) })])),
+      ['camera.client_w']);
+  });
+
+  it('an anchor with no camera block beside it', async () => {
+    const noCamera = click();
+    delete noCamera.camera;
+    assert.deepStrictEqual(await skippedFor(alignRecording([noCamera])),
+      ['camera.scroll', 'camera.client_w']);
+  });
+
+  it('a key event has no point, so two of the five never run', async () => {
+    const rec = alignRecording([{
+      type: 'key.down', t: 500, key: 'x', code: 'KeyX', repeat: false, target: 4,
+      mods: { ctrl: false, shift: false, alt: false, meta: false },
+      camera: camera(), anchor: { tag: 'input', id: 'answer', rect: boxRect(INPUT_BOX), node: 4 },
+    }]);
+    const c = only((await checksFor(rec)).checks);
+    assert.equal(c.status, 'ok');
+    assert.deepStrictEqual(c.skipped, ['containment', 'hit-test'],
+      'the rect was verified; the point never existed');
+
+    // Half a point is no point: with only `x`, both comparisons would run
+    // against an undefined `y` and decide nothing (the same NaN silence as a
+    // partial rect).
+    const half = only((await checksFor(alignRecording([click({ y: undefined })]))).checks);
+    assert.deepStrictEqual(half.skipped, ['containment', 'hit-test']);
+  });
+
+  it('a frame whose box cannot be read skips the stage check instead of failing it', async () => {
+    // The `catch` around the stage measurement is a deliberate "not evidence of
+    // misalignment", and it was as silent as the rest: an unreadable frame
+    // counted as a passed check 5.
+    const c = only((await checksFor(alignRecording([click()]), { breakStageMeasure: true })).checks);
+    assert.equal(c.status, 'ok', 'a failed measurement is not a divergence');
+    assert.deepStrictEqual(c.skipped, ['stage']);
+  });
+
+  it('the buckets that verify nothing say so in full', async () => {
+    const rec = alignRecording([
+      click({ t: 300, anchor: anchor({ node: null }) }),
+      click({ t: 400, anchor: anchor({ node: 4242 }) }),
+      { type: 'key.down', t: 500, redacted: true },
+    ]);
+    const { checks } = await checksFor(rec);
+    assert.deepStrictEqual(checks[0].skipped, ['rect', 'containment', 'hit-test'],
+      'no applicable target: the three anchor predicates');
+    assert.deepStrictEqual(checks[1].skipped, ['rect', 'containment', 'hit-test'],
+      'an id the span cannot hold: the same three, plus the loud reason');
+    assert.deepStrictEqual(checks[2].skipped,
+      ['camera.scroll', 'camera.client_w', 'rect', 'containment', 'hit-test', 'stage'],
+      'a redacted event carries nothing to check');
+  });
+});
+
+describe('T5.6 fix — two guards the review found unpinned', () => {
+  it('§5.2 alignment blocks on input.* are CONSUMED, not silently dropped', async () => {
+    // Spec §5.2 puts `input.value` / `input.checked` / `input.select` in the
+    // same non-move input union as mouse and key, so a producer MAY carry §6
+    // blocks on them. CH's own `withAlignment` does not — but the conformance
+    // moment is this viewer playing a FOREIGN file (design §7), and geometry
+    // the viewer receives and ignores is geometry it declined to check while
+    // the chip says "verified".
+    const rec = alignRecording([{
+      type: 'input.value', t: 500, node: 4, value: 'hi',
+      camera: camera(),
+      anchor: { tag: 'input', id: 'answer', rect: { x: 9999, y: 9999, w: 1, h: 1 }, node: 4 },
+    }]);
+    const { v, checks } = await checksFor(rec);
+    assert.equal(v.dbg.getNode(4).value, 'hi', 'still applied as an input event');
+    const c = only(checks);
+    assert.equal(c.status, 'uncertain');
+    assert.match(c.reasons.join(' '), /target rect moved/);
+  });
+
+  it('but a redacted input.value is a VALUE withholding, not an alignment one', async () => {
+    // §5.2's redacted `input.value` is `{node, redacted, value_len}` — no
+    // alignment fields, by construction. Bucketing it `redacted` would count a
+    // value redaction in a chip about geometry, and `key.*` (which withholds
+    // its target along with everything else) is the variant that bucket is for.
+    // The boundary the line above draws, asserted from the other side.
+    const rec = alignRecording([
+      click({ t: 300 }),
+      { type: 'input.value', t: 500, node: 4, redacted: true, value_len: 3 },
+    ]);
+    const { v, checks } = await checksFor(rec);
+    assert.deepStrictEqual(checks.map((c) => c.status), ['ok'], 'one check, from the click');
+    assert.equal(v.dbg.getNode(4).value, '•••', 'and the redaction still renders');
+    assert.equal(v.chip('data-ch-align').textContent, 'alignment verified (1 check)');
+  });
+
+  it('a shadow host refuses geometric verification (§13)', async () => {
+    // The reconstruction holds the host and nothing under it, so a rect that
+    // agrees is agreeing about a hollow box. Task 4 makes the stamp
+    // viewer-owned in both directions, so the claim in the keyframe is one the
+    // VIEWER re-stamped.
+    const host = el(5, 'div', { id: 'host', 'data-ch-shadow': '', 'data-box': '310,205,64,28' });
+    const rec = alignRecording(
+      [click({ anchor: anchor({ tag: 'div', id: 'host', node: 5 }) })],
+      { dom: page([host]) });
+    const c = only((await checksFor(rec)).checks);
+    assert.equal(c.status, 'uncertain');
+    assert.ok(c.reasons.indexOf('shadow content not captured') >= 0, c.reasons.join(' '));
   });
 });
