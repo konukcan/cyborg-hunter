@@ -1484,11 +1484,13 @@
     // getElementById guess. Alignment blocks are OPTIONAL (§6 cost rule), and
     // absence is NOT failure — no camera block means no check.
     //
-    // TASK 6 OWNS THE SEMANTICS TESTS: the five predicates each failing on
-    // their own injected corruption, the three distinguishable anchor
-    // outcomes, and the redacted bucket. What lands here is the re-point the
-    // rewrite could not leave behind, since v1's version read markers and a
-    // `resize`-folded camera that no longer exist.
+    // THE SEMANTICS ARE PINNED IN `tests/replay/alignment-viewer-model.test.js`
+    // (T5.6): each predicate — and each conjunct inside it — failing on its own
+    // injected corruption and passing otherwise, the three §7 anchor outcomes,
+    // both redaction buckets, and the §6 MAY-omit rule. That file models layout
+    // over the frame realm to do it; REAL geometry (fonts, reflow, zoom, pinch,
+    // transforms) is the Playwright battery's, and neither substitutes for the
+    // other.
     function evaluateCheck(e) {
       var doc = frameDoc();
       if (!doc || !span) return;
@@ -1522,15 +1524,17 @@
         }
       }
 
-      if (anchor && anchor.node == null) {
-        // §7: null means "no applicable target node" — not a failure, and
-        // distinguishable from an id the span could not hold.
-        e.__chk = { status: 'no-anchor', reasons: reasons };
-        return;
-      }
-
-      var target = anchor ? resolveNode(anchor.node) : null;
-      if (anchor && !target) {
+      // §7: null means "no applicable target node" — not a failure, and
+      // distinguishable from an id the span could not hold. It suppresses the
+      // three ANCHOR predicates and NOTHING ELSE: returning here bucketed the
+      // whole event as "no anchor" and carried any camera reason into a bucket
+      // the chip counts as clean, while skipping the stage check entirely. A
+      // divergence the viewer can still see is still a divergence, and
+      // `node: null` is the shape every interaction outside the observed root
+      // carries, so the hole was not a corner. (T5.6)
+      var noAnchor = !!(anchor && anchor.node == null);
+      var target = anchor && !noAnchor ? resolveNode(anchor.node) : null;
+      if (anchor && !noAnchor && !target) {
         reasons.push('anchor node ' + anchor.node + ' not held by this span (' +
           (anchor.tag || '?') + (anchor.id ? '#' + anchor.id : '') + ')');
       } else if (target) {
@@ -1580,7 +1584,7 @@
 
       e.__chk = reasons.length > 0
         ? { status: 'uncertain', reasons: reasons }
-        : { status: 'ok', reasons: [] };
+        : { status: noAnchor ? 'no-anchor' : 'ok', reasons: [] };
     }
 
     // Client coordinates are normative in v2 (§7), so there is no re-projection
@@ -1880,18 +1884,24 @@
       // keeps `replay-warn` from whichever segment last held an uncertain
       // check, so a clean segment renders an empty chip styled as a warning.
       alignChip.className = 'replay-note';
+      // FOUR buckets, one sentence. `no-anchor` was counted here and said by
+      // nothing until T5.6: a segment whose interactions all landed outside the
+      // observed root read as a segment with no interactions, and a mixed one
+      // read as fully verified. Neither is a failure — which is why they are
+      // not the warning — but both are the silence this chip exists to prevent.
+      var qual = [];
+      if (s.redacted > 0) qual.push(s.redacted + ' redacted');
+      if (s.noAnchor > 0) qual.push(s.noAnchor + ' with no target');
       if (model.tier !== 'dom') {
         alignChip.textContent = '';
       } else if (s.uncertain > 0) {
         alignChip.textContent = '⚠ ' + s.uncertain + ' interaction(s) failed the alignment self-check';
         alignChip.className = 'replay-note replay-warn';
-      } else if (s.redacted > 0 && s.ok === 0) {
-        alignChip.textContent = 'alignment unverified (redacted interactions)';
-        alignChip.className = 'replay-note';
       } else if (s.ok > 0) {
         alignChip.textContent = 'alignment verified (' + s.ok + ' check' + (s.ok === 1 ? '' : 's') +
-          (s.redacted > 0 ? ', ' + s.redacted + ' redacted' : '') + ')';
-        alignChip.className = 'replay-note';
+          (qual.length ? '; ' + qual.join(', ') : '') + ')';
+      } else if (qual.length) {
+        alignChip.textContent = 'alignment unverified (' + qual.join(', ') + ')';
       } else {
         alignChip.textContent = '';
       }

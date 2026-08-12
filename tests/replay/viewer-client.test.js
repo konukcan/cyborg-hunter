@@ -1,82 +1,21 @@
 // tests/replay/viewer-client.test.js
 // The shipped report viewer, driven headlessly over v2 models (T5 Task 4).
 //
-// It runs the ASSEMBLED script — `dom-instantiate.js` concatenated ahead of the
-// client, exactly what `html-index.js` inlines into a report — because the
-// client calls `mountTree`/`applyPatch` out of that concatenation and a test
-// that evaluated the client alone would prove nothing about what ships.
+// The boot harness (`boot`, `stubCanvas`, `withProto`, the recording builders)
+// moved to `tests/replay/support/viewer-harness.js` at T5.6, unchanged, so the
+// alignment suite boots the same viewer the same way; its header carries the
+// realm notes (assembled script, synchronous `srcdoc`, no layout engine).
 //
-// happy-dom is a real enough DOM for the span walk: it parses `srcdoc`
-// SYNCHRONOUSLY (so a boot needs no await here), keeps one `contentDocument`
-// identity across the session, and implements `value`/`checked`/`scrollTop`
-// and window scroll. What it does NOT implement is layout — every
-// `getBoundingClientRect()` is 0×0 and `getContext('2d')` returns null — so
-// this file asserts STATE (reconstruction, seeds, ordering, counters, chips)
-// and leaves geometry to the Playwright battery (Task 8) and the five
-// alignment predicates to Task 6.
+// This file asserts STATE (reconstruction, seeds, ordering, counters, chips).
+// Geometry belongs to the Playwright battery (Task 8), and the five alignment
+// predicates to `alignment-viewer-model.test.js` (Task 6).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'fs';
-import { Window } from 'happy-dom';
 
-import { readReplayClientSrc } from '../../src/cli/renderers/replay-client-source.js';
-import { buildViewerModel } from '../../src/replay/viewer-model.js';
-
-const CLIENT_SRC = readReplayClientSrc();
-
-const fixture = (name) => JSON.parse(readFileSync(
-  new URL(`./schema-v2/fixtures/${name}.json`, import.meta.url), 'utf8'));
-
-// Node identity assertions go through this: a failing `assert.equal` on two
-// happy-dom nodes renders both with `util.inspect`, which walks
-// ownerDocument → defaultView → … until the runner is OOM-killed with no
-// per-test output (Task 2's SIGKILL finding).
-const same = (a, b, msg) => assert.ok(a === b, msg);
-
-// ── harness ────────────────────────────────────────────────────────────────
-
-// happy-dom has no 2D context; the viewer draws the cursor overlay, the marker
-// lane AND (from T5.5) the offscreen canvas composites through one. A recorder
-// stands in so drawing is exercised (a throw here would be a real defect)
-// without asserting pixels.
-//
-// `toDataURL` returns '' in happy-dom, which is not a data URL and which the
-// client's own presentation guard refuses; the stub returns a well-formed one
-// whose payload counts the draws behind it, so a test can tell one composite
-// from another and can count RE-ENCODES (the cost design §3.1 defers to once
-// per batch). Presented PIXELS are the Playwright battery's business — this
-// realm has no painting at all, which is exactly the trap the plan forbids
-// asserting into (`viewer-canvas.battery.mjs`).
-function stubCanvas(win) {
-  win.__canvases = [];
-  win.HTMLCanvasElement.prototype.getContext = function () {
-    if (!this.__ctx) {
-      const calls = [];
-      const rec = (name) => (...args) => { calls.push({ name, args }); };
-      // The offscreen composite canvas is DETACHED by design — it belongs to
-      // the report document but is never mounted — so a querySelectorAll would
-      // not find it. Every canvas that ever asks for a context registers here.
-      win.__canvases.push(this);
-      this.__ctx = {
-        calls,
-        clearRect: rec('clearRect'), fillRect: rec('fillRect'),
-        beginPath: rec('beginPath'), moveTo: rec('moveTo'), lineTo: rec('lineTo'),
-        stroke: rec('stroke'), fill: rec('fill'), arc: rec('arc'),
-        drawImage: rec('drawImage'),
-        setLineDash: rec('setLineDash'),
-        fillStyle: '', strokeStyle: '', lineWidth: 1,
-      };
-    }
-    return this.__ctx;
-  };
-  win.__encodes = 0;
-  win.HTMLCanvasElement.prototype.toDataURL = function () {
-    win.__encodes++;
-    const draws = this.__ctx ? this.__ctx.calls.filter((c) => c.name === 'drawImage').length : 0;
-    return 'data:image/png;base64,' + 'Q'.repeat(4) + draws;
-  };
-}
+import {
+  boot, fixture, same, withProto, baseRecording, segment, bodyKeyframe,
+} from './support/viewer-harness.js';
 
 // Composite calls, in the order they were made, from every offscreen canvas the
 // client owns. An offscreen canvas is identified by having a `drawImage` at all
@@ -94,68 +33,6 @@ function offscreenCalls(v) {
     });
   });
   return out;
-}
-
-function boot(recording) {
-  const model = buildViewerModel(recording);
-  const win = new Window({ url: 'https://report.test/' });
-  stubCanvas(win);
-  const frames = [];
-  win.document.body.innerHTML = '<div id="mount"></div>';
-  const mount = win.document.getElementById('mount');
-  // The four globals the client reads. ResizeObserver is deliberately
-  // undefined — the client is `typeof`-guarded and an analyst-side resize is
-  // not what this file tests.
-  // eslint-disable-next-line no-new-func
-  new Function('window', 'document', 'requestAnimationFrame', 'ResizeObserver', CLIENT_SRC)(
-    win, win.document, (fn) => { frames.push(fn); return frames.length; }, undefined);
-  win.initChReplayViewer(mount, model);
-  const dbg = mount._chReplayDebug;
-  return {
-    win, mount, model, dbg,
-    frames,
-    flushFrames: () => { const q = frames.splice(0); q.forEach((f) => f(0)); return q.length; },
-    doc: () => {
-      const f = mount.querySelector('.replay-frame');
-      return f ? f.contentDocument : null;
-    },
-    chip: (attr) => mount.querySelector('[' + attr + ']'),
-  };
-}
-
-// ── constructed recordings ─────────────────────────────────────────────────
-
-function baseRecording(over) {
-  return Object.assign({
-    schema_version: 2,
-    recorder: { name: 'cyborg-hunter-replay', version: '0.7.5' },
-    participant_id: 'P1',
-    recording_started_at: '2026-08-11T00:00:00.000Z',
-    recording_started_at_perf: 0,
-    user_agent: 'test',
-    viewport: { w: 1000, h: 800, dpr: 1, scale: 1, offset_x: 0, offset_y: 0 },
-    stylesheets: [],
-    stylesheet_events: [],
-    viewport_changes: [],
-    ended_at_perf: 10000,
-    end_reason: 'finished',
-    truncated: false,
-    extensions: { 'cyborg-hunter': { tier: 'dom' } },
-    segments: [],
-  }, over);
-}
-
-const bodyKeyframe = (children) => ({
-  id: 1, kind: 'element', tag: 'body', attrs: {}, children,
-});
-
-function segment(over) {
-  return Object.assign({
-    index: 0, label: null, plugin: null,
-    t_start: 0, t_dom_ready: null, t_load: null, t_end: 1000,
-    initial_dom: null, initial_state: null, events: [],
-    host_data: null, extensions: null,
-  }, over);
 }
 
 // ── the span restore ───────────────────────────────────────────────────────
@@ -670,8 +547,12 @@ describe('T5.4 — the alignment check is wired to §6, not dead', () => {
     assert.equal(checks.length, 1);
     assert.equal(checks[0].type, 'key.down');
     assert.equal(checks[0].status, 'redacted');
+    // T5.6 gave the chip a fourth bucket to name, so the wording counts the
+    // redacted interactions instead of gesturing at them; the property this
+    // pins — an event-level redacted event reads as UNVERIFIED, never as
+    // verified and never as a warning — is unchanged.
     assert.equal(v.chip('data-ch-align').textContent,
-      'alignment unverified (redacted interactions)');
+      'alignment unverified (1 redacted)');
   });
 
   it('clears the alignment chip class when a segment has nothing to warn about', () => {
@@ -764,32 +645,9 @@ const canvasKeyframe = (id, w, h, attrs) => bodyKeyframe([{
   id, kind: 'element', tag: 'canvas', attrs: attrs || {}, children: [], canvas_size: { w, h },
 }]);
 
-// happy-dom hands every `new Window()` the SAME element classes — `a
-// .HTMLImageElement === b.HTMLImageElement` — so a prototype patch made to
-// drive one test leaks into every test after it, and a stubbed `decode` that
-// never resolves turns the next five into 15-second timeouts. Patches go
-// through this.
-//
-// ALWAYS `await withProto(...)`, and note that the helper AWAITS `body()`
-// rather than returning its promise. A synchronous `try { return body(); }
-// finally {…}` runs the `finally` the moment an async body returns its
-// promise — that is, at its first `await` — so the stub silently uninstalls
-// itself mid-test and everything after the first `await` runs against the real
-// prototype. That version was green here only because both call sites happened
-// to depend on the stub before their first suspension. Tasks 6–8 inherit this
-// helper, so the contract is: the patch is installed for the WHOLE body, sync
-// or async.
-async function withProto(win, ctor, name, descriptor, body) {
-  const proto = win[ctor].prototype;
-  const original = Object.getOwnPropertyDescriptor(proto, name);
-  Object.defineProperty(proto, name, Object.assign({ configurable: true }, descriptor));
-  try { return await body(); } finally {
-    if (original) Object.defineProperty(proto, name, original); else delete proto[name];
-  }
-}
-
 // The helper's own contract, pinned: a patch must survive an `await` inside the
-// body. Without this, `withProto` is a trap handed to three later tasks.
+// body. Without this, `withProto` is a trap handed to three later tasks. It
+// lives in the shared harness now (T5.6) and this is still its only pin.
 describe('T5.5 — the prototype-patch helper', () => {
   it('keeps the patch installed across an await inside the body', async () => {
     const { Window } = await import('happy-dom');
