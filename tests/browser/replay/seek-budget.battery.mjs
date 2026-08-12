@@ -31,6 +31,10 @@
 //      v1's control reports syncMs and settledFrameMs, because v1's backward
 //      seek finishes in an `onload` handler. The v1-vs-v2 comparison uses
 //      settledFrameMs on BOTH sides. The gate uses syncMs and settledMs.
+//      settledMs's freedom from the frame is ASSERTED (the FRAME FREEDOM block
+//      at the end of every engine, and `--inject=frame-in-settled` is its
+//      biting test) — the first version of this file claimed the assertion in
+//      this comment and never made it, which is T5.0's C-1 class exactly.
 //   3. NO SETTLED-TIME GATE ON WEBKIT. Headless WebKit's animation frame is
 //      ~32.4 ms, above most restores measured anywhere, so a gate over a
 //      frame-carrying number passes nearly anything there. `settledFrameMs` is
@@ -80,12 +84,22 @@
 //
 // ── COVERAGE ASSERTIONS ───────────────────────────────────────────────────
 //   A seek that quietly did nothing is fast. Every cell asserts what it
-//   applied: a non-zero mount delta on a restore, a reconstruction with real
-//   element count, alignment checks > 0 when checks are on and EXACTLY 0 when
-//   they are off, composited canvas rules and presented chars on the canvas
-//   cells, zero unresolved patches, and case (iii) walking strictly more
-//   entries than case (ii). Task 0's harness carries the same discipline and
-//   it caught a real defect there.
+//   applied, in two layers, because they catch different things:
+//     PER SAMPLE  `mountsDelta` across each timed seek (a backward seek
+//       restores exactly once, a forward seek inside the span exactly zero
+//       times) and, for the forward cells, the WALK WITNESS
+//       `ci.applied > mountOnly.applied` — `mountsDelta === 0` is satisfied by
+//       a seek that did nothing, which is the hole `--inject=dead-forward`
+//       reproduces and the T5.9 review found.
+//     AFTER THE FACT  segments replayed (10 for case (iii), 1 for case (ii)),
+//       entries applied, frame element count, alignment checks > 0 when checks
+//       are on and EXACTLY 0 when they are off, composited canvas rules and
+//       presented chars, zero unresolved patches.
+//   Plus the FRAME FREEDOM assertion (rule 3) and, after the run, the CHANNEL
+//   COVERAGE sweep, computed over the spans the gated cells actually replayed
+//   and enumerated against the client's own `KNOWN_TYPES` so a vocabulary
+//   addition cannot escape into neither list. Task 0's harness carries the same
+//   discipline and it caught a real defect there; so did this one, twice.
 //
 // Run:  npm run build && npm run test:browser:seek
 //       PLAYWRIGHT_CORE_DIR=/opt/homebrew/lib/node_modules/ \
@@ -141,6 +155,19 @@ const ANCHORED_FRAC = Number(opt('anchored-frac', 0.20));
 //                   deflates both the absolute number and the gated ratio.
 //   no-canvas       the canvas=ON arm loses its canvas.snapshot events. The
 //                   "presented a composite" assertion must fire.
+//   dead-forward    ONLY the forward (expectMount: 0) samples seek to the
+//                   playhead they are already at. This is the hole the T5.9
+//                   review found: `mountsDelta === 0` is satisfied by a seek
+//                   that did nothing, so the six cells measuring design §5's
+//                   incremental walk — the ONE path no other cell exercises —
+//                   had no witness at all, and the published mount:events split
+//                   collapsed 4.465 -> 0.075 ms unnoticed. The forward-walk
+//                   witness must fire.
+//   frame-in-settled  `settledMs`'s clock stops AFTER a requestAnimationFrame,
+//                   i.e. the metric grows the frame floor rule 3 forbids
+//                   gating. The FRAME-FREEDOM assertion must fire — and it is
+//                   what makes rule 3's "asserted, not assumed" true rather
+//                   than a comment.
 const INJECT = String(opt('inject', '') || '');
 const injected = (name) => INJECT === name;
 if (INJECT) console.log(`!! FAULT INJECTED: --inject=${INJECT} — this run is EXPECTED to fail`);
@@ -149,6 +176,27 @@ if (INJECT) console.log(`!! FAULT INJECTED: --inject=${INJECT} — this run is E
 const SCALE = injected('tight-ceilings') ? 0.01 : 1;
 const CEILING = { i: 100 * SCALE, ii: 100 * SCALE, iii: 300 * SCALE };
 const RATIO_BAND = 8.0 * SCALE;
+
+// ── M-5: the composite worst case's defining parameters are asserted ──────
+// `--span-segments`, `--events-per-segment` and `--anchored-frac` all reach the
+// generator, and the scale-dependent coverage assertions scale WITH them, so
+// they cannot notice: `--events-per-segment=1` returned 43/43 with the "worst
+// case" reduced to ten events. A committed gate has to refuse to run
+// under-parameterized, or "129/129" has no fixed meaning.
+// The floors are the design's own worst case: `keyframeEvery: 10` (design §5),
+// 100 events/segment and the 20% anchored density Task 0 chose (above
+// SMOKE-19NRQR's busiest real trial, 16.0%). Larger is allowed — the reviewer's
+// density sweep runs to 1.00 — smaller is not.
+const PARAM_FLOOR = { spanSegments: 10, eventsPerSegment: 100, anchoredFrac: 0.20 };
+if (SPAN_SEGMENTS < PARAM_FLOOR.spanSegments || EVENTS_PER_SEGMENT < PARAM_FLOOR.eventsPerSegment
+    || ANCHORED_FRAC < PARAM_FLOOR.anchoredFrac) {
+  console.error('REFUSING TO RUN: the composite worst case is under-parameterized.');
+  console.error(`  --span-segments=${SPAN_SEGMENTS} (>= ${PARAM_FLOOR.spanSegments} required — design §5's keyframeEvery)`);
+  console.error(`  --events-per-segment=${EVENTS_PER_SEGMENT} (>= ${PARAM_FLOOR.eventsPerSegment} required)`);
+  console.error(`  --anchored-frac=${ANCHORED_FRAC} (>= ${PARAM_FLOOR.anchoredFrac} required — Task 0's density, above the busiest real trial)`);
+  console.error('  A pass under smaller parameters is not the gate this file is named for.');
+  process.exit(1);
+}
 
 function resolvePlaywright() {
   const candidates = [
@@ -237,6 +285,7 @@ function harnessHtml(model) {
   <script>${safeViewer}<\/script>
   <script>
     window.__model = ${modelJson};
+    window.__FRAME_IN_SETTLED = ${INJECT === 'frame-in-settled' ? 'true' : 'false'};
     initChReplayViewer(document.getElementById('mount'), window.__model);
     window.__dbg = function () { return document.getElementById('mount')._chReplayDebug; };
 
@@ -259,13 +308,21 @@ function harnessHtml(model) {
       d.seek(t);
       var syncMs = performance.now() - t0;
       return d.canvasSettled().then(function () {
-        var settledMs = performance.now() - t0;
-        var mountsDelta = d.getStats().mounts - m0;
-        return new Promise(function (res) {
-          requestAnimationFrame(function () {
-            res({
-              syncMs: syncMs, settledMs: settledMs, settledFrameMs: performance.now() - t0,
-              mountsDelta: mountsDelta
+        // --inject=frame-in-settled puts an animation frame INSIDE settledMs,
+        // which is precisely the metric rule 3 forbids gating. Nothing else in
+        // this function changes.
+        var pre = window.__FRAME_IN_SETTLED
+          ? new Promise(function (r) { requestAnimationFrame(r); })
+          : Promise.resolve();
+        return pre.then(function () {
+          var settledMs = performance.now() - t0;
+          var mountsDelta = d.getStats().mounts - m0;
+          return new Promise(function (res) {
+            requestAnimationFrame(function () {
+              res({
+                syncMs: syncMs, settledMs: settledMs, settledFrameMs: performance.now() - t0,
+                mountsDelta: mountsDelta
+              });
             });
           });
         });
@@ -456,8 +513,11 @@ async function measure({ page, prep, sample, v1page, v1acc, expectMount, label }
   for (let r = 0; r <= RUNS; r++) {
     if (v1page) await v1Sample(v1page, v1acc);
     if (prep) await prep();
-    // --inject=dead-seek: measure a seek to where the playhead already is.
-    const m = injected('dead-seek')
+    // --inject=dead-seek: every measured sample seeks to where the playhead
+    // already is. --inject=dead-forward: only the FORWARD ones do, which is the
+    // narrower hole (`mountsDelta === 0` cannot tell a walk from a no-op).
+    const dead = injected('dead-seek') || (injected('dead-forward') && expectMount === 0);
+    const m = dead
       ? await page.evaluate(() => window.__seekTimed(window.__dbg().getPlayhead()))
       : await sample();
     if (r) { sync.push(m.syncMs); settled.push(m.settledMs); settledFrame.push(m.settledFrameMs); mounts.push(m.mountsDelta); }
@@ -542,6 +602,23 @@ const out = {
   engines: {},
 };
 const gateRows = [];
+
+/**
+ * THE SEGMENTS A GATED CELL ACTUALLY REPLAYS (T5.9 review I-3).
+ * The first version unioned event types over WHOLE recordings and then called
+ * the union "inside a gated number". Every `jspsych-full` segment is its own
+ * keyframe and only segments 9 and 8 are gated, so three channels were credited
+ * to cells that never touch them. Cells register their real span here instead,
+ * so the accounting cannot drift from what the gate runs.
+ */
+const gatedSpans = [];
+const gatedSpanKeys = new Set();
+function recordGatedSpan(fixture, model, from, to) {
+  const key = `${fixture}:${from}-${to}`;
+  if (gatedSpanKeys.has(key)) return;
+  gatedSpanKeys.add(key);
+  gatedSpans.push({ fixture, model, from, to });
+}
 
 function gate({ cell, caseName, metric, value, limit, unit = 'ms' }) {
   const pass = Number.isFinite(value) && value <= limit;
@@ -677,6 +754,16 @@ async function runEngine(name, browser, origin) {
       check(ciii.probe.applied > cii.probe.applied, `[${tag}] case iii applies strictly more entries than case ii (${ciii.probe.applied} > ${cii.probe.applied})`);
       check(mountOnly.probe.applied === 0 || mountOnly.probe.applied < cii.probe.applied,
         `[${tag}] the mount-only cell applied ${mountOnly.probe.applied} entries — it measures the mount, not the walk`);
+      // THE FORWARD-WALK WITNESS (T5.9 review I-1). `mountsDelta === 0` says a
+      // forward seek did not restore; it cannot say it did anything. Case (i) is
+      // the ONLY cell in this battery that exercises design §5's incremental
+      // walk — every other gated cell restores — so without this the one path
+      // the gate uniquely covers is the one path it cannot see, and
+      // `--inject=dead-forward` collapses it to 0.03 ms in silence. The
+      // comparand is the mount-only cell, which sits at the same playhead
+      // case (i) STARTS from, so the difference is exactly the walk.
+      check(ci.probe.applied > mountOnly.probe.applied,
+        `[${tag}] case i actually walked forward: ${ci.probe.applied} entries applied at its target vs ${mountOnly.probe.applied} at its start`);
       check(ciii.probe.counters.patchFailures === 0, `[${tag}] case iii left 0 unresolved patches (${ciii.probe.counters.patchFailures})`);
       if (checksOn) {
         check(ciii.probe.checks > 0, `[${tag}] alignment checks ran (${ciii.probe.checks}) — the cost driver §11 names is inside this number`);
@@ -693,6 +780,8 @@ async function runEngine(name, browser, origin) {
       gate({ cell: tag, caseName: 'iii', metric: 'sync', value: ciii.sync.median, limit: CEILING.iii });
       gate({ cell: tag, caseName: 'iii', metric: 'settled', value: ciii.settled.median, limit: CEILING.iii });
 
+      recordGatedSpan('alignment-v2-frozen', model, kf, kf);      // cases (i), (ii), mount-only
+      recordGatedSpan('alignment-v2-frozen', model, kf, deep);    // case (iii): the whole span
       res.ratios[`REAL ${tag} sync`] = ciii.sync.median / cii.sync.median;
       res.ratios[`REAL ${tag} settled`] = ciii.settled.median / cii.settled.median;
 
@@ -719,6 +808,8 @@ async function runEngine(name, browser, origin) {
           prep: () => page.evaluate((t) => window.__seek(t), model.segments[deep2].durMs),
           sample: () => page.evaluate((t) => window.__seekTimed(t), lastT(model, deep2)),
         });
+        recordGatedSpan('alignment-v2-frozen', model, kf2, kf2);
+        recordGatedSpan('alignment-v2-frozen', model, kf2, deep2);
         res.cells['real span2 case ii'] = s2ii;
         res.cells['real span2 case iii'] = s2deep;
         console.log(`    span 2 (keyframe ${kf2} carries initial_state; deepest continuation ${deep2})`);
@@ -750,10 +841,28 @@ async function runEngine(name, browser, origin) {
     // a canvas-free restore while calling itself canvas-heavy. These targets
     // are the LAST playhead at which the canvas is still live, i.e. the most
     // composite work the fixture can be asked for.
+    // The seg-9 cell also carries §5 step 2 for real, and the two session
+    // `stylesheet_events` reach it by DIFFERENT routes (T5.9 review M-7):
+    // `stylesheet.add` at t = 3592.0999 precedes segment 9's origin (3592.1999)
+    // so `deriveSheets` replays it on every restore, while `stylesheet.remove`
+    // at 5097.0999 falls inside the walked window (tRel 1504.9 <= the 1505.0
+    // target) and arrives through the walk. Both are inside the gated number;
+    // they are not the same mechanism.
     const CANVAS_CELLS = [
       { seg: 9, target: 1505.0, why: 'nine real region snapshots, all composited; node 8 is removed at 1505.1' },
       { seg: 8, target: 263.3, why: 'the 189,322-char full baseline; the canvas parent is removed at 263.4' },
     ];
+    // M-8: the REAL and WORST blocks declare `durMs > lastT`; these cells
+    // deliberately CANNOT, and the asymmetry is the point. `jspsych-full`
+    // segment 9 has `durMs === lastT === 1506`, so its last event is
+    // unreachable by any backward seek — which is why `--inject=no-canvas`,
+    // aiming there, produces a mount-witness failure as well as the two
+    // presentation ones. The targets below are hard-coded at the last LIVE
+    // playhead instead, and the presented-chars assertion is what guards them
+    // against a fixture refresh.
+    check(model.segments[9].durMs === lastT(model, 9),
+      `jspsych-full segment 9 ends ON its last event (durMs ${model.segments[9].durMs} === lastT ${lastT(model, 9)}) — ` +
+      'the canvas cells use hard-coded live playheads for this reason, not the lastT rule the other blocks use');
     for (const cell0 of CANVAS_CELLS) {
       const segIdx = cell0.seg;
       const why = cell0.why;
@@ -772,6 +881,7 @@ async function runEngine(name, browser, origin) {
         prep: () => page.evaluate((t) => window.__seek(t), dur),
         sample: () => page.evaluate((t) => window.__seekTimed(t), backTo),
       });
+      recordGatedSpan('jspsych-full', model, segIdx, segIdx);
       res.cells[`canvas seg${segIdx}`] = cell;
       console.log(`  [jspsych-full segment ${segIdx}] backward ${fixed(dur, 1)} -> ${fixed(backTo, 1)} ms — ${why}`);
       console.log(`      sync          ${show(cell.sync)} ms`);
@@ -830,6 +940,8 @@ async function runEngine(name, browser, origin) {
           sample: () => page.evaluate((t) => window.__seekTimed(t), deepLast),
         });
 
+        recordGatedSpan('synthetic deep span', model, kf, kf);
+        recordGatedSpan('synthetic deep span', model, kf, deep);
         res.cells[`${tag} case i`] = ci;
         res.cells[`${tag} case ii`] = cii;
         res.cells[`${tag} case iii`] = ciii;
@@ -854,6 +966,9 @@ async function runEngine(name, browser, origin) {
           `[${tag}] case iii replayed ${ciii.probe.segmentsApplied} segments and case ii replayed ${cii.probe.segmentsApplied}`);
         check(ciii.probe.applied > cii.probe.applied * 5,
           `[${tag}] case iii applies ~10x case ii's entries (${ciii.probe.applied} vs ${cii.probe.applied})`);
+        // The forward-walk witness (T5.9 review I-1) — see the REAL block.
+        check(ci.probe.applied > mountOnly.probe.applied,
+          `[${tag}] case i actually walked forward: ${ci.probe.applied} entries applied at its target vs ${mountOnly.probe.applied} at its start`);
         check(ciii.probe.counters.patchFailures === 0,
           `[${tag}] case iii left 0 unresolved patches (${ciii.probe.counters.patchFailures}) — a patch that resolves nothing costs nothing and deflates the deep case`);
         if (checksOn) check(ciii.probe.checks >= SPAN_SEGMENTS * EVENTS_PER_SEGMENT * ANCHORED_FRAC * 0.8,
@@ -880,6 +995,44 @@ async function runEngine(name, browser, origin) {
         await page.close();
       }
     }
+  }
+
+  // ── FRAME FREEDOM — rule 3's "asserted, not assumed", made a check ──────
+  // The load-bearing claim behind gating `settledMs` on WebKit is that the
+  // metric does NOT contain an animation frame. The discriminator is the
+  // canvas-free cells: for them `settledMs` is `syncMs` plus one microtask
+  // (canvasSettled() resolves immediately with nothing to decode), so the
+  // difference is ~0.01 ms. If the clock stopped after a requestAnimationFrame
+  // instead, that difference would be a uniform draw from [0, one frame] and
+  // its median would sit near half a frame — 4 ms on chromium, 16 on WebKit.
+  // Two orders of magnitude apart, so the bound can be crude and still bite.
+  console.log('\n▶ FRAME FREEDOM — settledMs carries no animation frame (rule 3, asserted)');
+  {
+    const frame = res.floor.rafFrame.median;
+    const bound = Math.min(1.0, frame * 0.25);
+    const canvasFree = Object.entries(res.cells)
+      .filter(([k]) => !/canvas=on/.test(k) && !/^canvas seg/.test(k))
+      .map(([k, c]) => ({ k, d: c.settled.median - c.sync.median }))
+      .sort((a, b) => b.d - a.d);
+    const worst = canvasFree[0];
+    res.frameFreedom = { frameFloor: frame, bound, worstCell: worst.k, worstDelta: worst.d, n: canvasFree.length };
+    note(`worst canvas-free (settled − sync) over ${canvasFree.length} cells: ${fixed(worst.d)} ms on "${worst.k}" ` +
+         `— bound ${fixed(bound)} ms, one frame ${fixed(frame)} ms`);
+    const free = worst.d < bound;
+    check(free,
+      `settledMs contains NO animation frame (worst canvas-free settled−sync ${fixed(worst.d)} ms < ${fixed(bound)} ms; ` +
+      `a frame-carrying metric would sit near ${fixed(frame / 2)} ms) — this is what licenses gating settledMs on ${name}`);
+
+    // The consequence rule 3 actually cares about: a gated settled median BELOW
+    // this engine's frame floor is only meaningful because the metric excludes
+    // the frame. Mark those cells, and if the assertion above ever fails,
+    // downgrade every settled gate on this engine to REPORTED-ONLY so the table
+    // cannot keep calling a frame clock a gate.
+    const settledRows = gateRows.filter((r) => r.engine === name && r.metric === 'settled');
+    const sub = settledRows.filter((r) => r.value < frame);
+    settledRows.forEach((r) => { r.subFrame = r.value < frame; if (!free) r.reportedOnly = true; });
+    note(`${sub.length}/${settledRows.length} gated settled cells sit below ${name}'s ${fixed(frame)} ms frame` +
+         (free ? ' — sound, because the metric excludes it' : ' — REPORTED-ONLY: the metric does NOT exclude it'));
   }
 
   // ── THE RATIO, RE-DERIVED (rule 1) ──────────────────────────────────────
@@ -947,6 +1100,8 @@ async function runEngine(name, browser, origin) {
     }
     const incrementalStat = stat(incremental);
 
+    recordGatedSpan(tag.startsWith('REAL') ? 'alignment-v2-frozen' : 'synthetic deep span',
+      model, 0, SPAN_SEGMENTS - 1);
     res.onSquared[tag] = {
       forwardInSpanMountsDelta: forwardInSpan.mountsDelta,
       perSegmentSync: bySeg, totalSync: totals, incrementalModelSync: incrementalStat,
@@ -986,18 +1141,25 @@ async function runEngine(name, browser, origin) {
 
     const v1back = res.v1.backward.settledFrame.median;
     const comparisons = [
-      ['REAL case ii  (shallow)', res.cells['real-checks-on case ii'].settledFrame.median],
-      ['REAL case iii (deep)', res.cells['real-checks-on case iii'].settledFrame.median],
-      ['WORST case ii  (shallow, canvas+checks)', res.cells['worst canvas=on checks=on case ii'].settledFrame.median],
-      ['WORST case iii (composite worst case)', res.cells['worst canvas=on checks=on case iii'].settledFrame.median],
+      ['REAL case ii  (shallow)', res.cells['real-checks-on case ii'].settledFrame],
+      ['REAL case iii (deep)', res.cells['real-checks-on case iii'].settledFrame],
+      ['WORST case ii  (shallow, canvas+checks)', res.cells['worst canvas=on checks=on case ii'].settledFrame],
+      ['WORST case iii (composite worst case)', res.cells['worst canvas=on checks=on case iii'].settledFrame],
     ];
-    res.v1Comparison = { v1BackwardSettledFrame: v1back, rows: {} };
+    res.v1Comparison = { v1BackwardSettledFrame: v1back, frameFloor: res.floor.rafFrame.median, rows: {} };
     console.log(`    v1 backward settledFrame = ${fixed(v1back)} ms; v2 numbers below carry the SAME animation frame`);
-    for (const [label, v] of comparisons) {
-      const ratio = v / v1back;
-      res.v1Comparison.rows[label] = { v2: v, ratio };
-      console.log(`      ${label.padEnd(42)} ${fixed(v)} ms  = ${fixed(ratio, 2)}x v1  (${ratio < 1 ? 'BELOW' : 'ABOVE'})`);
+    // M-3: `settledFrameMs` = settled + time-to-next-frame, and that addend is a
+    // SESSION-LEVEL constant somewhere in [0, one frame] — tight within a run,
+    // arbitrary between them. On a 32.7 ms frame that is most of the number, so
+    // the min is printed beside the median and the rows are read as bounded, not
+    // as two significant figures.
+    for (const [label, st] of comparisons) {
+      const ratio = st.median / v1back;
+      res.v1Comparison.rows[label] = { v2: st.median, v2Min: st.min, ratio, ratioMin: st.min / v1back };
+      console.log(`      ${label.padEnd(42)} ${fixed(st.median)} ms (min ${fixed(st.min)})  = ${fixed(ratio, 2)}x v1  (${ratio < 1 ? 'BELOW' : 'ABOVE'})`);
     }
+    note(`the v2 rows carry a rAF-phase addend in [0, ${fixed(res.floor.rafFrame.median)} ms], constant within this session — ` +
+         'read them as bounded, not as two significant figures (this is most of the number on WebKit)');
   }
   assertClean(v1page.__watch);
   await v1page.close();
@@ -1018,56 +1180,93 @@ if (!existsSync(FROZEN_FIXTURE)) { console.error('missing frozen fixture ' + FRO
     `over jspsych-full segment 11 (${countNodes(jspsychFull.segments[11].initial_dom)} nodes) + real canvas payloads`);
 }
 
-// ── CHANNEL COVERAGE (Task-0 rule 5, made checkable) ──────────────────────
-// Task 0's model named ten channels it did not carry and said every omission
-// biased it LOW. "The real viewer carries them" is only worth something if the
-// GATED FIXTURES actually contain them, so the union is computed here and the
-// channels no fixture reaches are NAMED rather than left as a silent absence.
-{
-  const gatedFixtures = [
-    ['alignment-v2-frozen (REAL)', frozenRec],
-    ['jspsych-full (CANVAS)', jspsychFull],
-    ['synthetic deep span (WORST)', worstCaseRecording(true).recording],
-  ];
-  const seen = new Set();
-  let seededSegments = 0, sheetEvents = 0;
-  console.log('\nchannel coverage of the gated fixtures:');
-  for (const [label, rec] of gatedFixtures) {
-    const t = {};
-    let seeds = 0;
-    (rec.segments || []).forEach((sg) => {
-      if (sg.initial_state) seeds++;
-      (sg.events || []).forEach((e) => { t[e.type] = (t[e.type] || 0) + 1; seen.add(e.type); });
-    });
-    seededSegments += seeds;
-    sheetEvents += (rec.stylesheet_events || []).length;
-    console.log(`  ${label}: ${Object.keys(t).sort().map((k) => k + ':' + t[k]).join(' ')}`);
-    console.log(`    stylesheet_events ${(rec.stylesheet_events || []).length}, initial_state segments ${seeds}, ` +
-      `stylesheets ${(rec.stylesheets || []).length}`);
+// ── CHANNEL COVERAGE — computed AFTER the run, from the spans the gated cells
+// actually replayed. See `recordGatedSpan`. (T5.9 review I-3/I-4.)
+function reportChannelCoverage() {
+  // The vocabulary is DERIVED from the shipped client, never hand-copied: the
+  // first version anchored the sweep to Task 0's 20-entry omission list, so
+  // `touch.start`/`touch.move`/`touch.end` fell out of BOTH the covered list
+  // and the named-gap list — and `touch.start`/`touch.end` sit in capture's
+  // `withAlignment` set, i.e. they fire the §8 check, which is this gate's own
+  // headline cost driver. A vocabulary addition can no longer escape the
+  // accounting; it lands in one list or the other by construction.
+  const clientSrc = readFileSync(join(repoRoot, 'src', 'cli', 'renderers', 'replay-viewer.client.js'), 'utf8');
+  const m = clientSrc.match(/var KNOWN_TYPES = \{\};\s*\(([\s\S]*?)\)\.split\(' '\)/);
+  if (!m) {
+    failures++;
+    console.error('  ✖ could not extract KNOWN_TYPES from the client — the coverage sweep is anchored to it by design');
+    return;
   }
-  // The channels Task 0 listed as unmodelled, and whether a gated number
-  // contains them now.
-  const T0_UNMODELLED = [
-    'input.value', 'input.checked', 'input.select',
-    'scroll.window', 'scroll.element',
+  const known = m[1].replace(/'|\+|\s+/g, ' ').split(' ').map((t) => t.trim()).filter(Boolean);
+
+  console.log('\n════════ CHANNEL COVERAGE (rule 5, per GATED CELL) ════════');
+  const covered = new Set();
+  let seededSpans = 0, derivedSheetEvents = 0, walkedSheetEvents = 0;
+  for (const sp of gatedSpans) {
+    const kf = sp.model.segments[sp.from];
+    if (kf && kf.initialState) seededSpans++;
+    for (let i = sp.from; i <= sp.to; i++) {
+      for (const e of sp.model.segments[i].events) covered.add(e.type);
+    }
+    // §5 step 2: session `stylesheet_events` up to the SPAN KEYFRAME's origin
+    // are replayed by `deriveSheets` on every restore; ones inside the walked
+    // window arrive through the walk instead. Both are inside the cell; they
+    // are not the same mechanism, and the first version's prose conflated them.
+    const sheets = sp.model.stylesheetEvents || [];
+    const endOrigin = sp.model.segments[sp.to].origin + sp.model.segments[sp.to].durMs;
+    for (const ev of sheets) {
+      if (ev.t <= kf.origin) derivedSheetEvents++;
+      else if (ev.t <= endOrigin) walkedSheetEvents++;
+    }
+  }
+  console.log(`  ${gatedSpans.length} distinct gated spans:`);
+  for (const sp of gatedSpans) {
+    console.log(`    ${sp.fixture} segments ${sp.from}..${sp.to}` +
+      (sp.model.segments[sp.from].initialState ? '  [keyframe carries initial_state]' : ''));
+  }
+  const gaps = known.filter((t) => !covered.has(t));
+  const inside = known.filter((t) => covered.has(t));
+  console.log(`  INSIDE a gated number (${inside.length}/${known.length} of the client's own vocabulary):`);
+  console.log(`    ${inside.sort().join(' ')}`);
+  console.log(`  …plus initial_state seeding (${seededSpans} gated span(s) whose keyframe carries one) and ` +
+    `stylesheet_events (${derivedSheetEvents} replayed by deriveSheets to the keyframe origin, ` +
+    `${walkedSheetEvents} arriving through the walk).`);
+  console.log(`  NOT reachable by any gated cell — ${gaps.length}, NAMED rather than implied:`);
+  console.log(`    ${gaps.sort().join(' ')}`);
+  console.log('  §12 instantiation filters run on every mount by construction (the real mountTree).');
+
+  // Cross-reference against Task 0's own list of omissions, because rule 5 is
+  // phrased against it. This list is a HISTORICAL reference only — the sweep
+  // above is derived from the client — and it is printed so the two counts
+  // cannot be confused: 21 of the client's 35 types are ungated, while of Task
+  // 0's 20 named omissions only three are inside a gated cell.
+  const T0_OMISSIONS = [
+    'input.value', 'input.checked', 'input.select', 'scroll.window', 'scroll.element',
     'clipboard.copy', 'clipboard.cut', 'clipboard.paste', 'clipboard.drop',
     'media.play', 'media.pause', 'media.ended', 'media.seeked', 'media.time',
     'focus', 'blur', 'visibility.hidden', 'visibility.visible',
     'fullscreen.enter', 'fullscreen.exit',
   ];
-  const covered = T0_UNMODELLED.filter((t) => seen.has(t));
-  const missing = T0_UNMODELLED.filter((t) => !seen.has(t));
-  console.log(`  Task-0-unmodelled channels now INSIDE a gated number: ${covered.join(' ') || '(none)'}`);
-  console.log(`  …plus initial_state seeding (${seededSegments} seeded segment(s)) and ` +
-    `stylesheet_events replay (${sheetEvents} event(s)), both named omissions of the model.`);
-  console.log(`  NOT reachable in any gated fixture, stated rather than implied: ${missing.join(' ') || '(none)'}`);
-  console.log('  §12 instantiation filters run on every mount by construction (the real mountTree).');
-  if (!(covered.length >= 6 && seededSegments >= 1 && sheetEvents >= 1)) {
-    failures++;
-    console.error('  ✖ the gated fixtures do not exercise the model\'s named omissions — rule 5 is not satisfied');
-  } else {
-    console.log(`  ✔ rule 5: ${covered.length}/${T0_UNMODELLED.length} named channels + seeding + sheet replay are inside gated numbers`);
-  }
+  const t0In = T0_OMISSIONS.filter((t) => covered.has(t));
+  console.log(`  cross-reference — of Task 0's ${T0_OMISSIONS.length} named omissions, ${t0In.length} are inside a gated cell ` +
+    `(${t0In.join(' ')}); the rest are in the gap list above, together with touch.* which was in NEITHER list before this fix round.`);
+  check(T0_OMISSIONS.every((t) => known.includes(t)),
+    `Task 0's omission list is a subset of the client's vocabulary — the cross-reference cannot drift into naming a type the viewer does not have`);
+
+  // Mechanical completeness: every type the viewer knows is in exactly one list.
+  const accounted = new Set([...inside, ...gaps]);
+  check(accounted.size === known.length && known.every((t) => accounted.has(t)),
+    `every one of the client's ${known.length} known types lands in exactly one list — the enumeration is derived, not copied`);
+  check(seededSpans >= 1, `initial_state seeding is inside a gated number (${seededSpans} gated span(s))`);
+  check(derivedSheetEvents + walkedSheetEvents >= 1,
+    `stylesheet_events replay is inside a gated number (${derivedSheetEvents} derived + ${walkedSheetEvents} walked)`);
+  check(inside.length >= 12,
+    `${inside.length} of the client's ${known.length} event types are inside a gated number`);
+  out.channelCoverage = {
+    knownTypes: known.length, inside: inside.sort(), gaps: gaps.sort(),
+    seededSpans, derivedSheetEvents, walkedSheetEvents,
+    spans: gatedSpans.map((sp) => ({ fixture: sp.fixture, from: sp.from, to: sp.to })),
+  };
 }
 
 const server = await serveFiles(new Map(), { isolate: ISOLATE });
@@ -1087,12 +1286,16 @@ for (const name of ENGINES) {
 }
 await server.close();
 
-// ── the gate table ─────────────────────────────────────────────────────────
 engineTag = '';
+reportChannelCoverage();
+
+// ── the gate table ─────────────────────────────────────────────────────────
 console.log('\n════════════ GATE VERDICTS ════════════');
 const failing = gateRows.filter((r) => !r.pass);
 for (const r of gateRows) {
-  console.log(`  ${r.pass ? 'PASS' : 'FAIL'}  ${r.engine.padEnd(9)} ${r.cell.padEnd(34)} case ${String(r.case).padEnd(14)} ${r.metric.padEnd(8)} ${fixed(r.value)}${r.unit} / ${r.limit}${r.unit}`);
+  const mark = r.reportedOnly ? '  [REPORTED-ONLY: settledMs carries a frame on this engine]'
+    : (r.subFrame ? '  [sub-frame]' : '');
+  console.log(`  ${r.reportedOnly ? 'RPT!' : (r.pass ? 'PASS' : 'FAIL')}  ${r.engine.padEnd(9)} ${r.cell.padEnd(34)} case ${String(r.case).padEnd(14)} ${r.metric.padEnd(8)} ${fixed(r.value)}${r.unit} / ${r.limit}${r.unit}${mark}`);
 }
 console.log(`  ${gateRows.length - failing.length}/${gateRows.length} gates pass`);
 out.gates = gateRows;
