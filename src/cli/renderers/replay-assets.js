@@ -29,24 +29,43 @@ export { buildViewerModel };
  * print an honest size line (replay assets dominate report size at dom tier)
  * and an honest line about what did not make it.
  *
- * `skipped` is [{participantId, file, reason}] — one entry per artifact the
- * §11 tolerant profile rejected. buildViewerModel THROWS on that set (it is
- * v2-only; a CH-v1 artifact is the common case), and the alternative to
- * catching here is that one unloadable file in a cohort aborts the whole
- * report — which is precisely the data-loss trade §11 exists to refuse.
- * v1 degraded and rendered the rest; v2 skips the participant and says so.
+ * `skipped` is [{participantId, file, reason}] — one entry per artifact that
+ * exists, reads fine, and still never reaches the viewer. Two things produce
+ * one, and they are the same event seen at different layers:
+ *
+ *   - the §11 tolerant profile rejecting a recording here. buildViewerModel
+ *     THROWS on that set (it is v2-only; a CH-v1 artifact is the common case),
+ *     and the alternative to catching is that one unloadable file in a cohort
+ *     aborts the whole report — precisely the data-loss trade §11 exists to
+ *     refuse. v1 degraded and rendered the rest; v2 skips the participant and
+ *     says so.
+ *   - a refusal already stamped by INGEST (A3): a jsPsych v1 recording the
+ *     converter would not migrate, which never gets as far as a model. Task
+ *     10(b) settled that a replay which does not make it is visible on three
+ *     surfaces, and the CLI line report.js prints from this list is one of
+ *     them, so both origins have to be accounted for here or the console is a
+ *     partial account.
+ *
+ * A corrupted file (ingest's `parse_failed`) deliberately stays out: it keeps
+ * its own report lead text and its own ingest warning.
+ *
  * The say-so is a stamp on `p.replay`, read by renderReplaySection's error
  * branch — the report's existing state for "attached but not viewable".
- *
- * NOT idempotent w.r.t. `skipped` (T5 Task 10 review M-5): the stamp clears
- * `p.replay.recording`, so a second call over the same participants array
- * sees nothing to skip and returns an empty list. One caller today
- * (`report.js:149`), which then renders the index from the same array.
+ * Repeated calls now return the same list (both classes are recognised from
+ * the stamp), which retires the non-idempotence noted at T5 Task 10 review
+ * M-5. One caller today (`report.js:149`), which renders the index from the
+ * same array.
  */
 export function renderReplayAssets(participants, outputDir) {
   let count = 0;
   let totalBytes = 0;
   const skipped = [];
+  for (const p of participants) {
+    if (p.replay && !p.replay.recording && p.replay.error === 'unloadable') {
+      skipped.push({ participantId: p.participantId, file: p.replay.file || null,
+        reason: p.replay.reason || p.replay.error });
+    }
+  }
   const withReplay = participants.filter((p) => p.replay && p.replay.recording);
   if (withReplay.length === 0) return { count, totalBytes, skipped };
 

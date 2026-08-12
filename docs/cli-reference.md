@@ -49,6 +49,24 @@ Refuses to overwrite an existing `cyborg-hunter.config.json`.
 embedded `participant_id`; corrupt artifacts are reported, never fatal;
 `report` prints the total size of emitted `replay/` assets.
 
+Recordings from other producers are accepted too, since SessionRecording v2 is
+not a Cyborg Hunter format:
+
+- **Any filename.** A file that is structurally a v2 recording is recognised by
+  its contents, whatever it is called (`session.json`, a dated download). Those
+  attach **only** by the `participant_id` inside them — there is no filename to
+  verify against, so one naming no participant in the dataset is reported and
+  left unattached rather than guessed at.
+- **jsPsych v1 recordings convert on the way in.** The player is v2-only, so a
+  `schema_version: 1` jsPsych recording is converted in memory by
+  `tools/convert/jspsych-v1-to-v2.mjs` before it reaches the report. The file on
+  disk is never modified, and the notice names the tool version and the source
+  hash that reproduce the conversion. A recording the converter refuses (it
+  never fills in a missing field or renumbers a trial) is reported with the
+  refusal's own remedy, and the rest of the cohort still renders. jsPsych v1
+  records no `participant_id`, so these must use the `<pid>-replay-<epoch>.json`
+  name to attach.
+
 ## Output structure
 
 ```

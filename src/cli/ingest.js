@@ -17,37 +17,96 @@ import Papa from 'papaparse';
 import { sanitizeId } from '../shared/constants.js';
 import { getByPath } from '../shared/paths.js';
 import { extractIntegrityData, ruleChronologicalCompare } from './extract-core.js';
+// Spec §14 makes conversion the migration path for jsPsych-v1 recordings
+// (players are v2-only, there is no dual-read), so the converter is a runtime
+// dependency of the CLI rather than a developer tool. package.json's `files`
+// list ships this one path for that reason, pinned by a test in
+// tests/cli/replay-ingest.test.js. `convertRecording` is pure and imports
+// nothing outside node: builtins; the tool's own CLI half (which reaches into
+// tests/ for the strict validator) is never loaded by importing it.
+import { convertRecording } from '../../tools/convert/jspsych-v1-to-v2.mjs';
 
 // Replay artifacts saved by the replay extension:
 //   <sanitizedPid>-replay-<sessionStartEpochMs>.json[.gz]
 // They sit in dataDir (or replayDir) next to the participant files and must
-// never enter the participant-file pass.
+// never enter the participant-file pass. Files from OTHER producers carry
+// whatever name their tool chose and are found by content instead (A3, see
+// the foreign-artifact pass in attachReplayArtifacts).
 const REPLAY_FILE_RE = /-replay-\d+\.json(\.gz)?$/i;
 
-// Content sniff: replay artifacts are identified by structure, not just
-// filename. Three shapes qualify:
-//   - SessionRecording v2 (spec r2, ANY producer): schema_version 2 with a
-//     `recorder` identity and a `segments` array. Same three keys the §11
-//     tolerant loader identifies a recording by (viewer-model.js), so the
-//     sniff and the loader cannot disagree about what a recording is.
-//   - the v1 era: our own `metadata.recorder` stamp, or
-//   - a #3661-shaped `trials` array from jsPsych's in-development recorder.
-// (T5 Task 10) The v2 arm is new, and without it a fresh capture matched
-// nothing here: it was routed into the participant pass as a misnamed export
-// and never reached the report. Attaching a v2 file is all this does — the
-// rest of the v2 ingest work (ownership from the top-level participant_id,
-// session pick from recording_started_at, jsPsych-v1 by conversion) is A3's.
-function looksLikeReplayArtifact(text) {
+// A recording is JSON on the wire (spec §2); `.gz` is CH's own transport
+// compression. Everything else in a data directory (CSV above all) is skipped
+// before it is ever read as a recording candidate.
+const ARTIFACT_EXT_RE = /\.json(\.gz)?$/i;
+
+// Content sniff: which producer's vocabulary an artifact speaks, or null when
+// the object is not a session recording at all. Three shapes qualify:
+//   - 'v2'         SessionRecording v2 (spec r2, ANY producer): schema_version
+//                  2 with a `recorder` identity and a `segments` array. Same
+//                  three keys the §11 tolerant loader identifies a recording
+//                  by (viewer-model.js), so the sniff and the loader cannot
+//                  disagree about what a recording is.
+//   - 'ch'         the CH v1 era: our own `metadata.recorder` stamp.
+//   - 'jspsych-v1' a #3661-shaped `trials` array from jsPsych's recorder.
+//
+// THE ARM ORDER IS LOAD-BEARING. A CH v1 recording also carries a `trials`
+// array whose entries have `events` and `initial_dom`, so it matches the
+// jsPsych arm too. Reading the CH stamp first is what keeps CH v1 out of the
+// jsPsych converter, which would refuse it — spec §14 gives CH v1 a different
+// migration path, and A6's decision makes that path "regenerate the demo
+// assets", not "convert" (stray old files stay playable at the 0.7.x tag).
+function artifactKind(j) {
+  if (!j || typeof j !== 'object' || !('schema_version' in j)) return null;
+  if (j.schema_version === 2 && !!j.recorder && typeof j.recorder.name === 'string' &&
+      Array.isArray(j.segments)) return 'v2';
+  if (String(j.metadata?.recorder || '').startsWith('cyborg-hunter-replay')) return 'ch';
+  if (Array.isArray(j.trials) && j.trials.length > 0 &&
+      j.trials.every(t => t && 'events' in t && 'initial_dom' in t)) return 'jspsych-v1';
+  return null;
+}
+
+// Reads one file as a recording candidate: { json } or { error }.
+// Gzip is decompressed HERE, not only at attach time: reading the compressed
+// bytes as utf8 and JSON.parsing them made every readable `.json.gz` artifact
+// announce itself as a truncated upload (T5 Task 10 review M-4).
+function readArtifactJson(path) {
+  let text;
   try {
-    const j = JSON.parse(text);
-    return j && typeof j === 'object' && 'schema_version' in j &&
-      ((j.schema_version === 2 && !!j.recorder && typeof j.recorder.name === 'string' &&
-          Array.isArray(j.segments)) ||
-        String(j.metadata?.recorder || '').startsWith('cyborg-hunter-replay') ||
-        (Array.isArray(j.trials) && j.trials.length > 0 &&
-          j.trials.every(t => t && 'events' in t && 'initial_dom' in t)));
+    const buf = readFileSync(path);
+    text = /\.gz$/i.test(path) ? gunzipSync(buf).toString('utf8') : buf.toString('utf8');
   } catch (e) {
-    return true;   // unparseable + replay-named → let the replay pass report it
+    return { error: e.message };
+  }
+  try {
+    return { json: JSON.parse(text) };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+// jsPsych-v1 recordings ingest BY CONVERSION (spec §14; the players are
+// v2-only and there is no dual-read, so this tool is the only door — and
+// ingest is where an analyst walks through it without needing to know it
+// exists). Everything else passes through untouched.
+//
+// IN MEMORY, NEVER TO DISK. Ingest reads the analyst's data directory and
+// writes nothing into it; a converted sibling would also be picked up by the
+// NEXT run as a second artifact for the same participant, and it would rewrite
+// fixtures other tasks own (the committed demo trio is v1 and A6 regenerates
+// it). Provenance survives anyway: the converter stamps
+// `extensions["cyborg-hunter"].converter` with its version and the canonical
+// `source_sha256` of the input, and the source file stays byte-identical on
+// disk, so file + hash + tool version reproduce the conversion exactly.
+//
+// Returns { recording, converted? } or { refusal }. The converter refuses
+// rather than defaulting a missing field or renumbering a trial, and those
+// refusals ARE its contract, so its message travels intact to the analyst.
+function migrateArtifact(json, kind) {
+  if (kind !== 'jspsych-v1') return { recording: json };
+  try {
+    return { recording: convertRecording(json), converted: true };
+  } catch (e) {
+    return { refusal: Array.isArray(e.reasons) ? e.reasons.join('; ') : e.message };
   }
 }
 
@@ -71,28 +130,32 @@ export async function ingest(config) {
   const participants = [];
   const warnings = [];
 
-  // Replay artifacts are excluded from the participant pass by filename —
-  // but only after a content check, so a participant export that happens to
-  // match the naming pattern is never silently dropped.
+  // Session recordings are excluded from the participant pass by CONTENT, not
+  // by name (A3): v2 is producer-agnostic, so a conforming artifact can arrive
+  // called `session.json` or anything else, and putting one through the
+  // participant extractor produced a phantom "unknown" participant plus two
+  // junk warnings. Files matching CH's own naming keep their extra guarantee —
+  // a participant export that happens to be named like an artifact is rescued
+  // with a rename hint rather than silently dropped.
   const files = [];
   for (const file of allFiles) {
-    if (REPLAY_FILE_RE.test(file)) {
-      let text = null;
-      try { text = readFileSync(file, 'utf8'); } catch (e) { text = null; }
-      let parseable = true;
-      if (text !== null) {
-        try { JSON.parse(text); } catch (e) { parseable = false; }
-      }
-      if (text === null || !parseable) {
-        // Never let a replay-named file vanish silently: if its pid maps to
-        // a discovered participant the attach pass warns again with more
-        // context, but an orphan (no matching participant) would otherwise
-        // disappear without a trace.
+    if (!ARTIFACT_EXT_RE.test(file)) { files.push(file); continue; }   // e.g. CSV
+    const named = REPLAY_FILE_RE.test(file);
+    const read = readArtifactJson(file);
+    if (read.error) {
+      // Only a replay-NAMED file is claimed here. Never let one vanish
+      // silently: if its pid maps to a discovered participant the attach pass
+      // warns again with more context, but an orphan (no matching participant)
+      // would otherwise disappear without a trace. Anything else that fails to
+      // parse belongs to the participant pass, which reports its own failure.
+      if (named) {
         warnings.push({ file,
           warnings: ['Replay-named file could not be parsed (truncated upload or a misnamed participant export?) — skipped from the participant pass; if a matching participant exists, the replay pass reports it too.'] });
         continue;
       }
-      if (looksLikeReplayArtifact(text)) continue;
+    } else if (artifactKind(read.json) !== null) {
+      continue;                       // a session recording is never participant data
+    } else if (named) {
       warnings.push({ file,
         warnings: ['File matches the replay-artifact naming pattern (<pid>-replay-<epoch>.json) but contains participant data — parsed as a participant file. Consider renaming it to avoid ambiguity.'] });
     }
@@ -197,6 +260,37 @@ function attachReplayArtifacts(participants, config, warnings) {
     }
   }
 
+  // ── Discovery, second route: artifacts named by their own producer ───────
+  // CH's recorder writes `<sanitizedPid>-replay-<epoch>.json[.gz]`
+  // (persistence.js), which is what the per-participant filename match below
+  // is built from. A v2 recording from anywhere else — jsPsych's recorder, a
+  // browser download, a hand-copied `session.json` — carries a name CH cannot
+  // read anything out of, so it is found by CONTENT here and attached by
+  // IDENTITY ONLY: its embedded participant_id must name a participant in this
+  // dataset. No filename fallback exists for these and none is invented, which
+  // is what keeps Task 10's ownership defense whole for foreign producers.
+  //
+  // The scan keeps the NAME and the embedded id, never the recording: holding
+  // every foreign artifact parsed at once would put a cohort's worth of
+  // dom-tier recordings in memory simultaneously, where the filename route
+  // holds one at a time. The matching files are loaded below, through the same
+  // code path CH-named artifacts take, so there is one loading reading.
+  const embeddedId = (rec) => {
+    const v = ownField(rec, 'participant_id');
+    return v == null ? null : String(v);
+  };
+  const foreign = [];
+  for (const f of entries) {
+    if (REPLAY_FILE_RE.test(f)) continue;          // the filename route owns these
+    if (!ARTIFACT_EXT_RE.test(f)) continue;
+    const read = readArtifactJson(join(dir, f));
+    if (read.error) continue;      // an unreadable non-artifact is not ours to report
+    const kind = artifactKind(read.json);
+    if (kind === null) continue;
+    foreign.push({ file: f, kind, id: embeddedId(read.json) });
+  }
+  const claimed = new Set();
+
   for (const p of participants) {
     // Same sanitization the browser-side filename builder applies. The
     // match is ANCHORED (^<sane>-replay-<digits>.json$): a bare prefix
@@ -206,6 +300,8 @@ function attachReplayArtifacts(participants, config, warnings) {
     const escaped = sane.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const exactRe = new RegExp(`^${escaped}-replay-\\d+\\.json(\\.gz)?$`, 'i');
     const mine = entries.filter(f => exactRe.test(f));
+    // Foreign-named artifacts that named THIS participant inside themselves.
+    const mineForeign = foreign.filter(a => a.id !== null && a.id === String(p.participantId));
     // The meta pointer rides on every trial row via addProperties.
     const meta = (p.trials && p.trials[0] && p.trials[0].integrityReplayMeta) || null;
     // Replay finalize failures ride the same way — surface them where the
@@ -216,7 +312,7 @@ function attachReplayArtifacts(participants, config, warnings) {
         warnings: [`Replay finalize failed for ${p.participantId}: ${finErr} — the artifact was likely never saved.`] });
     }
 
-    if (mine.length === 0) {
+    if (mine.length === 0 && mineForeign.length === 0) {
       p.replay = null;
       if (meta && meta.saved_to === 'download') {
         warnings.push({
@@ -227,21 +323,18 @@ function attachReplayArtifacts(participants, config, warnings) {
       continue;
     }
 
+    // ONE loading path for both discovery routes: read, sniff, migrate.
     const parsed = [];
-    for (const f of mine) {
-      try {
-        const buf = readFileSync(join(dir, f));
-        const json = f.toLowerCase().endsWith('.gz')
-          ? gunzipSync(buf).toString('utf8')
-          : buf.toString('utf8');
-        // Same structural sniff as the participant pass: a misnamed
-        // participant export was rescued as participant data there and
-        // must not double as its own "replay" here.
-        if (!looksLikeReplayArtifact(json)) continue;
-        parsed.push({ file: f, recording: JSON.parse(json) });
-      } catch (e) {
-        parsed.push({ file: f, reason: e.message });
-      }
+    for (const a of mineForeign) claimed.add(a.file);
+    for (const f of [...mine, ...mineForeign.map(a => a.file)]) {
+      const read = readArtifactJson(join(dir, f));
+      if (read.error) { parsed.push({ file: f, reason: read.error }); continue; }
+      // Same structural sniff as the participant pass: a misnamed
+      // participant export was rescued as participant data there and
+      // must not double as its own "replay" here.
+      const kind = artifactKind(read.json);
+      if (kind === null) continue;
+      parsed.push({ file: f, ...migrateArtifact(read.json, kind) });
     }
     if (parsed.length === 0) {
       p.replay = null;
@@ -250,16 +343,29 @@ function attachReplayArtifacts(participants, config, warnings) {
 
     // Every unreadable artifact warns individually — a corrupt NEWEST
     // session must never be silently masked by an older readable one.
-    for (const bad of parsed.filter(x => !x.recording)) {
+    for (const bad of parsed.filter(x => x.reason)) {
       warnings.push({ file: join(dir, bad.file),
         warnings: [`Replay artifact ${bad.file} unreadable: ${bad.reason} — if this is the newest session, its replay is lost.`] });
     }
+    // A refused conversion is NOT a corruption: the file read fine and the
+    // migration is what stopped. It carries the converter's own sentences
+    // because they are the ones naming the remedy.
+    for (const bad of parsed.filter(x => x.refusal)) {
+      warnings.push({ file: join(dir, bad.file),
+        warnings: [`Replay artifact ${bad.file} is a jsPsych v1 recording that could not be converted to v2: ${bad.refusal} — not playable in this report; the file on disk is unchanged.`] });
+    }
     const readable = parsed.filter(x => x.recording);
     if (readable.length === 0) {
-      p.replay = { error: 'parse_failed', reason: parsed[0].reason, file: parsed[0].file };
+      // A refusal outranks a parse failure when both are present: it is the
+      // more specific diagnosis, and "corrupted" would send the analyst
+      // hunting a truncated upload that does not exist.
+      const refused = parsed.find(x => x.refusal);
+      p.replay = refused
+        ? { error: 'unloadable', reason: refused.refusal, file: refused.file }
+        : { error: 'parse_failed', reason: parsed[0].reason, file: parsed[0].file };
       continue;
     }
-    if (mine.length > 1) {
+    if (parsed.length > 1) {
       warnings.push({ file: dir,
         warnings: [`Multiple replay artifacts for ${p.participantId} (page reload?) — using the latest by start_time.`] });
     }
@@ -318,9 +424,10 @@ function attachReplayArtifacts(participants, config, warnings) {
     // artifacts: the recording's own start field (per version, see ownField)
     // as an ISO string → a numeric epoch → the filename's own epoch. For a
     // CH artifact the filename epoch is DERIVED from the same field
-    // (persistence.js), so the fallback agrees rather than guesses — but a
-    // producer that names files differently would have been ordered by
-    // whatever its filename happened to contain.
+    // (persistence.js), so the fallback agrees rather than guesses. A
+    // producer-named artifact has no epoch in its name to fall back TO, so one
+    // whose start field is unreadable sorts oldest — which is the conservative
+    // direction: it can lose to a dated sibling, never beat one.
     const sessionEpoch = (cand) => {
       const v = ownField(cand.recording, 'start_time');
       const n = typeof v === 'number' ? v : Date.parse(v);
@@ -339,7 +446,44 @@ function attachReplayArtifacts(participants, config, warnings) {
       warnings.push({ file: join(dir, chosen.file),
         warnings: [`Replay schema_version ${chosen.recording.schema_version} (this CLI targets 2) — attaching anyway; the viewer plays v2 only and will report this artifact as unloadable.`] });
     }
+    // A converted recording is a DERIVED artifact: what plays in the report is
+    // something ingest built, not the bytes the recorder wrote. Say so once,
+    // with the link that reproduces it — the source is untouched on disk and
+    // the stamp carries the canonical hash of its content.
+    if (chosen.converted) {
+      const prov = chosen.recording.extensions['cyborg-hunter'].converter;
+      warnings.push({ file: join(dir, chosen.file),
+        warnings: [`Replay artifact ${chosen.file} is a jsPsych v1 recording, converted to SessionRecording v2 in memory for this report (${prov.tool} ${prov.version}, source_sha256 ${prov.source_sha256}) — spec §14 makes conversion the migration path and the viewer plays v2 only. The file on disk is unchanged; \`node tools/convert/${prov.tool}.mjs ${chosen.file}\` reproduces the conversion.`] });
+    }
     p.replay = { recording: chosen.recording, file: chosen.file, meta };
+  }
+
+  // A recording found by CONTENT that attached to nobody must not vanish
+  // silently: unlike a CH-named artifact, its filename gives an analyst
+  // nothing to notice its absence by. Suppressed under --participant, where
+  // every other participant's artifact is out of scope by construction and
+  // would otherwise warn on every single-participant run.
+  if (!config.singleParticipant) {
+    for (const a of foreign) {
+      if (claimed.has(a.file)) continue;
+      let why;
+      if (a.id !== null) {
+        why = `was recorded for "${a.id}", which matches no participant in this dataset — not attached.`;
+      } else if (a.kind === 'jspsych-v1') {
+        // Worth naming the format: jsPsych v1 records no participant_id at
+        // all, so renaming is the ONLY way to attach one, and an analyst who
+        // does rename it gets the conversion for free.
+        why = 'is a jsPsych v1 session recording, and the v1 format carries no participant_id — ' +
+          'with a filename outside the <participantId>-replay-<epoch>.json convention there is nothing ' +
+          'to identify its owner, so it is not attached. Rename it after the participant; ingest ' +
+          'converts it to v2 on the way in.';
+      } else {
+        why = 'carries no participant_id, and its name does not follow the ' +
+          '<participantId>-replay-<epoch>.json convention — nothing identifies its owner, so it is ' +
+          'not attached. Rename it after the participant to attach it.';
+      }
+      warnings.push({ file: join(dir, a.file), warnings: [`Replay artifact ${a.file} ${why}`] });
+    }
   }
 }
 

@@ -33,6 +33,7 @@
     "dist/",
     "bin/",
     "src/",
+    "tools/convert/jspsych-v1-to-v2.mjs",
     "README.md",
     "CHANGELOG.md",
     "CITATION.cff"

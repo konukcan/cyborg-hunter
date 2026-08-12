@@ -4,11 +4,12 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { gzipSync } from 'zlib';
 import { ingest } from '../../src/cli/ingest.js';
+import { buildViewerModel } from '../../src/replay/viewer-model.js';
 
 function participantFile(pid, replayMeta) {
   return JSON.stringify({
@@ -552,5 +553,268 @@ describe('replay artifact ingest', () => {
       const { participants } = await ingest({ ...config(), singleParticipant: 'P8', replayDir });
       assert.ok(participants[0].replay.recording);
     } finally { rmSync(replayDir, { recursive: true, force: true }); }
+  });
+
+  // ── The .json.gz spurious warning (T5 Task 10 review M-4) ─────────────────
+  // The participant-pass exclusion block read the gzip bytes as utf8 and
+  // JSON.parse'd them, so every compressed artifact looked like a truncated
+  // upload. The artifact still attached (the attach pass gunzips), which is
+  // why this was noise rather than data loss — but "could not be parsed" sends
+  // an analyst hunting a corruption that does not exist. Reachable whenever
+  // the file pattern reaches `.gz` at all; the default `*.json` expands to
+  // `[/\.json$/, /\.csv$/]`, which `.json.gz` fails, so the default path never
+  // saw it.
+  it('does not call a readable .json.gz artifact unparseable', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-replay-gzwarn-'));
+    try {
+      writeFileSync(join(d, 'PG.json'), participantFile('PG'));
+      writeFileSync(join(d, 'PG-replay-1751600000000.json.gz'),
+        gzipSync(JSON.stringify(recordingV2('PG', 1751600000000))));
+      const { participants, warnings } = await ingest({
+        dataDir: d, filePattern: '*',           // reaches .gz, unlike the default
+        integrityField: 'integrity', participantIdField: 'participantId',
+      });
+      assert.ok(participants[0].replay && participants[0].replay.recording,
+        'the compressed artifact still attaches');
+      assert.ok(!warnings.some(w => String(w.warnings).match(/could not be parsed/i)),
+        'a gzip artifact that decompresses cleanly is not a truncated upload');
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// A3 — v2 from ANY producer, and jsPsych v1 BY CONVERSION
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Task 10 taught the content sniff to recognise v2 and taught ownership and
+// the session pick to read v2's own identity fields, but DISCOVERY was still
+// CH's filename convention (`<sanitizedPid>-replay-<epoch>.json[.gz]`). v2 is
+// producer-agnostic by construction (spec §14), so a conforming recording can
+// arrive named anything at all — `session.json`, a download stamped with a
+// date, whatever the producing tool writes. Those files are found by CONTENT
+// and attached by IDENTITY: the embedded `participant_id` must name a
+// participant in the dataset. Filename luck attaches nothing, which is what
+// keeps Task 10's ownership defense whole for producers whose names CH cannot
+// read.
+
+const jspsychV1 = () => JSON.parse(readFileSync(
+  new URL('../tools/fixtures/jspsych-v1-minimal.json', import.meta.url), 'utf8'));
+
+describe('replay ingest — v2 from other producers (A3)', () => {
+  const cfg = (d, extra) => ({
+    dataDir: d, filePattern: '*.json',
+    integrityField: 'integrity', participantIdField: 'participantId', ...extra,
+  });
+
+  it('attaches a v2 artifact whose filename follows no CH convention', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-a3-name-'));
+    try {
+      writeFileSync(join(d, 'F1.json'), participantFile('F1'));
+      writeFileSync(join(d, 'session.json'),
+        JSON.stringify(recordingV2('F1', 1751600000000)));
+      const { participants, warnings } = await ingest(cfg(d));
+      assert.strictEqual(participants.length, 1,
+        'a foreign-named recording is not a participant record of its own');
+      assert.ok(participants[0].replay && participants[0].replay.recording,
+        'a v2 recording must attach whatever its producer named it');
+      assert.strictEqual(participants[0].replay.file, 'session.json');
+      assert.ok(!warnings.some(w => String(w.warnings).match(/No integrity data found/i)),
+        'the recording must never be run through the participant extractor');
+      assert.ok(!warnings.some(w => String(w.warnings).match(/participantId unresolved/i)));
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('attaches a foreign-named artifact downloaded as .json.gz', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-a3-namegz-'));
+    try {
+      writeFileSync(join(d, 'F2.json'), participantFile('F2'));
+      writeFileSync(join(d, 'recording-2026-08-12T10-00-00Z.json.gz'),
+        gzipSync(JSON.stringify(recordingV2('F2', 1751600000000))));
+      const { participants } = await ingest(cfg(d, { filePattern: '*' }));
+      assert.strictEqual(participants[0].replay.file,
+        'recording-2026-08-12T10-00-00Z.json.gz');
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  // The ownership defense, restated for the case that has no filename to lean
+  // on. `F3-session.json` CONTAINS the participant's id; a discovery rule that
+  // fell back to substring matching would attach it. The embedded id says it
+  // belongs to someone else, and that is the only thing consulted.
+  it('never attaches a foreign-named artifact by filename luck', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-a3-luck-'));
+    try {
+      writeFileSync(join(d, 'F3.json'), participantFile('F3'));
+      writeFileSync(join(d, 'F3-session.json'),
+        JSON.stringify(recordingV2('SOMEONE-ELSE', 1751600000000)));
+      const { participants, warnings } = await ingest(cfg(d));
+      assert.strictEqual(participants[0].replay, null,
+        'an artifact recorded for another participant must never attach');
+      assert.ok(warnings.some(w =>
+        String(w.warnings).match(/SOMEONE-ELSE/) &&
+        String(w.warnings).match(/matches no participant/i)),
+        'and the analyst must be told the file was found and skipped');
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('refuses to guess an owner for a foreign-named artifact with no participant_id', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-a3-anon-'));
+    try {
+      writeFileSync(join(d, 'F4.json'), participantFile('F4'));
+      const anon = recordingV2('F4', 1751600000000);
+      anon.participant_id = null;              // legal: spec §2 makes it optional
+      writeFileSync(join(d, 'session.json'), JSON.stringify(anon));
+      const { participants, warnings } = await ingest(cfg(d));
+      assert.strictEqual(participants[0].replay, null,
+        'no id and no convention name leaves nothing to verify ownership with');
+      assert.ok(warnings.some(w =>
+        String(w.warnings).match(/no participant_id/i) &&
+        String(w.file).includes('session.json')));
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('picks the latest session across CH-named and foreign-named artifacts', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-a3-mixed-'));
+    try {
+      writeFileSync(join(d, 'F5.json'), participantFile('F5'));
+      writeFileSync(join(d, 'F5-replay-1751600000000.json'),
+        JSON.stringify(recordingV2('F5', 1751600000000)));      // older, CH-named
+      writeFileSync(join(d, 'session.json'),
+        JSON.stringify(recordingV2('F5', 1751600999999)));      // newer, foreign-named
+      const { participants, warnings } = await ingest(cfg(d));
+      assert.strictEqual(participants[0].replay.file, 'session.json',
+        'the two discovery routes feed ONE candidate set, ordered by start time');
+      assert.ok(warnings.some(w => String(w.warnings).match(/multiple replay artifacts/i)),
+        'two artifacts for one participant is worth saying whichever route found them');
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+});
+
+describe('replay ingest — jsPsych v1 by conversion (A3)', () => {
+  const cfg = (d, extra) => ({
+    dataDir: d, filePattern: '*.json',
+    integrityField: 'integrity', participantIdField: 'participantId', ...extra,
+  });
+
+  // Spec §14: jsPsych-v1 recordings migrate by CONVERSION. Players stay
+  // v2-only and there is no dual-read, so the converter is the only door —
+  // and ingest is where an analyst walks through it without knowing it exists.
+  it('converts a jsPsych v1 artifact and attaches the v2 result', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-a3-conv-'));
+    try {
+      writeFileSync(join(d, 'J1.json'), participantFile('J1'));
+      writeFileSync(join(d, 'J1-replay-1751600000000.json'),
+        JSON.stringify(jspsychV1()));
+      const { participants, warnings } = await ingest(cfg(d, { singleParticipant: 'J1' }));
+      const rec = participants[0].replay && participants[0].replay.recording;
+      assert.ok(rec, 'a jsPsych v1 artifact must reach the report');
+      assert.strictEqual(rec.schema_version, 2, 'it reaches it AS v2');
+      assert.strictEqual(rec.segments.length, 2);
+      assert.ok(!warnings.some(w => String(w.warnings).match(/schema_version 1/)),
+        'a converted recording is not below the targeted version any more');
+      // The claim that makes the funnel testable: the viewer can actually
+      // load what ingest attached.
+      assert.doesNotThrow(() => buildViewerModel(rec));
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('keeps the conversion in memory and states the regeneration link', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-a3-prov-'));
+    try {
+      const source = JSON.stringify(jspsychV1());
+      writeFileSync(join(d, 'J2.json'), participantFile('J2'));
+      writeFileSync(join(d, 'J2-replay-1751600000000.json'), source);
+      const { participants, warnings } = await ingest(cfg(d, { singleParticipant: 'J2' }));
+      const prov = participants[0].replay.recording.extensions['cyborg-hunter'].converter;
+      assert.strictEqual(prov.tool, 'jspsych-v1-to-v2');
+      assert.match(prov.source_sha256, /^[0-9a-f]{64}$/);
+      // The file on disk is the evidence; conversion never edits it.
+      assert.strictEqual(readFileSync(join(d, 'J2-replay-1751600000000.json'), 'utf8'),
+        source, 'the source recording must be byte-identical after ingest');
+      const note = warnings.find(w => String(w.warnings).match(/converted/i));
+      assert.ok(note, 'a replay derived from another file is not silently substituted');
+      assert.ok(String(note.warnings).includes(prov.source_sha256),
+        'the notice carries the hash that reproduces the conversion');
+      assert.ok(String(note.warnings).includes('jspsych-v1-to-v2'),
+        'and the tool that performs it');
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  // The converter's refusal semantics ARE the contract (it never guesses at a
+  // missing field and never renumbers a trial). A refusal therefore has to
+  // reach a human with its own words, on the surface Task 10 built for
+  // "attached, readable, and still not playable".
+  it('surfaces a converter refusal on the participant-visible error path', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-a3-refuse-'));
+    try {
+      const broken = jspsychV1();
+      broken.trials[1].trial_index = 7;        // disagrees with its array position
+      writeFileSync(join(d, 'J3.json'), participantFile('J3'));
+      writeFileSync(join(d, 'J3-replay-1751600000000.json'), JSON.stringify(broken));
+      const { participants, warnings } = await ingest(cfg(d, { singleParticipant: 'J3' }));
+      const replay = participants[0].replay;
+      assert.ok(replay && replay.error === 'unloadable',
+        'not "corrupted" — the file read fine, the migration is what failed');
+      assert.match(replay.reason, /must equal its array position/,
+        "the converter's own operator-actionable sentence, not a paraphrase");
+      assert.strictEqual(replay.file, 'J3-replay-1751600000000.json');
+      assert.ok(warnings.some(w => String(w.warnings).match(/could not be converted/i)));
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  // Ordering claim. A CH v1 recording ALSO carries a `trials` array whose
+  // entries have `events` and `initial_dom`, so it matches the jsPsych sniff
+  // arm too. Reading the CH stamp first is what keeps it out of a converter
+  // that would refuse it — spec §14 gives CH v1 a different migration path
+  // (none: A6 regenerates, old files stay playable at the 0.7.x tag).
+  it('does not route a CH v1 artifact through the jsPsych converter', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-a3-chv1-'));
+    try {
+      writeFileSync(join(d, 'J4.json'), participantFile('J4'));
+      writeFileSync(join(d, 'J4-replay-1751600000000.json'),
+        JSON.stringify(recording('J4', 1751600000000)));
+      const { participants, warnings } = await ingest(cfg(d, { singleParticipant: 'J4' }));
+      assert.strictEqual(participants[0].replay.recording.schema_version, 1,
+        'a CH v1 recording is attached as it is, not converted');
+      assert.ok(!warnings.some(w => String(w.warnings).match(/could not be converted|converted/i)),
+        'and no conversion is claimed or refused on its behalf');
+      assert.ok(warnings.some(w => String(w.warnings).match(/schema_version 1/)),
+        'the existing below-target notice still fires');
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  // The two A3 halves meeting, and they meet in a dead end: jsPsych's recorder
+  // writes no participant_id AND its own file names, so a recording under a
+  // foreign name has nothing whatsoever to attach by. Saying so beats
+  // attaching by proximity — and the message has to name the remedy, because
+  // renaming the file is the only one there is.
+  it('finds a foreign-named jsPsych v1 artifact but attaches it to nobody', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-a3-convanon-'));
+    try {
+      writeFileSync(join(d, 'J5.json'), participantFile('J5'));
+      writeFileSync(join(d, 'jspsych-recording.json'), JSON.stringify(jspsychV1()));
+      const { participants, warnings } = await ingest(cfg(d));
+      assert.strictEqual(participants[0].replay, null);
+      assert.strictEqual(participants.length, 1,
+        'and it is still kept out of the participant pass');
+      assert.ok(warnings.some(w =>
+        String(w.warnings).match(/no participant_id/i) &&
+        String(w.file).includes('jspsych-recording.json')));
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  // The CLI imports the converter at run time, so the published package has to
+  // contain it. `files` is hand-maintained and `tools/` is not in it by
+  // default, which makes this exactly the drift class version-invariant.test.js
+  // exists for: green tests, broken tarball.
+  it('ships the converter ingest depends on inside the published package', () => {
+    const pkg = JSON.parse(readFileSync(
+      new URL('../../package.json', import.meta.url), 'utf8'));
+    const src = readFileSync(
+      new URL('../../src/cli/ingest.js', import.meta.url), 'utf8');
+    const imported = src.match(/from\s+'(\.\.\/\.\.\/tools\/[^']+)'/);
+    assert.ok(imported, 'ingest.js is expected to import the converter from tools/');
+    const path = imported[1].replace('../../', '');
+    assert.ok(pkg.files.some(f => path === f || path.startsWith(f)),
+      `package.json "files" must cover ${path}; got ${JSON.stringify(pkg.files)}`);
   });
 });

@@ -223,6 +223,57 @@ describe('renderReplayAssets', () => {
         'the recording must be cleared, or the index renders a load button for an asset that was never written');
     } finally { rmSync(sub, { recursive: true, force: true }); }
   });
+
+  // ── A3: refusals stamped one layer earlier ────────────────────────────────
+  // A jsPsych v1 recording the converter will not migrate is stamped
+  // `unloadable` by INGEST, not here — but it is the same event as a §11
+  // rejection: an artifact that exists, reads fine, and never reaches the
+  // viewer. Task 10(b) settled that such a thing is visible on three surfaces,
+  // and the CLI line is one of them, so `skipped` has to account for both
+  // origins or the console is a partial account of what did not make it.
+  it('reports an artifact already stamped unloadable by ingest', () => {
+    const sub = mkdtempSync(join(tmpdir(), 'ch-replay-ingeststamp-'));
+    try {
+      const participants = [
+        { participantId: 'REFUSED', replay: { error: 'unloadable', file: 'REFUSED-replay-1.json',
+          reason: 'trials[1].trial_index (7) must equal its array position (1).' } },
+        { participantId: 'GOOD', replay: { recording: wireRecording(), file: 'GOOD-replay-2.json', meta: null } },
+      ];
+      const res = renderReplayAssets(participants, sub);
+      assert.strictEqual(res.count, 1, 'the healthy participant still gets an asset');
+      assert.strictEqual(res.skipped.length, 1);
+      assert.strictEqual(res.skipped[0].participantId, 'REFUSED');
+      assert.match(res.skipped[0].reason, /trial_index/,
+        "the converter's own sentence reaches the console, not a bare 'unloadable'");
+      assert.strictEqual(participants[0].replay.error, 'unloadable',
+        'the stamp ingest wrote is left exactly as it was');
+    } finally { rmSync(sub, { recursive: true, force: true }); }
+  });
+
+  it('reports ingest-stamped refusals even when nothing in the cohort is loadable', () => {
+    const sub = mkdtempSync(join(tmpdir(), 'ch-replay-allrefused-'));
+    try {
+      const res = renderReplayAssets([
+        { participantId: 'R1', replay: { error: 'unloadable', reason: 'refused', file: 'a.json' } },
+      ], sub);
+      assert.strictEqual(res.count, 0);
+      assert.strictEqual(res.skipped.length, 1,
+        'the early return for "no recordings to write" must not swallow the account');
+    } finally { rmSync(sub, { recursive: true, force: true }); }
+  });
+
+  // The boundary, stated so it is not read as an oversight: a corrupted file
+  // (ingest's `parse_failed`) keeps its own lead text in the report and its own
+  // ingest warning, and does not join this list.
+  it('does not report a corrupted artifact as a skip', () => {
+    const sub = mkdtempSync(join(tmpdir(), 'ch-replay-corruptskip-'));
+    try {
+      const res = renderReplayAssets([
+        { participantId: 'C1', replay: { error: 'parse_failed', reason: 'Unexpected end of JSON input', file: 'c.json' } },
+      ], sub);
+      assert.strictEqual(res.skipped.length, 0);
+    } finally { rmSync(sub, { recursive: true, force: true }); }
+  });
 });
 
 describe('html-index replay section', () => {

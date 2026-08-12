@@ -543,6 +543,16 @@ const spanKeyframeFor = (rec, model, label) => {
   const i = idxOf(model, label);
   return rec.segments[model.segments[i].spanStart];
 };
+// The §3 segment origin has ONE reading in CH: `viewer-model.js` computes it
+// and every consumer takes `model.segments[i].origin` rather than re-deriving
+// it. These two helpers keep the test tree on that reading too — hand-rolled
+// `t_load ?? t_dom_ready ?? t_start` chains here were the last latent second
+// reading in the repo (T5 final review, M1), and a change to §3's order would
+// have drifted them silently while the B-storm and B-latch scenarios kept
+// reporting green.
+const originOf = (model, label) => model.segments[idxOf(model, label)].origin;
+const spanOriginOf = (model, label) =>
+  model.segments[model.segments[idxOf(model, label)].spanStart].origin;
 
 // ════════════════════════════════ PART P pins ════════════════════════════════
 //
@@ -902,8 +912,7 @@ async function runEngine(name) {
     // the viewer's fold. Part A's bound, unchanged.
     const r = clone(rec);
     const target = segOf(r, 'centred-reflow');
-    const span = spanKeyframeFor(r, model, 'centred-reflow');
-    const t0 = span.t_load != null ? span.t_load : (span.t_dom_ready != null ? span.t_dom_ready : span.t_start);
+    const t0 = spanOriginOf(model, 'centred-reflow');
     const t1 = target.t_end;
     r.viewport_changes = [];
     for (let i = 0; i < 240; i++) {
@@ -970,7 +979,7 @@ async function runEngine(name) {
     // scheduling luck.
     const r = clone(rec);
     const seg = segOf(r, 'iframe-removed');
-    const origin = seg.t_load != null ? seg.t_load : (seg.t_dom_ready != null ? seg.t_dom_ready : seg.t_start);
+    const origin = originOf(model, 'iframe-removed');
     const rm = seg.events.find((e) => e.type === 'dom.remove');
     check(!!rm, 'the iframe placeholder is removed by a dom.remove patch');
     if (rm) rm.t = origin;                        // → tRel 0

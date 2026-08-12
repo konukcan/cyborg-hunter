@@ -309,7 +309,10 @@ uses the latest and warns.
 
 Drop `<pid>-replay-<epoch>.json[.gz]` files next to your data files (or
 point the `replayDir` config key at them) and run `cyborg-hunter report`
-as usual. Each participant's pane gains a **Session replay** section with
+as usual. Recordings from other producers work too: a SessionRecording v2
+file is recognised by its contents under any filename and attaches by the
+`participant_id` inside it, and a jsPsych v1 recording is converted to v2
+on the way in (see **Replay artifacts** in `docs/cli-reference.md`). Each participant's pane gains a **Session replay** section with
 a lazy-loaded viewer: trial selector, play/pause/speed, scrub bar, cursor
 trail, click ripples, away-bands, an event marker lane, and — for
 `dom`-tier recordings — a sandboxed reconstruction of the page (scripts
