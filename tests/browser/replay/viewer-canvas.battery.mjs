@@ -53,6 +53,7 @@ import zlib from 'node:zlib';
 
 import { buildViewerModel } from '../../../src/cli/renderers/replay-assets.js';
 import { readReplayClientSrc } from '../../../src/cli/renderers/replay-client-source.js';
+import { inlineSafeJson, inlineSafeSrc } from '../../../src/shared/inline-safe.js';
 
 const argv = process.argv.slice(2);
 const opt = (n, d) => {
@@ -222,8 +223,8 @@ function styleClobberModel() {
 }
 
 function harnessHtml(model, name) {
-  const modelJson = JSON.stringify(model).replace(/</g, '\\u003c');
-  const safeViewer = readReplayClientSrc().replace(/<\/script/gi, '<\\/script');
+  const modelJson = inlineSafeJson(model);
+  const safeViewer = inlineSafeSrc(readReplayClientSrc());
   // The cursor OVERLAY is suppressed here and only here. It is a sibling of the
   // iframe in the same stage box, so an element-clipped shot of the frame
   // captures the trail and the ripples painted over it — and segment 9 is a

@@ -301,7 +301,12 @@ describe('replay artifact ingest', () => {
       });
       assert.ok(participants[0].replay.recording, 'still attached — ingest never drops data');
       assert.ok(warnings.some(w => String(w.warnings).match(/schema_version 1/)),
-        'the analyst learns the viewer will not play it before opening the report');
+        'the artifact is flagged at ingest as below the targeted version');
+      // Where the analyst actually READS it: a successful run prints only
+      // `Found N participants (M files had warnings)` — the warning text
+      // surfaces on the no-valid-participants path (report.js:43-49). What
+      // tells them at the console is renderReplayAssets' skip line, which
+      // carries the §11 reason (T5 Task 10 review M-3).
     } finally { rmSync(d, { recursive: true, force: true }); }
   });
 

@@ -29,6 +29,7 @@ import { dirname, join } from 'path';
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 
 import { buildViewerModel } from '../../src/cli/renderers/replay-assets.js';
+import { inlineSafeJson, inlineSafeSrc } from '../../src/shared/inline-safe.js';
 
 function resolvePlaywright() {
   const candidates = [
@@ -150,8 +151,8 @@ console.log(`  scroll events recorded: ${scrollEvents.length}`);
 const viewerSrc = readFileSync(join(repoRoot, 'src', 'cli', 'renderers', 'replay-viewer.client.js'), 'utf8');
 
 function harnessHtml(model) {
-  const modelJson = JSON.stringify(model).replace(/</g, '\\u003c');
-  const safeViewer = viewerSrc.replace(/<\/script/gi, '<\\/script');
+  const modelJson = inlineSafeJson(model);
+  const safeViewer = inlineSafeSrc(viewerSrc);
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     .replay-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
     .replay-stage { position: relative; overflow: hidden; background: #fff; border: 1px solid #ccc; }

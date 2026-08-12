@@ -16,6 +16,7 @@ import { join } from 'path';
 
 import { sanitizeId as sanitize } from '../../shared/constants.js';
 import { buildViewerModel } from '../../replay/viewer-model.js';
+import { inlineSafeJson } from '../../shared/inline-safe.js';
 
 // Load-bearing re-export: renderReplayAssets (below) calls buildViewerModel
 // in-file, and tests/cli/replay-render.test.js + tests/replay/alignment-viewer-model.test.js
@@ -36,6 +37,11 @@ export { buildViewerModel };
  * v1 degraded and rendered the rest; v2 skips the participant and says so.
  * The say-so is a stamp on `p.replay`, read by renderReplaySection's error
  * branch — the report's existing state for "attached but not viewable".
+ *
+ * NOT idempotent w.r.t. `skipped` (T5 Task 10 review M-5): the stamp clears
+ * `p.replay.recording`, so a second call over the same participants array
+ * sees nothing to skip and returns an empty list. One caller today
+ * (`report.js:149`), which then renders the index from the same array.
  */
 export function renderReplayAssets(participants, outputDir) {
   let count = 0;
@@ -79,7 +85,7 @@ export function renderReplayAssets(participants, outputDir) {
     const src =
       'window.__chReplay = window.__chReplay || Object.create(null);\n' +
       'window.__chReplay[' + JSON.stringify(String(p.participantId)) + '] = ' +
-      JSON.stringify(model).replace(/</g, '\\u003c') + ';\n';
+      inlineSafeJson(model) + ';\n';
     let base = sanitize(p.participantId);
     let name = base + '.replay.js';
     for (let n = 2; usedNames.has(name.toLowerCase()); n++) {

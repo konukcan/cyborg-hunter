@@ -241,6 +241,27 @@ check(hostState.counters && hostState.counters.patchFailures === 0,
   'no unresolved references in the demo host either');
 await host.close();
 
+// The same page, with one visitor-controlled text node carrying the sequence
+// that opens script-data-escaped state (T5 Task 10 review I-2). With the
+// end-tag rule this page stayed double-escaped to EOF: its own </script> never
+// closed the element, the bootstrap call never ran, the replay card silently
+// never appeared, and NO error was raised — which is why this asserts a boot
+// rather than an absent pageerror. The model now takes the every-`<` rule.
+const hostileModel = JSON.parse(JSON.stringify(buildViewerModel(recording)));
+(function poison(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (node.kind === 'text') { node.text = 'note: <!-- and then a <script> element'; return true; }
+  return (node.children || []).some(poison);
+})(hostileModel.segments[firstSegment].initialDom);
+const hostileFile = join(dataDir, 'replay-host-hostile.html');
+writeFileSync(hostileFile, buildReplayHostHtml(hostileModel, readReplayClientSrc()));
+const hostile = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+hostile.on('pageerror', (e) => { failures++; console.error('  ✖ hostile-host pageerror: ' + e.message); });
+await hostile.goto('file://' + hostileFile);
+const booted = await hostile.waitForSelector('.replay-stage', { timeout: 5000 }).then(() => true, () => false);
+check(booted, 'a model whose text opens script-data-escaped state still boots the host');
+await hostile.close();
+
 // ── 5. Screenshot for the human reviewer ──────────────────────────────────
 console.log('▶ 5/5 screenshot');
 const shot = join(artifactsDir, 'e2e-replay-viewer.png');

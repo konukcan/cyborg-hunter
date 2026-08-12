@@ -128,6 +128,7 @@ import {
   realCanvasSnapshots as realCanvasSnapshotsOf, syntheticTree, buildDeepSpanModel,
 } from './deep-span-model.mjs';
 import { buildViewerModel } from '../../src/cli/renderers/replay-assets.js';
+import { inlineSafeJson, inlineSafeSrc } from '../../src/shared/inline-safe.js';
 
 // ── options ────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -164,9 +165,9 @@ const realCanvasSnapshots = () => realCanvasSnapshotsOf(jspsychFull);
 
 /** Page A: the REAL v1 viewer over the committed SMOKE-19NRQR model. */
 function v1PageHtml(model) {
-  const viewerSrc = readFileSync(join(repoRoot, 'src', 'cli', 'renderers', 'replay-viewer.client.js'), 'utf8')
-    .replace(/<\/script/gi, '<\\/script');
-  const modelJson = JSON.stringify(model).replace(/</g, '\\u003c');
+  const viewerSrc = inlineSafeSrc(
+    readFileSync(join(repoRoot, 'src', 'cli', 'renderers', 'replay-viewer.client.js'), 'utf8'));
+  const modelJson = inlineSafeJson(model);
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   .replay-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0}
   .replay-stage{position:relative;overflow:hidden;background:#fff;border:1px solid #ccc}

@@ -23,6 +23,7 @@ import { VERSION, sanitizeId } from '../../shared/constants.js';
 import { decomposeScore } from '../analyzers/triage.js';
 import { getByPath } from '../../shared/paths.js';
 import { inferTier } from '../../replay/viewer-model.js';
+import { inlineSafeJson, inlineSafeSrc } from '../../shared/inline-safe.js';
 
 /**
  * Renders the report's index.html as a string. `opts.replayClientSrc` is the
@@ -35,15 +36,13 @@ import { inferTier } from '../../replay/viewer-model.js';
  */
 export async function renderIndexHtml(summaries, triage, participants, config, visualsRendered, opts = {}) {
   // Inlining JS into an HTML <script> means owning the one sequence the HTML
-  // parser reacts to: it ends the element at the first "</script", wherever
-  // it appears — inside a string, inside a comment, anywhere. `<\/script` is
-  // the same characters to the JS parser (an identity escape in a string; raw
-  // text in a comment) and invisible to the HTML one, so the viewer arrives
-  // whole. Without this, one comment discussing "</script> breakouts" (two of
-  // the v2 replay modules do) truncates the whole viewer and the report boots
-  // with a SyntaxError. demo/replay-host.js does the same for its own
-  // inlining; this is the report's copy of that duty.
-  const replayClientSrc = (opts.replayClientSrc ?? '').replace(/<\/(script)/gi, '<\\/$1');
+  // parser reacts to (see src/shared/inline-safe.js for both rules and the
+  // precondition the source rule carries). Without it, one comment discussing
+  // script-end-tag breakouts — two of the v2 replay modules have one —
+  // truncates the whole viewer and the report boots with a SyntaxError. This
+  // was hand-rolled in nine places and missing from exactly this one, which is
+  // why the rule now lives in one module (T5 Task 10 + its fix round 3).
+  const replayClientSrc = inlineSafeSrc(opts.replayClientSrc);
   const visualsUnavailableNote = opts.visualsUnavailableNote
     ?? 'Visual renderers not available (install the canvas package).';
   const imageSources = opts.imageSources ?? null;       // pid → {typingProfile, sessionTimeline, trajectories} data URIs (null entry = omit that img)
@@ -62,11 +61,11 @@ export async function renderIndexHtml(summaries, triage, participants, config, v
 
   // Preloaded replay models (demo mode only) — embedded ahead of the replay
   // client script so window.__chReplay exists before any viewer code runs.
-  // '<' chars are escaped to a six-character JS unicode escape sequence (not
-  // the literal char) so a "</script>" inside the JSON can't prematurely
-  // close this tag.
+  // This is DATA, so it takes the every-`<` rule (inline-safe.js rule 1),
+  // which is both lossless inside a JSON string and complete: no `<` survives
+  // for the HTML tokenizer to react to, in any of its states.
   const preloadedReplayScript = inlineReplayModels
-    ? `<script>/* preloaded replay models (demo mode) */window.__chReplay = ${JSON.stringify(inlineReplayModels).replace(/</g, '\\u003c')};</script>\n  `
+    ? `<script>/* preloaded replay models (demo mode) */window.__chReplay = ${inlineSafeJson(inlineReplayModels)};</script>\n  `
     : '';
 
   // Hash-sync emission for the rail click handler (selectById, below): demo

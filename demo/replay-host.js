@@ -81,29 +81,45 @@ body{ padding:16px; }
 #ch-replay-mount{ width:100%; }
 `;
 
-// Same intent as buildSrcdoc's own `</` guard (replay-viewer.client.js):
-// embedding arbitrary text inside an inline <script> must neutralize any
-// `</script`-like sequence so the HTML parser can't close the tag early.
-// Narrower than buildSrcdoc's bare `<\//g` on purpose — that pattern is safe
-// for CSS text, but replayClientSrc is JS SOURCE, not data, and it contains
-// its own `/</g` regex literal (attrEscape's `<` -> `&lt;` rule); a bare
-// `</` replace there strips that regex's closing delimiter and throws
-// "Invalid regular expression: missing /" (found by driving this live).
-// Matching `</script` case-insensitively is the actual HTML-parser hazard
-// (that's the only sequence that closes a <script> tag early) and leaves
-// every other `</` in the source — regex literals included — untouched.
-// Applied to BOTH the inlined client source (defensive; it's a static
-// first-party file) and the JSON-encoded model (load-bearing: the model
-// carries visitor-typed/pasted text).
+// The two inlining rules, MIRRORED from src/shared/inline-safe.js — where the
+// reasoning for both lives, and which this file cannot import: only demo/* and
+// dist/ are copied into the deployed site (tools/assemble-demo-site.mjs), so a
+// `../src/...` import would 404 on the real thing. The mirror is not left to
+// good intentions: tests/demo/replay-host.test.js drives both rules through
+// this file and the shared module and asserts the outputs are identical, so a
+// change to one that is not made here fails the suite.
+//
+// Rule 2 (SOURCE): neutralize `</script`, the only sequence that closes a
+// <script> element, and nothing else. Nothing wider is safe here —
+// replayClientSrc is JS SOURCE and contains its own `/</g` regex literal
+// (attrEscape's `<` -> `&lt;` rule), so a bare `</` replace strips that
+// regex's closing delimiter and throws "Invalid regular expression: missing /"
+// (found by driving this live).
 function escapeScriptClose(s) {
-  return String(s).replace(/<\/script/gi, '<\\/script');
+  // `$1` rather than a literal `script`: the match is case-insensitive, so a
+  // literal replacement would rewrite `</SCRIPT` to `<\/script` and change the
+  // VALUE of any string in the source that contains it. (The mirror test
+  // caught this divergence between two of the copies — the report's kept the
+  // case, this one did not.)
+  return String(s).replace(/<\/(script)/gi, '<\\/$1');
+}
+
+// Rule 1 (DATA): escape EVERY `<`. The model carries visitor-typed and pasted
+// text, and rule 2 is incomplete against it: text reading `<!-- … <script`
+// puts the parser into script-data-escaped state, where this document's own
+// `</script>` stops closing the element, the replay card silently never
+// appears, and NOTHING is logged (T5 Task 10 review I-2, reproduced in a
+// browser). `\u003c` inside a JSON string literal is the same character to
+// the JS parser, so the model still round-trips exactly.
+function escapeJsonForScript(value) {
+  return JSON.stringify(value).replace(/</g, '\\u003c');
 }
 
 // Pure: the host document's full HTML. DOM-free — see
 // tests/demo/replay-host.test.js.
 export function buildReplayHostHtml(replayModel, replayClientSrc) {
   var clientScript = escapeScriptClose(replayClientSrc || '');
-  var modelJson = escapeScriptClose(JSON.stringify(replayModel));
+  var modelJson = escapeJsonForScript(replayModel);
   return (
     '<!DOCTYPE html><html><head><meta charset="utf-8">' +
     '<style>' + ROOT_CSS + REPLAY_RULES_CSS + '</style>' +

@@ -35,6 +35,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 
 import { buildViewerModel } from '../../../src/cli/renderers/replay-assets.js';
 import { readReplayClientSrc } from '../../../src/cli/renderers/replay-client-source.js';
+import { inlineSafeJson, inlineSafeSrc } from '../../../src/shared/inline-safe.js';
 
 function resolvePlaywright() {
   const candidates = [
@@ -75,8 +76,8 @@ function externalSheetModel() {
 }
 
 function harnessHtml(model, name) {
-  const modelJson = JSON.stringify(model).replace(/</g, '\\u003c');
-  const safeViewer = viewerSrc.replace(/<\/script/gi, '<\\/script');
+  const modelJson = inlineSafeJson(model);
+  const safeViewer = inlineSafeSrc(viewerSrc);
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     .replay-stage { position: relative; overflow: hidden; background: #fff; border: 1px solid #ccc; }
     .replay-frame { position: absolute; top: 0; left: 0; border: 0; }

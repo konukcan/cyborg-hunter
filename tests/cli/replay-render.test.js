@@ -11,6 +11,12 @@ import {
   buildViewerModel, renderReplayAssets,
 } from '../../src/cli/renderers/replay-assets.js';
 import { renderHtmlIndex } from '../../src/cli/renderers/html-index.js';
+import {
+  readReplayClientSrc, assembleReplayClientSrc,
+} from '../../src/cli/renderers/replay-client-source.js';
+import {
+  inlineSafeJson, inlineSafeSrc, inlineSrcHazards,
+} from '../../src/shared/inline-safe.js';
 
 // SessionRecording v2 (spec r2). Re-pointed from the v1 wire in T5 Task 1,
 // when buildViewerModel became v2-only; rewritten here (T5 Task 10) to cover
@@ -375,6 +381,65 @@ describe('the inlined viewer client survives HTML parsing', () => {
     // the v1 name; the client emits `replay-segment-select` since Task 4.
     assert.match(html, /\.replay-segment-select/, 'the report styles the control the client emits');
     assert.doesNotMatch(html, /\.replay-trial-select/, 'no rule for a class nothing emits');
+  });
+});
+
+describe('the inline-safe rules and the assembler precondition', () => {
+  // (T5 Task 10 fix round 3, review I-1/I-3.) The end-tag rule is complete for
+  // the class it covers, and NOT for the script-data-escaped class: an
+  // unpaired `<!--` followed by a `<script` makes the parser swallow the
+  // page's own `</script>`, so the viewer never boots and nothing is logged.
+  // Widening the escape is unsafe (it would alter regex literals), so the
+  // precondition is asserted at the assembly boundary instead — beside the two
+  // concatenation-contract throws that already live there.
+  it('escapes every < in inlined data, so data needs no precondition', () => {
+    const hostile = { text: 'a <!-- b <script> c </script> d' };
+    const out = inlineSafeJson(hostile);
+    assert.ok(!out.includes('<'), 'no raw < survives in inlined data');
+    assert.deepStrictEqual(JSON.parse(out.replace(/\\u003c/g, '<')), hostile,
+      'the escape round-trips losslessly');
+    assert.deepStrictEqual(inlineSrcHazards(out), [], 'so it cannot carry the hazard either');
+  });
+
+  it('escapes only the end tag in inlined source, leaving other < alone', () => {
+    const src = 'if (a < b) { var re = /</g; } // </script> in a comment';
+    const out = inlineSafeSrc(src);
+    assert.ok(out.includes('a < b'), 'a comparison must not be rewritten');
+    assert.ok(out.includes('/</g'), 'a regex literal must not be rewritten');
+    assert.ok(!/<\/script/.test(out.replace(/<\\\/script/g, '')), 'the end tag is neutralised');
+    assert.doesNotThrow(() => new Function(out), 'the escaped source is still JavaScript');
+  });
+
+  it('names the two sequences the source rule cannot neutralise', () => {
+    assert.deepStrictEqual(inlineSrcHazards('var a = 1; // nothing to see'), []);
+    assert.strictEqual(inlineSrcHazards('// <!-- opens escaped state').length, 1);
+    assert.strictEqual(inlineSrcHazards('var s = "<script>";').length, 1);
+    assert.strictEqual(inlineSrcHazards('// <!-- and later <script >').length, 2,
+      'both halves reported, not just the first');
+    assert.deepStrictEqual(inlineSrcHazards('var x = "<scriptfoo";'), [],
+      'a non-terminating look-alike is not the hazard');
+  });
+
+  it('refuses to assemble a client that could swallow its own closing tag', () => {
+    const goodMod = 'var a = 1;\nexport { a };';
+    const goodClient = 'window.initChReplayViewer = function () {};';
+    assert.doesNotThrow(() => assembleReplayClientSrc(goodMod, goodClient));
+    // The constructed violation: a comment that mentions HTML, which is
+    // exactly the accident that produced this task's headline defect.
+    assert.throws(() => assembleReplayClientSrc(goodMod, '// <!-- see the spec\n' + goodClient),
+      /script-data-escaped|<!--/);
+    assert.throws(() => assembleReplayClientSrc('var a = 1; // a <script> tag\nexport { a };', goodClient),
+      /double-escape|<script/);
+    // The two pre-existing contract throws, never pinned until now.
+    assert.throws(() => assembleReplayClientSrc('var a = 1;', goodClient), /strippable/);
+    assert.throws(() => assembleReplayClientSrc('import x from "y";\nexport { a };', goodClient), /import/);
+  });
+
+  it('the shipped assembly satisfies its own precondition', () => {
+    const src = readReplayClientSrc();
+    assert.deepStrictEqual(inlineSrcHazards(src), [],
+      'the real viewer source must be inlinable — if this fires, the fix is the comment, not the rule');
+    assert.ok(src.includes('</script'), 'and it really does contain the end-tag sequence the rule handles');
   });
 });
 
