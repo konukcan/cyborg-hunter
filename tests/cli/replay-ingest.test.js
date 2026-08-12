@@ -187,6 +187,66 @@ describe('replay artifact ingest', () => {
     } finally { rmSync(d, { recursive: true, force: true }); }
   });
 
+  // Ownership and the latest-session pick read v1's `metadata` block. Making
+  // the sniff recognise v2 without these would hand a v2 artifact to the
+  // OWNERLESS branch, which verifies by filename alone — so a file recorded
+  // for 'a/b' and named for the sanitized 'a_b' would attach to the wrong
+  // participant, the one case the mismatch check exists for. (Commit-hook
+  // finding on the first Task 10 commit; the mis-assignment half was real.)
+  it('rejects a v2 artifact whose top-level participant_id mismatches', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-replay-v2own-'));
+    try {
+      writeFileSync(join(d, 'ab-collision.json'), participantFile('a_b'));
+      writeFileSync(join(d, 'a_b-replay-1751600000000.json'),
+        JSON.stringify(recordingV2('a/b', 1751600000000)));   // belongs to 'a/b'
+      const { participants, warnings } = await ingest({
+        dataDir: d, filePattern: '*.json', singleParticipant: 'a_b',
+        integrityField: 'integrity', participantIdField: 'participantId',
+      });
+      assert.strictEqual(participants[0].replay, null,
+        'a v2 artifact recorded for a different participant must never attach');
+      assert.ok(warnings.some(w => String(w.warnings).match(/participant_id mismatch/i)));
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('verifies a v2 artifact by its own id rather than by filename luck', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-replay-v2ownok-'));
+    try {
+      writeFileSync(join(d, 'P10.json'), participantFile('P10'));
+      writeFileSync(join(d, 'P10-replay-1751600000000.json'),
+        JSON.stringify(recordingV2('P10', 1751600000000)));
+      const { participants, warnings } = await ingest({
+        dataDir: d, filePattern: '*.json', singleParticipant: 'P10',
+        integrityField: 'integrity', participantIdField: 'participantId',
+      });
+      assert.ok(participants[0].replay.recording, 'attached');
+      assert.ok(!warnings.some(w => String(w.warnings).match(/cannot verify ownership/i)),
+        'v2 carries the id at the top level — claiming it cannot be verified is false');
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('picks the latest v2 session by its own start time', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'ch-replay-v2latest-'));
+    try {
+      writeFileSync(join(d, 'P11.json'), participantFile('P11'));
+      // The filename epochs are INVERTED relative to the recordings' own
+      // start times, so the filename fallback picks the wrong one and only
+      // reading `recording_started_at` can pass. (A real CH artifact's
+      // filename epoch is derived from that field, so the two agree; this
+      // pair exists to prove which one is being read.)
+      writeFileSync(join(d, 'P11-replay-1751600000002.json'),
+        JSON.stringify(recordingV2('P11', 1751600000000)));   // older session
+      writeFileSync(join(d, 'P11-replay-1751600000001.json'),
+        JSON.stringify(recordingV2('P11', 1751600999999)));   // newer session
+      const { participants } = await ingest({
+        dataDir: d, filePattern: '*.json', singleParticipant: 'P11',
+        integrityField: 'integrity', participantIdField: 'participantId',
+      });
+      assert.strictEqual(participants[0].replay.recording.recording_started_at,
+        new Date(1751600999999).toISOString(), 'latest v2 session wins');
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
   it('warns that a v1 artifact is below the targeted version', async () => {
     const d = mkdtempSync(join(tmpdir(), 'ch-replay-v1warn-'));
     try {

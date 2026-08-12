@@ -254,7 +254,14 @@ function attachReplayArtifacts(participants, config, warnings) {
     // (e.g. plain #3661 recordings) attach with a soft warning.
     const owned = [];
     for (const cand of readable) {
-      const embedded = cand.recording.metadata?.participant_id;
+      // v2 carries the id at the TOP LEVEL; v1 carried it in `metadata`.
+      // Reading only the v1 site would send every v2 artifact down the
+      // ownerless branch, which verifies by filename alone — and a file
+      // recorded for 'a/b' but named for the sanitized 'a_b' would then
+      // attach to the wrong participant, which is the one case this check
+      // exists for.
+      const embedded = cand.recording.metadata?.participant_id
+        ?? cand.recording.participant_id;
       if (embedded == null) {
         // Ownerless artifacts skip id verification entirely, so the filename
         // must match EXACT-case (our recorder writes sanitize(pid) verbatim).
@@ -291,10 +298,16 @@ function attachReplayArtifacts(participants, config, warnings) {
       p.replay = null;
       continue;
     }
-    // Latest-session pick tolerates non-ISO start_time in third-party
-    // artifacts: ISO string → numeric epoch → the filename's own epoch.
+    // Latest-session pick tolerates non-ISO start times in third-party
+    // artifacts: v2's `recording_started_at` or v1's `metadata.start_time`,
+    // as an ISO string → a numeric epoch → the filename's own epoch. For a
+    // CH artifact the filename epoch is DERIVED from the same field
+    // (persistence.js), so the fallback agrees rather than guesses — but a
+    // producer that names files differently would have been ordered by
+    // whatever its filename happened to contain.
     const sessionEpoch = (cand) => {
-      const v = cand.recording.metadata?.start_time;
+      const v = cand.recording.metadata?.start_time
+        ?? cand.recording.recording_started_at;
       const n = typeof v === 'number' ? v : Date.parse(v);
       if (Number.isFinite(n)) return n;
       const m = cand.file.match(/-replay-(\d+)\.json/i);
