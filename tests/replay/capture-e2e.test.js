@@ -87,6 +87,8 @@ const PAGE = `
 
 let win;
 let saved;
+// Frames capture-trace will schedule onto. See `settle()`.
+let rafQueue = [];
 
 // The capture modules read the real globals (that is the browser contract);
 // the assembly passes them no environment. So the globals ARE the fixture.
@@ -97,23 +99,54 @@ function installWindow() {
     window: globalThis.window,
     document: globalThis.document,
     MutationObserver: globalThis.MutationObserver,
+    requestAnimationFrame: globalThis.requestAnimationFrame,
   };
   globalThis.window = win;
   globalThis.document = win.document;
   globalThis.MutationObserver = win.MutationObserver;
+  // OWNED FRAMES, not slept-through ones — see `settle()`. capture-trace picks
+  // this up through the same `typeof requestAnimationFrame` probe it uses in a
+  // browser (`capture-trace.js:113-115`), so nothing about the module under
+  // test changes; only who decides when a frame happens.
+  rafQueue = [];
+  globalThis.requestAnimationFrame = function (fn) { return rafQueue.push(fn); };
 }
 
 function restoreWindow() {
   globalThis.window = saved.window;
   globalThis.document = saved.document;
   globalThis.MutationObserver = saved.MutationObserver;
+  if (saved.requestAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+  else globalThis.requestAnimationFrame = saved.requestAnimationFrame;
+  rafQueue = [];
 }
 
-// capture-trace coalesces input and scroll through requestAnimationFrame,
-// which is absent in node and falls back to a 16 ms timer; the MutationObserver
-// delivers on its own schedule too. One await drains both.
-function settle() {
-  return new Promise((resolve) => setTimeout(resolve, 40));
+// capture-trace coalesces input, scroll, touch and viewport state through
+// `requestAnimationFrame`, and the MutationObserver delivers on its own
+// schedule. This used to be a fixed 40 ms sleep draining capture-trace's 16 ms
+// no-rAF FALLBACK plus that delivery — a wall-clock budget, and the only one in
+// the replay suite. `node --test` runs the suite's files in parallel, so on a
+// loaded machine 40 ms is a race rather than a margin, and it is the leading
+// candidate for the single unreproduced failure in T5.8's run. (T5.8 fix,
+// review M-7.)
+//
+// So the frames are OURS: `installWindow` gives the module a queueing
+// `requestAnimationFrame`, and this DRAINS it — repeatedly, because a flush can
+// push records that re-arm the next frame, so "empty once" is not "settled".
+// `setImmediate` sits after the microtask checkpoint AND after 0 ms timers, so
+// each pass also drains MutationObserver delivery. No clock is consulted.
+async function settle() {
+  let quiet = 0;
+  for (let i = 0; i < 50 && quiet < 2; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    if (rafQueue.length) {
+      const frames = rafQueue.splice(0);
+      frames.forEach((fn) => fn(0));
+      quiet = 0;
+    } else {
+      quiet++;
+    }
+  }
 }
 
 function fire(el, type, init) {

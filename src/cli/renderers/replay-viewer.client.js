@@ -886,12 +886,22 @@
       // The remaining three §6 fields. Nothing here changes the reconstruction:
       // they are read so the viewer can SAY what the participant's own view was
       // at this moment (see `camView`).
-      if (num(c.dpr) != null || num(c.vv_scale) != null) {
+      //
+      // Every field falls back to the PREVIOUS reading, symmetrically. §6's
+      // "complete blocks or none, no delta encoding" makes a partial block
+      // unreachable from a conforming producer, but this viewer plays foreign
+      // files by design, and an asymmetric fallback would let a block stating
+      // only `dpr` cancel a live pinch note while preserving the DPR one —
+      // inventing an end to a state the recording never said had ended. A
+      // field nobody has ever stated stays null/1/0. (T5.8 fix, review M-3.)
+      if (num(c.dpr) != null || num(c.vv_scale) != null ||
+          num(c.vv_offset_x) != null || num(c.vv_offset_y) != null) {
+        var prev = camView || { dpr: null, scale: 1, ox: 0, oy: 0 };
         camView = {
-          dpr: num(c.dpr) != null ? c.dpr : (camView ? camView.dpr : null),
-          scale: num(c.vv_scale) != null ? c.vv_scale : 1,
-          ox: num(c.vv_offset_x) || 0,
-          oy: num(c.vv_offset_y) || 0
+          dpr: num(c.dpr) != null ? c.dpr : prev.dpr,
+          scale: num(c.vv_scale) != null ? c.vv_scale : prev.scale,
+          ox: num(c.vv_offset_x) != null ? c.vv_offset_x : prev.ox,
+          oy: num(c.vv_offset_y) != null ? c.vv_offset_y : prev.oy
         };
       }
     }

@@ -319,13 +319,21 @@ function fmtMeasure(m) {
 //   'ok'      aligned within tolerance, every §8 comparison made
 //   'flagged' the recording and the reconstruction genuinely disagree, and the
 //             viewer must say so on all four surfaces
+// A flagged entry also carries `reason`, and that is not decoration: without it
+// the scenario asserts only that SOMETHING fired, so a future regression could
+// flag for an unrelated cause and keep the battery green while the documented
+// claim silently stops being tested. C1–C5 have carried a reason predicate
+// since they were written (`expectUncertain`'s `reasonRe`); these two now match.
+// `element-flick`'s Δ is a magnitude, deliberately: 200 px is the signature of
+// this exact capture gap (the scroller moves 180 → 380 inside the click's own
+// task), which is what distinguishes it from a generic geometry miss.
 const GRID = [
   { id: 'baseline', expect: 'ok', why: 'plain click, nothing hostile' },
   { id: 'flick-scroll', expect: 'ok', why: 'three scrollTo calls and the click in ONE task: not one scroll event has dispatched, so only the synchronous per-event camera read can place it' },
   { id: 'scrolled', expect: 'ok', why: 'settled window scroll' },
   { id: 'fixed', expect: 'ok', why: 'position:fixed target under a scrolled page' },
   { id: 'element-scroll', expect: 'ok', why: 'settled inner scroller (scroll.element replayed)' },
-  { id: 'element-flick', expect: 'flagged', why: 'inner scroll and the click in ONE task — capture has no synchronous element-scroll read, so the anchor rect describes a scroll state the stream places AFTER the click' },
+  { id: 'element-flick', expect: 'flagged', reason: /rect moved \(Δ 200px\)/, why: 'inner scroll and the click in ONE task — capture has no synchronous element-scroll read, so the anchor rect describes a scroll state the stream places AFTER the click' },
   { id: 'transform', expect: 'ok', why: 'translated container' },
   { id: 'rotated', expect: 'ok', why: 'rotate(30deg) — the rect is the axis-aligned bounding box on both sides' },
   { id: 'resize-debounce', expect: 'ok', why: 'click dispatched immediately after a viewport change, inside the coalescing window' },
@@ -336,7 +344,7 @@ const GRID = [
   { id: 'nested-forms', expect: 'ok', why: '<form> inside <form>: impossible from markup, carried by a node tree' },
   { id: 'redacted', expect: 'ok', why: 'a redacted anchor keeps node+rect and is CHECKABLE (§8) — strictly more than v1' },
   { id: 'dup-input', expect: 'ok', why: 'duplicate-id inputs: the value must restore into the second' },
-  { id: 'shadow', expect: 'flagged', why: 'the interaction retargeted to a shadow host whose content no recording can hold (§13)' },
+  { id: 'shadow', expect: 'flagged', reason: /shadow content not captured/, why: 'the interaction retargeted to a shadow host whose content no recording can hold (§13)' },
   { id: 'iframe-removed', expect: 'ok', why: 'iframe placeholder removed mid-span; the warning must stay LATCHED' },
 ];
 
@@ -448,13 +456,66 @@ async function recordZoom(browser) {
   return rec;
 }
 
+// ── pinch, FOR REAL: Chromium's own visual viewport, driven over CDP ────────
+// THE GEOMETRY WITNESS, and it has to be this rather than the stub below.
+// `Emulation.setPageScaleFactor` is Chromium's genuine pinch: it moves the
+// VISUAL viewport and nothing else. The stubbed scenario cannot evidence that,
+// because it changes no layout by construction — its checks would pass
+// identically in a world where real pinch DID move geometry, so it can neither
+// confirm nor disconfirm the claim the design rests on. (T5.8 fix, review I-1.)
+//
+// Chromium only: CDP is Chromium's protocol, and one engine is a sufficient
+// witness for a claim about what the CSSOM means by "client coordinates" — the
+// layout-viewport rule is the specification's, not an engine's.
+//
+// Returns the recording plus the before/after geometry probes, so the claim is
+// asserted from measurements taken IN THE PAGE while the pinch was live.
+async function recordRealPinch(browser) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  watchPage(page, 'record-real-pinch');
+  await page.goto(batteryPageUrl);
+  const cdp = await page.context().newCDPSession(page);
+  const probe = () => page.evaluate(() => {
+    const el = document.getElementById('t-base');
+    const r = el.getBoundingClientRect();
+    const vv = window.visualViewport;
+    return {
+      rect: { x: r.left, y: r.top, w: r.width, h: r.height },
+      clientW: document.documentElement.clientWidth,
+      innerW: window.innerWidth,
+      vv: vv ? { scale: vv.scale, w: Math.round(vv.width), h: Math.round(vv.height) } : null
+    };
+  });
+  await page.evaluate(() => window.BAT.start());
+  await page.evaluate(() => window.BAT.trial('real-pinch'));
+  const before = await probe();
+  await page.evaluate(() => window.BAT.clickAt('t-base'));       // 1×
+  await page.waitForTimeout(140);
+  await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 2.5 });
+  await page.waitForTimeout(200);
+  const during = await probe();
+  await page.evaluate(() => window.BAT.clickAt('t-base'));       // mid-pinch, same element
+  await page.waitForTimeout(140);
+  await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 });
+  await page.waitForTimeout(200);
+  const after = await probe();
+  const rec = await page.evaluate(() => window.BAT.finish());
+  await page.close();
+  return { rec, before, during, after };
+}
+
 // ── pinch: `visualViewport` (and a mid-segment DPR change) shadowed on window ──
-// DECLARED STUB, and the narrowest one available: `cameraBlock()` reads
-// `win.devicePixelRatio` and `win.visualViewport` live in each interaction's own
-// handler, so shadowing those two globals produces exactly the wire values a
-// pinched/zoomed participant produces. The layout, the rects and the client
-// coordinates are all real — and that is the point of the scenario, because
-// pinch zoom does NOT move client coordinates or `getBoundingClientRect`.
+// DECLARED STUB, and it pins something narrower than the part above: that the
+// ADVISORY is playhead-scoped, and that the wire values a pinched participant
+// produces are consumed correctly. It is not evidence about geometry — its
+// layout is untouched by construction — which is exactly why the real-pinch
+// part exists beside it. What it buys that CDP cannot: a mid-segment DPR change
+// and a non-zero `vv_offset_*`, neither of which
+// `Emulation.setPageScaleFactor` produces on its own, and both of which the
+// chip has to render. `cameraBlock()` reads `win.devicePixelRatio` and
+// `win.visualViewport` live in each interaction's own handler, so shadowing
+// those two globals produces exactly the wire values a pinched/zoomed
+// participant produces.
 async function recordPinch(browser) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   watchPage(page, 'record-pinch');
@@ -497,11 +558,18 @@ const spanKeyframeFor = (rec, model, label) => {
 // differ by several pixels between engines and these pins would be measuring
 // the UA stylesheet. Both spans are represented (0–9 and 10–17), so a
 // span-walk regression cannot hide in the second one.
+// TWO ROWS ARE TIGHT, and the file should say which before a rounding change
+// somewhere reads as a regression: firefox reports segment 1's rect y as 229
+// against the pinned 230, and segment 4's as 107 against 106. Both are inside
+// ±2 and both are marked below; every other row is byte-exact on all three
+// engines. (T5.8 fix, review M-5.)
 const PINS = [
   { segment: 0, tRel: 28.5, target: 't-base', label: 'segment 0 click #t-base (unscrolled, span 0 keyframe)',
     dot: [140, 97], rect: [117, 89, 45, 17] },
+  // TIGHT: firefox reads rect y 229 here, 1 px off the chromium/webkit 230.
   { segment: 1, tRel: 11.8, target: 't-flick', label: 'segment 1 click #t-flick (three scrollTo and the click in ONE task)',
     dot: [207, 239], rect: [173, 230, 68, 19] },
+  // TIGHT: firefox reads rect y 107 here, 1 px off the chromium/webkit 106.
   { segment: 4, tRel: 194.2, target: 't-inner', label: 'segment 4 click #t-inner (settled element scroller)',
     dot: [84, 115], rect: [61, 106, 45, 17] },
   { segment: 7, tRel: 160.7, target: 't-rot', label: 'segment 7 click #t-rot (rotate(30deg) container)',
@@ -601,6 +669,26 @@ async function runEngine(name) {
         `(dot ${m.dot ? Math.round(m.dot.x) + ',' + Math.round(m.dot.y) : 'none'} vs ${p.dot.join(',')}; ` +
         `rect ${m.target ? [m.target.x, m.target.y, m.target.w, m.target.h].map(Math.round).join(',') : 'none'} vs ${p.rect.join(',')})`);
     }
+    // Part A's ninth assertion, re-homed in DOM tier (T5.8 fix, review M-4):
+    // an interaction with NO element target still projects on-stage. Part A
+    // made it with a background click during its squeeze storm; the closest
+    // shape the frozen fixture carries is the un-anchored `mouse.move` in
+    // segment 9, whose own segment is the one whose viewport width changed.
+    // Part D makes the same claim in TRACE tier, which is where it lived until
+    // now — and trace tier has no reconstruction, so it could not stand in.
+    await selectSegment(page, 9);
+    const noTarget = await page.evaluate(() => window.__measure(361.8, null));
+    const expX = noTarget.cam.ox + 550 * noTarget.cam.k;
+    const expY = noTarget.cam.oy + 117 * noTarget.cam.k;
+    check(noTarget.dot && noTarget.dot.x >= 0 && noTarget.dot.x <= noTarget.stage.w &&
+      noTarget.dot.y >= 0 && noTarget.dot.y <= noTarget.stage.h,
+      `an interaction with no element target stays ON stage in DOM tier ` +
+      `(dot ${noTarget.dot ? Math.round(noTarget.dot.x) + ',' + Math.round(noTarget.dot.y) : 'none'} ` +
+      `in ${noTarget.stage.w}×${noTarget.stage.h})`);
+    check(noTarget.dot && Math.abs(noTarget.dot.x - expX) <= 1 && Math.abs(noTarget.dot.y - expY) <= 1,
+      `and lands at the letterboxed client point, with no re-projection ` +
+      `(vs ${Math.round(expX)},${Math.round(expY)})`);
+
     check(page.__watch.consoleErrors.length === 0,
       'no unwhitelisted console errors over the frozen fixture (' + (page.__watch.consoleErrors[0] || 'none') + ')');
     await page.close();
@@ -698,6 +786,9 @@ async function runEngine(name) {
         check(bad.length > 0,
           `"${spec.id}": the self-check FIRED (${bad.length}/${anchorChecks.length}) — ${spec.why}` +
           (bad.length ? ` [${bad[0].reasons.join('; ')}]` : ''));
+        check(bad.length > 0 && bad.every((c) => c.reasons.some((r) => spec.reason.test(r))),
+          `"${spec.id}": and it fired for the DOCUMENTED reason /${spec.reason.source}/ ` +
+          `(${JSON.stringify(bad.length ? bad[0].reasons : [])})`);
         check(s.chips.align != null && /⚠/.test(s.chips.align),
           `"${spec.id}": the header chip warns (${s.chips.align})`);
         check(s.glyph === 'uncertain',
@@ -760,10 +851,11 @@ async function runEngine(name) {
           `"${spec.id}": the chip names the redacted bucket (${s.chips.align})`);
       }
       if (spec.id === 'shadow') {
+        // The reason itself is asserted by the generic `spec.reason` predicate
+        // above; what is left here is the §13 CHIP, which is a different
+        // surface from the check's reason string.
         check(s.chips.shadow != null && /shadow/i.test(s.chips.shadow),
           `"${spec.id}": the shadow-content warning chip is shown`);
-        check(bad.every((c) => c.reasons.some((r) => /shadow/.test(r))),
-          `"${spec.id}": the reason names shadow content, not a geometry miss`);
       }
       if (spec.id === 'iframe-removed') {
         const gone = await page.evaluate(() => {
@@ -814,11 +906,23 @@ async function runEngine(name) {
     const t1 = target.t_end;
     r.viewport_changes = [];
     for (let i = 0; i < 240; i++) {
+      // The LAST entry carries a width nothing else in the recording states, so
+      // "the storm was consumed" is checkable directly rather than inferred
+      // from the alignment check that follows. `writes <= 6` alone is satisfied
+      // by a viewer that stopped sizing the iframe at all — and it measured 0
+      // on firefox and webkit, so the bound had no lower guard. (T5.8 fix,
+      // review M-6.) STORM_W also forces at least one real style write on every
+      // engine, since it differs from the box the segment opens with.
       r.viewport_changes.push({
-        w: 1000 + (i % 2 ? 100 : 0), h: 700, dpr: 1, scale: 1, offset_x: 0, offset_y: 0,
+        w: i === 239 ? 1234 : 1000 + (i % 2 ? 100 : 0),
+        h: 700, dpr: 1, scale: 1, offset_x: 0, offset_y: 0,
         t: Number((t0 + ((t1 - t0) * (i + 1)) / 242).toFixed(1))
       });
     }
+    const lastEventT = Math.max(...target.events.map((e) => e.t));
+    check(r.viewport_changes[239].t > lastEventT && r.viewport_changes[239].t < t1,
+      `the storm's distinctive final entry lands after the segment's last event and inside its window ` +
+      `(${r.viewport_changes[239].t} in (${lastEventT}, ${t1}))`);
     const m2 = buildViewerModel(r);
     check(m2.viewportChanges.length === 240, 'the storm recording carries 240 viewport changes');
     const page = await openHarness(browser, m2, 'storm');
@@ -839,10 +943,18 @@ async function runEngine(name) {
       return count;
     }, i);
     check(writes <= 6, `the storm folded (${writes} iframe style writes for 240 viewport changes)`);
+    // The lower guard, explicit on every engine: the fold has to have HAPPENED.
+    const cam = await page.evaluate(() => window.__dbg().getCamera());
+    check(cam.cw === 1234 && cam.w === 1234,
+      `and the storm was actually consumed — the applied camera ends at the last entry's own width ` +
+      `(cw ${cam.cw}, w ${cam.w}, expected 1234)`);
+    check(writes >= 1,
+      `which means at least one real style write happened (${writes}) — a viewer that stopped ` +
+      'sizing the iframe would satisfy the upper bound alone');
     await playToEnd(page, m2, i);
     const s = await readSegment(page);
     check(s.checks.length > 0 && s.checks.every((c) => c.status === 'ok'),
-      `the interaction after the storm is still aligned (${s.checks.length} checks)`);
+      `the interaction inside the storm is still aligned (${s.checks.length} checks)`);
     await page.close();
   }
 
@@ -937,7 +1049,54 @@ async function runEngine(name) {
     await page.close();
   }
 
-  console.log('▶ B-pinch — vv_scale / vv_offset_* non-unity, and a mid-segment DPR change');
+  // ── B-pinch-real — the geometry claim's actual witness ────────────────────
+  console.log('▶ B-pinch-real — a REAL Chromium pinch (CDP Emulation.setPageScaleFactor)');
+  if (name !== 'chromium') {
+    console.log('      · SKIPPED on ' + name + ': CDP is Chromium\'s protocol. The claim is about ' +
+      'the CSSOM\'s layout-viewport rule, so one engine is a sufficient witness.');
+  } else {
+    const { rec: prec, before, during, after } = await recordRealPinch(browser);
+    const same = (a, b) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+
+    // 1. the pinch really happened, in the page's own reading of itself
+    check(before.vv.scale === 1 && during.vv.scale === 2.5 && after.vv.scale === 1,
+      `visualViewport.scale went 1 → 2.5 → 1 for real (${before.vv.scale}/${during.vv.scale}/${after.vv.scale})`);
+    check(Math.abs(during.vv.w - before.vv.w / 2.5) <= 2,
+      `and the visual viewport shrank by the scale factor (${before.vv.w} → ${during.vv.w} css px)`);
+
+    // 2. ...and moved NOTHING the five §8 predicates read. This is the claim.
+    check(same(during.rect, before.rect) && same(after.rect, before.rect),
+      `getBoundingClientRect is unmoved by a real 2.5× pinch ` +
+      `(${JSON.stringify(before.rect)} vs ${JSON.stringify(during.rect)})`);
+    check(during.clientW === before.clientW && during.innerW === before.innerW,
+      `the LAYOUT viewport is unmoved too (clientWidth ${before.clientW} → ${during.clientW})`);
+
+    // 3. and the recording says the same, from capture's own live reads
+    const clicks = segOf(prec, 'real-pinch').events.filter((e) => e.type === 'mouse.click' && e.anchor);
+    check(clicks.length === 2, `two anchored clicks on the same element, 1× and 2.5× (${clicks.length})`);
+    check(clicks.length === 2 && clicks[0].camera.vv_scale === 1 && clicks[1].camera.vv_scale === 2.5,
+      'the wire carries the REAL vv_scale — capture read the live API, no stub involved');
+    check(clicks.length === 2 && clicks[0].x === clicks[1].x && clicks[0].y === clicks[1].y,
+      `both clicks report the SAME client point across the pinch (${clicks[0] && clicks[0].x},${clicks[0] && clicks[0].y})`);
+    check(clicks.length === 2 && same(clicks[0].anchor.rect, clicks[1].anchor.rect),
+      `and the SAME anchor.rect (${JSON.stringify(clicks[0] && clicks[0].anchor.rect)})`);
+
+    // 4. therefore the predicates are correct without reading the three fields,
+    //    which is the design §8 amendment's whole content — now measured over a
+    //    genuine pinch rather than over a stub that could not have failed.
+    const m2 = buildViewerModel(prec);
+    const page = await openHarness(browser, m2, 'pinch-real');
+    await playToEnd(page, m2, 0);
+    const s = await readSegment(page);
+    check(s.checks.length === 6 && s.checks.every((c) => c.status === 'ok'),
+      `every interaction aligns across a REAL pinch (${s.checks.length} checks` +
+      (s.checks.some((c) => c.status !== 'ok') ? '; ' + JSON.stringify(s.checks.find((c) => c.status !== 'ok').reasons) : '') + ')');
+    check(s.chips.zoom != null && /2\.5/.test(s.chips.zoom),
+      `and the advisory still names the state the participant was in (${s.chips.zoom})`);
+    await page.close();
+  }
+
+  console.log('▶ B-pinch — the advisory is playhead-scoped (stubbed vv_offset_* and a mid-segment DPR change)');
   {
     const prec = await recordPinch(browser);
     const evs = segOf(prec, 'pinched').events.filter((e) => e.anchor && e.type === 'mouse.down');
@@ -953,14 +1112,15 @@ async function runEngine(name) {
 
     const m2 = buildViewerModel(prec);
     const page = await openHarness(browser, m2, 'pinch');
-    // GEOMETRY FIRST: pinch zoom moves neither client coordinates nor
-    // getBoundingClientRect (both are layout-viewport relative), so the five
-    // §8 predicates must pass unchanged. That is the evidence that these three
-    // fields are NOT an alignment input.
+    // Nothing here is evidence about geometry — the stub touches no layout, so
+    // these nine checks would pass whatever real pinch did. They pin the weaker
+    // and still necessary thing: a recording carrying non-unity `vv_*`/`dpr` is
+    // not itself a reason to doubt the reconstruction. B-pinch-real above is
+    // where the geometry claim is measured. (T5.8 fix, review I-1.)
     await playToEnd(page, m2, 0);
     const end = await readSegment(page);
     check(end.checks.length === 9 && end.checks.every((c) => c.status === 'ok'),
-      `every interaction aligns across the pinch (${end.checks.length} checks) — pinch does not move client coordinates`);
+      `non-unity vv_*/dpr on the wire does not by itself make a check uncertain (${end.checks.length} checks)`);
 
     // ...AND THEN THE ADVISORY, which is what they ARE for. The chip is
     // playhead-scoped: silent before the pinch, naming the state during it,

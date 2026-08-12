@@ -36,7 +36,7 @@ redaction variants in `tests/replay/alignment-capture.test.js` and
 client-box chain and `foreign` classification in
 `tests/replay/alignment-viewer-model.test.js`.
 
-## Where part A's claims went (design §12) — all four landed at Task 8
+## Where part A's claims went (design §12) — four landed, one gap declared
 
 - *"the cursor lands inside its target across scroll, sidebar squeeze and a
   resize storm"* → the revived part B synthetic grid, with real §6 anchors and
@@ -64,6 +64,24 @@ client-box chain and `foreign` classification in
   engines (which is why the battery page's targets are `box-sizing:
   border-box`: a UA-default `<button>` is a different box per engine, and the
   pins would be measuring the UA stylesheet).
+
+**Two of part A's claims are NOT inherited whole, and the loss is declared
+rather than implied** (T5.8 fix round, review M-4):
+
+- *coordinate #2, `trial0 selection end #copy-source`* — a **selection**-
+  terminating interaction. There is no selection scenario among the 18. Half of
+  what it carried is inherited 54 times over (it was an anchored `mouse.up`,
+  and every scenario asserts down/up/click); what is genuinely absent is a
+  selection, and adding one means re-recording the frozen fixture and re-reading
+  all six pins by hand, which is not a fix-round change. Capture-side selection
+  and clipboard behaviour is covered in `tests/replay/capture-trace.test.js`.
+- *part A's ninth assertion, a background click with NO element target still
+  landing on stage* — **now inherited**, after initially surviving only in part
+  D (trace tier, which has no reconstruction and so could not stand in for the
+  DOM-tier claim). Part P asserts it against the frozen fixture's un-anchored
+  `mouse.move` in segment 9, the segment whose viewport width changed: the dot
+  stays inside the stage box and lands at the letterboxed client point with no
+  re-projection.
 
 Deliberately **not** done: vendoring frozen 0.7.x copies of `viewer-model.js`
 and `replay-viewer.client.js` so part A keeps running. A frozen viewer, a

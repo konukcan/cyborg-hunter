@@ -1437,3 +1437,43 @@ describe('T5.8 — a placeholder removed at tRel 0 still latches its chip', () =
       'and the warning is still there — the interactions inside it are still invisible');
   });
 });
+
+// ── the view-state fallback is symmetric (T5.8 fix, review M-3) ────────────
+describe('T5.8 fix — a partial camera block cannot cancel half the view state', () => {
+  it('inherits vv_scale the same way it inherits dpr', () => {
+    // §6 says complete blocks or none, so this is a FOREIGN-file shape — and
+    // the viewer plays foreign files by design. With an asymmetric fallback
+    // (dpr inheriting, scale hard-resetting to 1) the second event below ends
+    // the pinch note while keeping the DPR one, i.e. invents an end to a state
+    // the recording never said had ended.
+    const cam = (over) => Object.assign({
+      scroll_x: 0, scroll_y: 0, viewport_w: 1000, viewport_h: 800,
+      client_w: 1000, client_h: 800, dpr: 1, vv_scale: 1, vv_offset_x: 0, vv_offset_y: 0,
+    }, over);
+    const rec = baseRecording({
+      recorder: { name: 'some-other-recorder', version: '1.0.0' },
+      segments: [segment({
+        t_end: 1000,
+        initial_dom: bodyKeyframe([
+          { id: 2, kind: 'element', tag: 'button', attrs: { id: 'b' }, children: [] },
+        ]),
+        events: [
+          { type: 'mouse.click', t: 100, x: 5, y: 5, button: 0, target: 2,
+            camera: cam({ dpr: 3, vv_scale: 2.5, vv_offset_x: 120, vv_offset_y: 64 }) },
+          // Partial: states dpr, says nothing about the visual viewport.
+          { type: 'mouse.click', t: 300, x: 5, y: 5, button: 0, target: 2,
+            camera: { scroll_x: 0, scroll_y: 0, dpr: 3 } },
+        ],
+      })],
+    });
+    const v = boot(rec);
+    v.dbg.seek(150);
+    assert.equal(v.chip('data-ch-zoom-note').style.display, '');
+    v.dbg.seek(350);
+    assert.equal(v.chip('data-ch-zoom-note').style.display, '',
+      'the pinch note survives a block that says nothing about the visual viewport');
+    assert.match(v.chip('data-ch-zoom-note').textContent, /2\.5×/);
+    assert.match(v.chip('data-ch-zoom-note').textContent, /120,64/);
+    assert.equal(v.chip('data-ch-dpr-note').style.display, '');
+  });
+});
