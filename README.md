@@ -79,7 +79,46 @@ timeline.forEach(t => t.extensions = (t.extensions || []).concat([
 jsPsych.run(timeline);
 ```
 
-`participantId` must exist before `initJsPsych`. Full walk-through (per-trial params, standalone non-jsPsych use, opt-in/exclude modes): [docs/using-cyborg-hunter.md](docs/using-cyborg-hunter.md).
+`participantId` must exist before `initJsPsych`.
+
+### Warning: Finalize before anything snapshots the data
+
+`finalize()` is what writes the session-level signals — and the honeypot's
+`ai_use` / `ai_report` columns — into the jsPsych data object. Any code that
+reads the data before that point ships per-trial rows but will fail to include the session block.
+
+If you save from a **timeline trial**
+instead, such as using DataPipe, then
+`initJsPsych({ on_finish })` fires **after** the whole timeline, including the
+save trial failing to record session data.
+
+Move the `finalize()` calls into the `on_finish` of the last real trial
+*before* the save trial:
+
+```javascript
+const postSurvey = {
+type: jsPsychSurveyHtmlForm,
+html: getPostExperimentSurveyHTML(),
+on_finish: function () {
+jsPsych.extensions['guard-friction'].finalize();   // stop friction first
+jsPsych.extensions['guard-honeypot'].finalize();   // then attach data
+jsPsych.extensions['cyborg-hunter'].finalize();    // then the session block
+jsPsych.data.addProperties({ experiment_end: Date.now() });
+}
+};
+timeline.push(postSurvey);
+
+timeline.push({
+type: jsPsychPipe,
+action: 'save',
+experiment_id: EXPERIMENT_ID,
+filename: filename,
+data_string: () =jsPsych.data.get().csv(),   // now includes the session block
+});
+```
+
+
+Full walk-through (per-trial params, standalone non-jsPsych use, opt-in/exclude modes): [docs/using-cyborg-hunter.md](docs/using-cyborg-hunter.md).
 
 ## Generate a report
 
