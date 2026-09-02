@@ -11,10 +11,10 @@
 //
 // THE INVARIANT THIS FILE IS SUBORDINATE TO. The viewer must never become CH's
 // conformance definition. No expected value here was read off CH's viewer:
-// canonical-core's four were authored in the FORK (commit 66d45b5) before CH
+// canonical-core's four were authored in the FORK (commit 8be0ef5) before CH
 // had an executor at all, and jspsych-full's ten were authored from the
 // recording's own payloads and executed by the fork's player first (fork commit
-// 7dd9ee5; evidence in
+// d49e4b0; evidence in
 // `.superpowers/sdd/2026-08-11-t5-a2-viewer-migration/task-7a-crosscheck.md`).
 // A value CH's viewer and the fork disagree on is escalated, never adjusted.
 //
@@ -378,7 +378,7 @@ test('no authored checkpoint depends on the 0.1 ms quantisation for its placemen
 
 test('canonical-core carries the four checkpoints the fork executes, verbatim', () => {
   // Mirrored from jspsych-replay-fork `tests/checkpoints.test.ts` (CHECKPOINTS,
-  // landed there in commit 66d45b5 BEFORE CH had an executor). The pin is
+  // landed there in commit 8be0ef5 BEFORE CH had an executor). The pin is
   // one-directional in the same way the fork's fixture checksum is: an edit
   // here fails immediately, an edit there stays green until someone re-reads
   // this file. It is what makes "the same four the fork executes" a machine

@@ -6,7 +6,7 @@
 // and there is no v2 → v1 direction.
 //
 // v1 source of truth: the fork's pre-flip `src/schema/types.ts`
-//   git -C <jspsych-replay-fork> show ed4bc08~1:src/schema/types.ts
+//   git -C <jspsych-replay-fork> show 06dfa08~1:src/schema/types.ts
 // itself copied from jspsych/jsPsych packages/jspsych/src/modules/recording.ts.
 // The key tables below are that interface, transcribed. They are the whole
 // shape contract: a recording whose top-level or per-trial key set differs from
@@ -71,7 +71,7 @@ const V1_TRIAL_KEYS = [
 ];
 
 // The ONLY concession to v1 history, mirroring the v1 reference validator
-// (fork ed4bc08~1:src/schema/types.ts:219-224, "stylesheet fields were added
+// (fork 06dfa08~1:src/schema/types.ts:219-224, "stylesheet fields were added
 // later. Default to empty arrays so older recordings still load") — and those
 // are its only two backfills, so this is a bounded concession, not the top of a
 // slope. These two fields postdate the rest of the shape, so ABSENCE means the

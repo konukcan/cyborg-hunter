@@ -14,7 +14,7 @@
 // the id map, like the fork does, so a patch naming a purged descendant is
 // caught rather than resolved against a detached node.
 //
-// FAITHFUL TO: jspsych-replay-fork @ 43398c7. "Faithful" means the patch
+// FAITHFUL TO: jspsych-replay-fork @ be34fe5. "Faithful" means the patch
 // vocabulary and the id-map lifetime, not the code — this one is stricter on
 // purpose. Where the two genuinely disagreed, the fork was behind: this player
 // tolerated §4 exclusion placeholders (`attrs || {}` / `children || []`) from
