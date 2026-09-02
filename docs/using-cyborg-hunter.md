@@ -287,6 +287,14 @@ rec.destroy();
 - Clipboard events record lengths only. Paste/drop **content** capture
   remains governed by CH-core's `collectForPostHoc.pasteDropContent`,
   never by the replay stream.
+- Raw mouse coordinates (`mouseTrack`, the per-sample {x, y, t} trace the
+  report's trajectory panels draw) are recorded **by default** by the core
+  monitor. Adding CH to an experiment is the decision to collect behavioural
+  traces, so the default matches that decision; set
+  `collectForPostHoc: { rawMouseTrack: false }` in the core config if your
+  protocol allows only the derived `mouseMetrics`. (Before 2026-09-02 this
+  was off by default, and reports showed "no mouse data" for everyone who
+  had not found the toggle.)
 
 ### Data volume and delivery
 
@@ -439,7 +447,9 @@ Unknown flags now exit with an error rather than silently falling back to the co
 
 ## Common pitfalls
 
-**Mouse markers / tab-aways missing on trajectory plots.** Hard-reload the browser (Cmd+Shift+R on Mac) the first time after deploying — Chrome aggressively caches the dist files, and an old version will silently miss new fields.
+**Mouse markers / tab-aways missing on trajectory plots.** Hard-reload the browser (Cmd+Shift+R on Mac) the first time after deploying — Chrome aggressively caches the dist files, and an old version will silently miss new fields. If the panels say "no mouse data" on every trial, check that `collectForPostHoc.rawMouseTrack` is not set to `false` (it is on by default since 2026-09-02; older configs may still switch it off).
+
+**Testing `autoSave.mode: 'download'` locally: the replay file never arrives.** In download mode the experiment ends by triggering two downloads back to back — the replay artifact and then the jsPsych CSV — with no fresh click in between. Chrome (and Chromium-based embedded browsers such as VS Code's Simple Browser or Electron webviews) treat a page's second automatic download as suspicious and block it, sometimes silently. For a local run-through, use Firefox or Safari, or allow "Automatic downloads" for your localhost origin in Chrome's site settings, and then confirm both files landed. This is a local-testing artifact only: `datapipe` mode uploads the artifact over the network and never asks the browser to download anything, so production runs are unaffected.
 
 **"on_start is not a function" crash mid-experiment.** You're on a pre-0.3.0 version of the wrapper. Update — `on_start` was added in 0.3.0.
 

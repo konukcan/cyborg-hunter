@@ -84,7 +84,7 @@ function dispatchMove(x, y) {
 }
 
 describe('rawMouseTrack privacy gate (A8)', () => {
-  it('default config: trial report carries NO raw mouse track field', () => {
+  it('default config: trial report carries the raw mouse track under `mouseTrack` (on by default since 2026-09-02)', () => {
     monitor = init({ participantId: 'P1', thresholds: { mouseThrottleMs: 0 } });
     monitor.startSession();
     monitor.startTrial({ trialId: 't1' });
@@ -93,10 +93,24 @@ describe('rawMouseTrack privacy gate (A8)', () => {
     dispatchMove(15, 25);
     const report = monitor.endTrial();
 
-    assert.equal(report.mouseTrack, undefined, 'mouseTrack must be absent by default');
+    assert.ok(Array.isArray(report.mouseTrack), 'mouseTrack must be present by default');
     assert.equal(report.mouseEvents, undefined, 'mouseEvents must be absent by default');
     // The derived signal still works — only the raw trace is gated.
     assert.ok(report.mouseMetrics, 'mouseMetrics (derived) must still be computed');
+  });
+
+  it('collectForPostHoc.rawMouseTrack: false drops the raw track and keeps the derived metrics', () => {
+    monitor = init({ participantId: 'P1', thresholds: { mouseThrottleMs: 0 },
+      collectForPostHoc: { rawMouseTrack: false } });
+    monitor.startSession();
+    monitor.startTrial({ trialId: 't1' });
+    dispatchMove(10, 10);
+    dispatchMove(20, 20);
+    dispatchMove(30, 30);
+    const report = monitor.endTrial();
+    assert.equal(report.mouseTrack, undefined, 'explicit opt-out: no raw track');
+    assert.equal(report.mouseEvents, undefined, 'raw field never leaks under its internal name');
+    assert.ok(report.mouseMetrics, 'derived metrics still computed');
   });
 
   it('collectForPostHoc.rawMouseTrack: true persists the raw track under `mouseTrack`', () => {

@@ -64,7 +64,7 @@ export function init(userConfig) {
     }, userConfig.domProtection || {}),
     collectForPostHoc: Object.assign({
       fullKeystrokeTimestamps: false,
-      rawMouseTrack: false,
+      rawMouseTrack: true,   // see the privacy note at endTrial (flipped on 2026-09-02)
       responseText: false,
       windowPositionLog: true,
       elementTrace: false,
@@ -378,18 +378,17 @@ export function init(userConfig) {
         report.mouseMetrics = mouseMetrics;
       }
 
-      // Privacy gate: the raw per-sample mouse coordinates are a much
-      // higher-resolution behavioral trace than the derived mouseMetrics
-      // above. Persist them ONLY when explicitly enabled
-      // (collectForPostHoc.rawMouseTrack) — under the `mouseTrack` name,
-      // which is what extract-core's field map already expects (mouseTrack →
-      // mouseEvents), so a saved report round-trips through
-      // extractIntegrityData() without new glue. Otherwise drop the raw
-      // report.mouseEvents entirely — the mouseMetrics signal above still
-      // works, but the {x,y,t,type} samples never leave the browser. Before
-      // this gate, deepCopy(trialData) put the full raw track in every
-      // report regardless of the documented off-by-default rawMouseTrack
-      // toggle.
+      // Raw per-sample mouse coordinates persist under `mouseTrack` (the
+      // name extract-core's field map expects: mouseTrack → mouseEvents, so a
+      // saved report round-trips through extractIntegrityData() without new
+      // glue) unless collectForPostHoc.rawMouseTrack is set false, in which
+      // case only the derived mouseMetrics above ship and the {x,y,t,type}
+      // samples never leave the browser. ON by default since 2026-09-02: a
+      // researcher who adds CH to an experiment has already adjudicated
+      // collecting behavioural traces, and an off-by-default gate made the
+      // report's trajectory panels read "no mouse data" for everyone who
+      // never found the toggle (found by CK on the bench harness). The
+      // toggle stays for protocols that need less.
       if (config.collectForPostHoc.rawMouseTrack) {
         report.mouseTrack = report.mouseEvents;
       }

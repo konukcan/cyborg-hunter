@@ -3,6 +3,37 @@
 All notable changes to **cyborg-hunter** are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Changed
+- `collectForPostHoc.rawMouseTrack` now defaults to **true**: the raw mouse
+  track (`mouseTrack`) ships in every trial report, so the CLI's trajectory
+  panels are populated out of the box. Set it to `false` to keep only the
+  derived `mouseMetrics`. Rationale: adding CH to an experiment is already
+  the decision to collect behavioural traces, and the off-by-default gate
+  made the panels read "no mouse data" for anyone who never found the
+  toggle.
+- The SessionRecording v2 validator moved from the test tree into shipped
+  code (`src/shared/schema-v2-validator.js`); the converter CLI no longer
+  needs a repo checkout to strict-validate its output.
+
+### Fixed
+- Replay ingest (A3 review round): foreign v2 artifacts whose filename
+  happens to match CH's `-replay-<epoch>` pattern no longer vanish; jsPsych
+  v1 recordings are recognised by `schema_version`, so malformed ones reach
+  the converter's remedy message; gzip is detected by magic bytes as well
+  as suffix; unreadable candidates in an explicit `replayDir` are reported;
+  converted recordings are strict-validated in memory and attach with a
+  warning naming the malformed fields; converter exceptions that are not
+  declared refusals are reported as internal failures instead of being
+  blamed on the file.
+
+### Docs
+- Local testing in `autoSave.mode: 'download'`: Chromium-based browsers
+  block the second automatic download (the CSV after the replay, or vice
+  versa); use Firefox/Safari or allow automatic downloads for localhost.
+  Remote (`datapipe`) saves are unaffected.
+
 ## [0.7.5] — 2026-08-05
 
 ### Added

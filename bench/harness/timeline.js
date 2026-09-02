@@ -92,6 +92,13 @@ if (guards === 'friction' || guards === 'full') {
 if (guards === 'full') {
   sessionExtensions.push({ type: jsPsychGuardHoneypot });
 }
+// Session replay rides along in every configuration. autoSave 'download'
+// hands the participant (here: whoever runs the bench) the v2 artifact as a
+// file next to the CSV — piloting mode; production uses 'datapipe'.
+sessionExtensions.push({
+  type: jsPsychCyborgHunterReplay,
+  params: { participantId: runId, tier: 'dom', autoSave: { mode: 'download' } },
+});
 
 const jsPsych = initJsPsych({
   extensions: sessionExtensions,
@@ -100,6 +107,9 @@ const jsPsych = initJsPsych({
     if (jsPsych.extensions['guard-friction']) jsPsych.extensions['guard-friction'].finalize();
     if (jsPsych.extensions['guard-honeypot']) jsPsych.extensions['guard-honeypot'].finalize();
     jsPsych.extensions['cyborg-hunter'].finalize();
+    // Replay finalizes LAST so it folds CH's finalized session report into the
+    // recording, and BEFORE the save so integrityReplayMeta lands in the CSV.
+    await jsPsych.extensions['cyborg-hunter-replay'].finalize();
     jsPsych.data.get().localSave('csv', `${runId}-ch.csv`);
     showFinishScreen();
     // DEPLOY: ON_FINISH_BLOCK_END
