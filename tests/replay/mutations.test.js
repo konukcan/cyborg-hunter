@@ -15,7 +15,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Window } from 'happy-dom';
 
-import { validateStrict } from './schema-v2/validator.js';
+import { validateStrict } from '../../src/shared/schema-v2-validator.js';
 import { createPlayer } from './support/dom-player.js';
 import { mapMutations, MUTATION_OBSERVER_INIT } from '../../src/replay/mutations.js';
 import { serializeTree, nearestEmittedAncestor } from '../../src/replay/snapshot.js';

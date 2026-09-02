@@ -4,7 +4,7 @@ import { gzipSync } from 'node:zlib';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectGzip, validateTolerant, validateStrict } from './validator.js';
+import { detectGzip, validateTolerant, validateStrict } from '../../../src/shared/schema-v2-validator.js';
 
 test('detectGzip: true for gzipped bytes, false for JSON text and short input', () => {
   const gz = gzipSync(Buffer.from('{"schema_version":2}'));

@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import { Window } from 'happy-dom';
 
 import * as CHReplay from '../../src/replay/index.js';
-import { validateStrict } from './schema-v2/validator.js';
+import { validateStrict } from '../../src/shared/schema-v2-validator.js';
 import { createPlayer } from './support/dom-player.js';
 
 // ONE SENTINEL PER CHANNEL. Spec §8 names the channels it closes — initial_dom

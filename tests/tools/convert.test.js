@@ -21,7 +21,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { convertRecording, CONVERTER_VERSION } from '../../tools/convert/jspsych-v1-to-v2.mjs';
-import { validateStrict } from '../replay/schema-v2/validator.js';
+import { validateStrict } from '../../src/shared/schema-v2-validator.js';
 
 const TOOL = 'tools/convert/jspsych-v1-to-v2.mjs';
 const V1_PATH = 'tests/tools/fixtures/jspsych-v1-minimal.json';

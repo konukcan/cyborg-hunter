@@ -2,13 +2,13 @@
 // Replay sibling-artifact ingest: discovery, gz, corruption, collisions,
 // download-only warning, and exclusion from the participant file pass.
 
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { gzipSync } from 'zlib';
-import { ingest } from '../../src/cli/ingest.js';
+import { ingest, migrateArtifact } from '../../src/cli/ingest.js';
 import { buildViewerModel } from '../../src/replay/viewer-model.js';
 
 function participantFile(pid, replayMeta) {
@@ -816,5 +816,92 @@ describe('replay ingest — jsPsych v1 by conversion (A3)', () => {
     const path = imported[1].replace('../../', '');
     assert.ok(pkg.files.some(f => path === f || path.startsWith(f)),
       `package.json "files" must cover ${path}; got ${JSON.stringify(pkg.files)}`);
+  });
+});
+
+// ── A3 external-review fix round (2026-09-02) ──────────────────────────────
+// Seven findings from the Codex review of the A3 diff, each reproduced against
+// the real ingest() before a line of the fix was written. Numbering follows
+// the review; 5 (report-surface visibility of refusals) is a follow-up, not
+// fixed here.
+describe('A3 review fixes', () => {
+  let dir;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'ch-a3-fix-')); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+  const config = (extra = {}) => ({
+    dataDir: dir, filePattern: '*.json',
+    integrityField: 'integrity', participantIdField: 'participantId', ...extra,
+  });
+  const jsV1 = () => JSON.parse(readFileSync(
+    new URL('../tools/fixtures/jspsych-v1-minimal.json', import.meta.url), 'utf8'));
+  const warningTexts = (warnings) => warnings.flatMap(w => w.warnings.map(String));
+
+  it('1: a foreign v2 artifact named like CH\'s pattern still attaches by embedded id', async () => {
+    writeFileSync(join(dir, 'P1.json'), participantFile('P1'));
+    // Name shape matches REPLAY_FILE_RE but the prefix is no participant.
+    writeFileSync(join(dir, 'download-replay-1751600000000.json'),
+      JSON.stringify(recordingV2('P1', 1751600000000)));
+    const { participants, warnings } = await ingest(config());
+    assert.strictEqual(participants.length, 1);
+    assert.ok(participants[0].replay && participants[0].replay.recording,
+      'the artifact names P1 inside; it must attach, not vanish: ' + JSON.stringify(warningTexts(warnings)));
+    assert.strictEqual(participants[0].replay.recording.schema_version, 2);
+  });
+
+  it('2: jsPsych v1 is recognised by schema_version, so a malformed trial reaches the converter\'s remedy', async () => {
+    writeFileSync(join(dir, 'P2.json'), participantFile('P2'));
+    const r = jsV1(); delete r.trials[0].initial_dom;      // converter refuses this with a remedy
+    writeFileSync(join(dir, 'P2-replay-1751600000000.json'), JSON.stringify(r));
+    const { participants, warnings } = await ingest(config());
+    assert.strictEqual(participants.length, 1, 'must not be mistaken for a participant file');
+    assert.ok(warningTexts(warnings).some(t => /could not be converted/.test(t)),
+      'the converter\'s refusal must reach the analyst: ' + JSON.stringify(warningTexts(warnings)));
+  });
+
+  it('2b: a jsPsych v1 recording with no trials is still a recording', async () => {
+    writeFileSync(join(dir, 'P3.json'), participantFile('P3'));
+    const r = jsV1(); r.trials = [];
+    writeFileSync(join(dir, 'P3-replay-1751600000000.json'), JSON.stringify(r));
+    const { participants } = await ingest(config());
+    assert.strictEqual(participants.length, 1);
+    assert.ok(participants[0].replay && participants[0].replay.converted, 'converted (zero segments), not ignored');
+  });
+
+  it('3: an unreadable candidate in an explicit replayDir is reported, not skipped', async () => {
+    const rdir = mkdtempSync(join(tmpdir(), 'ch-a3-replaydir-'));
+    try {
+      writeFileSync(join(dir, 'P4.json'), participantFile('P4'));
+      writeFileSync(join(rdir, 'session.json.gz'), Buffer.from('not gzip at all'));
+      const { warnings } = await ingest(config({ replayDir: rdir }));
+      assert.ok(warningTexts(warnings).some(t => t.includes('session.json.gz')),
+        'the corrupt file in replayDir must be named: ' + JSON.stringify(warningTexts(warnings)));
+    } finally { rmSync(rdir, { recursive: true, force: true }); }
+  });
+
+  it('4: gzip bytes under a .json name are decoded by magic bytes', async () => {
+    writeFileSync(join(dir, 'P5.json'), participantFile('P5'));
+    writeFileSync(join(dir, 'P5-replay-1751600000000.json'),
+      gzipSync(JSON.stringify(recording('P5', 1751600000000))));
+    const { participants, warnings } = await ingest(config());
+    assert.ok(participants[0].replay && participants[0].replay.recording,
+      'valid gzip must load regardless of suffix: ' + JSON.stringify(warningTexts(warnings)));
+    assert.ok(!warningTexts(warnings).some(t => /unreadable|could not be parsed/.test(t)));
+  });
+
+  it('6 (A2): a converted recording that fails strict validation attaches WITH a warning naming the field', async () => {
+    writeFileSync(join(dir, 'P6.json'), participantFile('P6'));
+    const r = jsV1(); r.stylesheets = {};
+    writeFileSync(join(dir, 'P6-replay-1751600000000.json'), JSON.stringify(r));
+    const { participants, warnings } = await ingest(config());
+    assert.ok(participants[0].replay && participants[0].replay.converted, 'A2: attach, never refuse');
+    assert.ok(warningTexts(warnings).some(t => /strict/.test(t) && /stylesheets must be an array/.test(t)),
+      'the strict error must be surfaced: ' + JSON.stringify(warningTexts(warnings)));
+  });
+
+  it('7: an exception the converter did not declare as a refusal is an internal failure, not blamed on the file', () => {
+    const boom = () => { throw new TypeError('cannot read properties of undefined'); };
+    const out = migrateArtifact({ schema_version: 1, trials: [] }, 'jspsych-v1', boom);
+    assert.strictEqual(out.refusal, undefined, 'a TypeError is not a refusal');
+    assert.ok(out.internal && /cannot read properties/.test(out.internal), JSON.stringify(out));
   });
 });

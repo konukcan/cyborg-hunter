@@ -43,7 +43,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const VALIDATOR_SPECIFIER = '../../tests/replay/schema-v2/validator.js';
+const VALIDATOR_SPECIFIER = '../../src/shared/schema-v2-validator.js';
 
 // Stamped into every converted file. Bump it deliberately: the goldens carry
 // this string, so a bump fails the golden tests until they are regenerated,
@@ -402,7 +402,7 @@ async function main(argv) {
   } catch (e) {
     die(
       `${CONVERTER_TOOL}: cannot load the schema-v2 validator (${VALIDATOR_SPECIFIER}): ` +
-      `${e.message}\nThe CLI needs a full repo checkout because it strict-validates its ` +
+      `${e.message}\nThe CLI strict-validates its ` +
       `own output; the exported convertRecording() has no such dependency.`
     );
   }

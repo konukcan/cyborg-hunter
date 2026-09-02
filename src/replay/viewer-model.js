@@ -22,7 +22,7 @@
 // Spec §11, tolerant loader profile. Reject ONLY these four categories;
 // everything else loads with a warning-free documented default. Rationale:
 // recordings are unrepeatable participant data, so rejection at runtime is
-// data loss — strictness lives in CI (tests/replay/schema-v2/validator.js),
+// data loss — strictness lives in CI (src/shared/schema-v2-validator.js),
 // where it hits a developer instead of an analyst. The reason strings mirror
 // that validator's tolerant profile verbatim so the repo holds ONE reading of
 // the profile rather than two that can drift.

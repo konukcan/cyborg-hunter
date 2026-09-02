@@ -15,7 +15,7 @@ import { readFileSync } from 'fs';
 import { buildViewerModel } from '../../src/replay/viewer-model.js';
 // The strict profile, imported so the two readings of §3's pre-keyframe rule
 // are compared by machine rather than by prose (review I-1).
-import { validateStrict } from './schema-v2/validator.js';
+import { validateStrict } from '../../src/shared/schema-v2-validator.js';
 
 const FIXTURES = new URL('./schema-v2/fixtures/', import.meta.url);
 const fixture = (name) =>
@@ -359,7 +359,7 @@ describe('buildViewerModel — keyframe spans and defects', () => {
 // ── §11 tolerant loader ───────────────────────────────────────────────────
 // Reject ONLY these four. Everything else loads with a documented default:
 // recordings are unrepeatable participant data, and rejection at runtime is
-// data loss. Strictness lives in CI (tests/replay/schema-v2/validator.js).
+// data loss. Strictness lives in CI (src/shared/schema-v2-validator.js).
 describe('buildViewerModel — §11 tolerant-loader rejections', () => {
   const reject = (recording) => {
     let err = null;

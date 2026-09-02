@@ -37,7 +37,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync, gunzipSync } from 'node:zlib';
-import { validateStrict, validateTolerant, detectGzip } from './validator.js';
+import { validateStrict, validateTolerant, detectGzip } from '../../../src/shared/schema-v2-validator.js';
 import { INVARIANT_CHECKS, INVARIANT_NAMES, PRIVACY_INVARIANTS } from './corpus-invariants.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));

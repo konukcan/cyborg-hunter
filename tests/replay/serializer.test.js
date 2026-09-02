@@ -3,7 +3,7 @@
 // wire format (spec §2/§3, ms since recording start).
 //
 // Every test in this file runs its output through the strict conformance
-// profile (tests/replay/schema-v2/validator.js). The serializer is the one
+// profile (src/shared/schema-v2-validator.js). The serializer is the one
 // place where CH claims to speak v2, so a shape assertion that the validator
 // has not seen is a claim about the format made in prose — the v1 era's
 // lesson. The inward import is deliberate and allowed: the schema directory
@@ -19,7 +19,7 @@ import { serialize } from '../../src/replay/serializer.js';
 import { createRecorder } from '../../src/replay/recorder.js';
 import { buildViewerModel } from '../../src/replay/viewer-model.js';
 import { VERSION } from '../../src/shared/constants.js';
-import { validateStrict } from './schema-v2/validator.js';
+import { validateStrict } from '../../src/shared/schema-v2-validator.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const canonical = JSON.parse(readFileSync(

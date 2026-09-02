@@ -30,7 +30,7 @@ import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
-import { validateStrict } from '../../replay/schema-v2/validator.js';
+import { validateStrict } from '../../../src/shared/schema-v2-validator.js';
 
 function resolvePlaywright() {
   const candidates = [
@@ -137,7 +137,7 @@ console.log('  event types   : ' + Object.keys(types).sort().map((k) => k + '=' 
 console.log('  initial_state : ' + segments.filter((s) => s.initial_state !== null).length + ' segment(s) seeded');
 
 // ── strict validation ──────────────────────────────────────────────────────
-console.log('\n▶ strict profile (tests/replay/schema-v2/validator.js)');
+console.log('\n▶ strict profile (src/shared/schema-v2-validator.js)');
 const res = validateStrict(json);
 if (!res.ok) {
   for (const e of res.errors) console.error('    ' + e);

@@ -4,7 +4,7 @@
 // clipboard modes, and the session-level viewport stream.
 //
 // Two oracles, deliberately outside this module's control:
-//   - `validateStrict` (tests/replay/schema-v2/validator.js), run over the
+//   - `validateStrict` (src/shared/schema-v2-validator.js), run over the
 //     captured events wrapped in a minimal recording — the same machine check
 //     the conformance suite applies, so a payload that would be rejected in CI
 //     is rejected here, at the channel that produced it;
@@ -29,7 +29,7 @@ import { attachTraceCapture } from '../../src/replay/capture-trace.js';
 import { createSpan } from '../../src/replay/span.js';
 import { serializeTree } from '../../src/replay/snapshot.js';
 import { markRedacted } from '../../src/replay/redaction.js';
-import { validateStrict } from './schema-v2/validator.js';
+import { validateStrict } from '../../src/shared/schema-v2-validator.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const canonical = JSON.parse(

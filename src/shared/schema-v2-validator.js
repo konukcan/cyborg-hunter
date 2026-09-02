@@ -1,5 +1,7 @@
 // SessionRecording v2 validator — dual profiles per spec §11.
-// Zero dependencies; this file lifts into the shared schema package.
+// Zero dependencies. Lifted from tests/replay/schema-v2/ into shipped code (A3 fix
+// round): ingest strict-validates converted recordings in-process (spec §11 A2 —
+// warn, never refuse), so the validator is a runtime dependency of the CLI.
 
 // Gzip magic bytes (RFC 1952): 0x1f 0x8b.
 export function detectGzip(bytes) {

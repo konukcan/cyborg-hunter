@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { INVARIANT_CHECKS, INVARIANT_NAMES, PRIVACY_INVARIANTS, REDACTED_SHAPES }
   from './corpus-invariants.js';
-import { REDACTABLE_TYPES } from './validator.js';
+import { REDACTABLE_TYPES } from '../../../src/shared/schema-v2-validator.js';
 
 // ── the dual-encoding drift guard (T1 final review) ────────────────────────
 
