@@ -23,7 +23,7 @@ import assert from 'node:assert/strict';
 import { Window } from 'happy-dom';
 
 import {
-  attachDomCapture, captureStylesheets, shouldKeyframe,
+  attachDomCapture, captureStylesheets, fillCrossOriginSheets, shouldKeyframe,
 } from '../../src/replay/capture-dom.js';
 import { createRecorder } from '../../src/replay/recorder.js';
 import { createSpan } from '../../src/replay/span.js';
@@ -850,5 +850,58 @@ describe('the capture span is shared, not owned', () => {
     // keyframe's root id is peekable from outside.
     assert.equal(span.registry.peekId(h.root()), h.trial(0).initialDom.id);
     assert.equal(span.delivery.holds(h.root()), true);
+  });
+});
+
+// ── cross-origin sheet inlining (2026-09-03) ────────────────────────────────
+// A cross-origin <link> is href-only after captureStylesheets (the browser
+// refuses cssRules). A fresh CORS fetch of the same URL is a different
+// operation the server may permit (jsdelivr does), so the text can still be
+// inlined at capture time and the recording becomes self-contained.
+describe('fillCrossOriginSheets', () => {
+  const linkSheet = (href, css = null) => ({ id: 1, kind: 'link', href, css, media: null });
+  const okFetch = (text) => async () => ({ ok: true, status: 200, text: async () => text });
+
+  it('fills css on an href-only link sheet from a successful CORS fetch, in place', async () => {
+    const sheets = [linkSheet('https://cdn.example/jspsych.css')];
+    const calls = [];
+    const fetchImpl = async (url, init) => { calls.push({ url, init }); return okFetch('.a{}')(); };
+    await fillCrossOriginSheets(sheets, fetchImpl);
+    assert.equal(sheets[0].css, '.a{}');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://cdn.example/jspsych.css');
+    assert.equal(calls[0].init.mode, 'cors');
+    assert.equal(calls[0].init.credentials, 'omit', 'never send cookies for a stylesheet');
+  });
+
+  it('leaves css null when the fetch rejects or is not 2xx', async () => {
+    const a = [linkSheet('https://cdn.example/a.css')];
+    await fillCrossOriginSheets(a, async () => { throw new Error('CORS'); });
+    assert.equal(a[0].css, null);
+    const b = [linkSheet('https://cdn.example/b.css')];
+    await fillCrossOriginSheets(b, async () => ({ ok: false, status: 404, text: async () => 'nope' }));
+    assert.equal(b[0].css, null);
+  });
+
+  it('touches only href-only http(s) link sheets', async () => {
+    const sheets = [
+      { id: 1, kind: 'inline', css: '.i{}', media: null },
+      linkSheet('https://cdn.example/read.css', '.already{}'),
+      linkSheet('blob:https://x/abc'),
+      linkSheet('https://cdn.example/need.css'),
+    ];
+    const urls = [];
+    await fillCrossOriginSheets(sheets, async (u) => { urls.push(u); return okFetch('.n{}')(); });
+    assert.deepEqual(urls, ['https://cdn.example/need.css']);
+    assert.equal(sheets[0].css, '.i{}');
+    assert.equal(sheets[1].css, '.already{}');
+    assert.equal(sheets[2].css, null);
+    assert.equal(sheets[3].css, '.n{}');
+  });
+
+  it('never throws to the caller and does nothing without a fetch', async () => {
+    const sheets = [linkSheet('https://cdn.example/x.css')];
+    await fillCrossOriginSheets(sheets, undefined);
+    assert.equal(sheets[0].css, null);
   });
 });

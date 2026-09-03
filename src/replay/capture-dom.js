@@ -72,6 +72,51 @@ export function captureStylesheets(doc) {
   return out;
 }
 
+/**
+ * Inline the text of href-only link sheets by fetching them (2026-09-03).
+ *
+ * `captureStylesheets` cannot read a cross-origin sheet's rules — the browser
+ * refuses `cssRules` under the same-origin policy — so such a sheet ships
+ * href-only and the viewer plays unstyled until an analyst opts into fetching
+ * it there. A fresh CORS `fetch()` of the same URL is a different operation
+ * the server may permit (CDNs such as jsdelivr do), so the text can be inlined
+ * HERE, where the page is, and the recording becomes self-contained; the
+ * viewer's no-network frame then needs nothing (spec §12 stays intact).
+ *
+ * Mutates the entries IN PLACE: the recorder holds these same objects
+ * (`setStylesheets`), so a fill that lands before finalize is what ships.
+ * Off the critical path — the caller does not await the returned promise; a
+ * finalize that beats the fetch ships href-only, which is today's behaviour.
+ * Any failure (no fetch, CORS refusal, non-2xx, network) leaves `css: null`.
+ * Only http(s) hrefs are tried: blob:/data: sheets cannot be re-fetched.
+ * No cookies are sent (`credentials: 'omit'`) — a stylesheet needs none, and
+ * a participant's session must never ride on a recorder's request.
+ */
+export function fillCrossOriginSheets(sheets, fetchImpl) {
+  if (typeof fetchImpl !== 'function' || !Array.isArray(sheets)) return Promise.resolve();
+  var pending = [];
+  for (var i = 0; i < sheets.length; i++) {
+    var sheet = sheets[i];
+    if (!sheet || sheet.kind !== 'link' || sheet.css != null) continue;
+    if (typeof sheet.href !== 'string' || !/^https?:/i.test(sheet.href)) continue;
+    pending.push(fillOne(sheet, fetchImpl));
+  }
+  return Promise.all(pending).then(function () { /* settled */ });
+}
+
+function fillOne(sheet, fetchImpl) {
+  return Promise.resolve()
+    .then(function () { return fetchImpl(sheet.href, { mode: 'cors', credentials: 'omit' }); })
+    .then(function (res) {
+      if (!res || !res.ok) return null;
+      return res.text();
+    })
+    .then(function (text) {
+      if (typeof text === 'string' && sheet.css == null) sheet.css = text;
+    })
+    .catch(function () { /* stays href-only */ });
+}
+
 // How many characters a keyframe payload costs, as the wire would carry it.
 // Exact rather than estimated: the trial's size budget is a bound on the
 // payload, and the payload is a JSON tree, so its JSON length is the thing
@@ -257,7 +302,14 @@ export function attachDomCapture(rec, env) {
   rec.setObservedRoot(rootSelector());
 
   try {
-    rec.setStylesheets(captureStylesheets(doc));
+    var sheets = captureStylesheets(doc);
+    rec.setStylesheets(sheets);
+    // Cross-origin sheets are href-only here; try to inline their text so the
+    // recording is self-contained (see fillCrossOriginSheets). Not awaited.
+    var view = doc && doc.defaultView;
+    if (view && typeof view.fetch === 'function') {
+      fillCrossOriginSheets(sheets, view.fetch.bind(view));
+    }
   } catch (e) { rec.captureFailure('stylesheets', e); }
 
   // ── Keyframe cadence (spec §3) ──

@@ -754,6 +754,8 @@ export async function renderIndexHtml(summaries, triage, participants, config, v
       color: var(--ink); border-radius: 4px; cursor: pointer; font-size: 13px; }
     .replay-play:hover, .replay-load-btn:hover, .replay-css-btn:hover { background: var(--bg); }
     .replay-play:disabled, .replay-load-btn:disabled { opacity: 0.6; cursor: default; }
+    .replay-fetch-css-label { margin-left: 10px; font-size: 12px; color: #555; }
+    .replay-unstyled { position: absolute; left: 0; right: 0; top: 0; z-index: 3; background: #fff4dd; color: #7a4b00; border-bottom: 1px solid #e8b24a; padding: 6px 10px; font-size: 12px; line-height: 1.4; }
     .replay-css-btn { font-size: 12px; padding: 2px 8px; }
     .replay-clock { font: 12px/1.3 ui-monospace, SFMono-Regular, 'IBM Plex Mono', monospace;
                     font-variant-numeric: tabular-nums; }
@@ -786,6 +788,9 @@ ${replayClientSrc}
         const src = block.dataset.replaySrc;
         const pid = block.dataset.pid;
         const mount = block.querySelector('.replay-mount');
+        // Read the fetch decision before the mount is cleared.
+        const fetchBox = block.querySelector('.replay-fetch-css');
+        const viewerOpts = { externalCss: !!(fetchBox && fetchBox.checked) };
         btn.disabled = true;
         btn.textContent = 'Loading…';
         mount.setAttribute('aria-busy', 'true');
@@ -804,7 +809,7 @@ ${replayClientSrc}
         if (preloaded) {
           mount.removeAttribute('aria-busy');
           mount.textContent = '';
-          window.initChReplayViewer(mount, preloaded);
+          window.initChReplayViewer(mount, preloaded, viewerOpts);
           return;
         }
         ` : ''}const s = document.createElement('script');
@@ -814,7 +819,7 @@ ${replayClientSrc}
           const model = (window.__chReplay || {})[pid];
           if (!model) { fail('Replay data failed to load (' + src + ').'); return; }
           mount.textContent = '';
-          window.initChReplayViewer(mount, model);
+          window.initChReplayViewer(mount, model, viewerOpts);
         };
         s.onerror = function () {
           fail('Replay asset missing (' + src + ') — was the report generated with the replay artifacts present?');
@@ -1082,11 +1087,24 @@ function renderReplaySection(participant, sanitized, demoModel = null, replaySho
     // preloadedReplayScript in renderIndexHtml), so the block is marked
     // data-replay-preloaded instead of pointing the lazy loader at a file
     // that doesn't exist in the sandboxed iframe.
+    // Sheets the capture could not inline (cross-origin, fetch refused) are
+    // href-only. Offer the fetch decision HERE, beside the one button, ticked
+    // by default: an unstyled replay is misaligned by construction, and the
+    // in-viewer opt-in went unread through a whole session (2026-09-03).
+    // Rendered only when it applies, so recordings with inlined CSS keep the
+    // exact markup the snapshot tests pin.
+    const externalSheets = replay && replay.recording
+      ? (replay.recording.stylesheets || []).filter((sh) => sh && sh.kind === 'link' && sh.css == null).length
+      : 0;
+    const fetchCssLabel = externalSheets > 0
+      ? `
+        <label class="replay-fetch-css-label"><input type="checkbox" class="replay-fetch-css" checked> also fetch ${externalSheets} external stylesheet${externalSheets === 1 ? '' : 's'} from ${externalSheets === 1 ? 'its origin' : 'their origins'} (needed for a styled, aligned replay)</label>`
+      : '';
     return `<div class="image-block replay-block" data-pid="${esc(participant.participantId)}"
          ${demoModel ? 'data-replay-preloaded="true"' : `data-replay-src="${esc(assetPath)}"`}>
       <h4 class="section-heading">Session replay <span class="replay-note">(${esc(tier)} tier)</span></h4>
       <div class="replay-mount">
-        <button class="replay-load-btn" type="button">Load replay</button>
+        <button class="replay-load-btn" type="button">Load replay</button>${fetchCssLabel}
       </div>
     </div>`;
   }

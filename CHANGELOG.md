@@ -5,6 +5,19 @@ All notable changes to **cyborg-hunter** are documented here. This project follo
 
 ## [Unreleased]
 
+### Added
+- Replay recordings are self-contained for cross-origin stylesheets: the
+  recorder fetches (CORS, no credentials) the text of any `<link>` sheet whose
+  rules the browser refuses to expose and inlines it at session start. Sheets
+  whose server refuses CORS stay href-only, as before.
+- Report: when a recording still has href-only sheets, "Load replay" gains a
+  ticked-by-default "also fetch N external stylesheet(s)" checkbox, and the
+  viewer shows a banner ON the stage whenever it plays unstyled (a sheet
+  skipped or failed to load). The in-viewer "Load external CSS" opt-in remains.
+- Viewer shell declares `html{height:100%}` so a recorded `body{height:100%}`
+  (jsPsych's display element) lays out as on the live page; without it a
+  centred page rendered top-left and every alignment check failed.
+
 ### Changed
 - `collectForPostHoc.rawMouseTrack` now defaults to **true**: the raw mouse
   track (`mouseTrack`) ships in every trial report, so the CLI's trajectory

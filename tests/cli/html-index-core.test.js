@@ -36,6 +36,22 @@ describe('renderIndexHtml (pure core)', () => {
     assert.ok(html.includes('NOTE_MARKER'));
     assert.ok(html.includes('/*__MARKER__*/'));
   });
+  it('offers the fetch-external-stylesheets checkbox only when the recording has href-only sheets', async () => {
+    const triage = [{ participantId: 'p1', hardTriggered: false, softFlagged: false, score: 0, summary: {} }];
+    const rec = (stylesheets) => ({
+      schema_version: 2, recorder: { name: 'cyborg-hunter-replay', version: '0.7.5' }, participant_id: 'p1',
+      viewport: { w: 1, h: 1, dpr: 1, scale: 1, offset_x: 0, offset_y: 0 }, stylesheets,
+      stylesheet_events: [], viewport_changes: [], segments: [], extensions: { 'cyborg-hunter': { tier: 'dom' } },
+    });
+    const render = (stylesheets) => renderIndexHtml([], triage,
+      [{ participantId: 'p1', replay: { recording: rec(stylesheets), file: 'p1-replay-1.json' } }],
+      { outputDir: '/unused', participantIdField: 'participantId' }, false, { replayClientSrc: '' });
+    const hrefOnly = await render([{ id: 1, kind: 'link', href: 'https://cdn.example/jspsych.css', css: null, media: null }]);
+    assert.match(hrefOnly, /class="replay-fetch-css" checked/, 'checkbox, ticked by default');
+    assert.match(hrefOnly, /fetch 1 external stylesheet from its origin/);
+    const inlined = await render([{ id: 1, kind: 'link', href: 'https://cdn.example/jspsych.css', css: '.a{}', media: null }]);
+    assert.doesNotMatch(inlined, /replay-fetch-css"/, 'nothing to fetch, nothing offered');
+  });
   it('module source has no fs/path imports', () => {
     const src = readFileSync(new URL('../../src/cli/renderers/html-index-core.js', import.meta.url), 'utf8');
     assert.doesNotMatch(src, /from ['"](node:)?(fs|path)['"]/);

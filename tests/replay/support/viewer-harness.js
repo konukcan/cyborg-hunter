@@ -107,9 +107,13 @@ export function stubCanvas(win) {
 
 // ── boot ───────────────────────────────────────────────────────────────────
 
-export function boot(recording) {
+export function boot(recording, opts) {
   const model = buildViewerModel(recording);
-  const win = new Window({ url: 'https://report.test/' });
+  // No network in this realm: happy-dom would otherwise try to fetch every
+  // <link rel=stylesheet> the viewer links and fire `error` on it, which the
+  // client counts as a failed sheet. Disabled loads count as success here;
+  // the real error path is exercised in the browser battery, not this realm.
+  const win = new Window({ url: 'https://report.test/', settings: { disableCSSFileLoading: true, disableJavaScriptFileLoading: true, handleDisabledFileLoadingAsSuccess: true } });
   stubCanvas(win);
   const frames = [];
   win.document.body.innerHTML = '<div id="mount"></div>';
@@ -120,7 +124,7 @@ export function boot(recording) {
   // eslint-disable-next-line no-new-func
   new Function('window', 'document', 'requestAnimationFrame', 'ResizeObserver', CLIENT_SRC)(
     win, win.document, (fn) => { frames.push(fn); return frames.length; }, undefined);
-  win.initChReplayViewer(mount, model);
+  win.initChReplayViewer(mount, model, opts);
   const dbg = mount._chReplayDebug;
   return {
     win, mount, model, dbg,

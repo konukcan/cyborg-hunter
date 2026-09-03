@@ -296,10 +296,14 @@
       '</head><body></body></html>';
   }
 
-  window.initChReplayViewer = function (mount, model) {
+  // `opts.externalCss` (2026-09-03): the report decides UP FRONT, next to the
+  // one "Load replay" button, whether href-only sheets may be linked from
+  // their origins. Absent → today's strict frame plus the in-place opt-in.
+  window.initChReplayViewer = function (mount, model, opts) {
     if (!mount || !model) return;
     if (mount._chReplayInit) return;   // double-click guard
     mount._chReplayInit = true;
+    var initialExternalCss = !!(opts && opts.externalCss);
     mount.textContent = '';
 
     var segments = model.segments || [];
@@ -592,9 +596,13 @@
     }
     header.appendChild(animChip);
 
-    var allowExternalCss = false;
+    var allowExternalCss = initialExternalCss;
     var omittedSheets = (model.stylesheets || []).filter(function (sh) { return !sh.css; }).length;
-    if (omittedSheets > 0) {
+    if (omittedSheets > 0 && allowExternalCss) {
+      var fetchedNote = el('span', 'replay-note',
+        omittedSheets + ' external stylesheet(s) are fetched from their origins (network requests leave this machine).');
+      header.appendChild(fetchedNote);
+    } else if (omittedSheets > 0) {
       var cssNote = el('span', 'replay-note',
         omittedSheets + ' external stylesheet(s) were not loaded. Layout may differ. ');
       var cssBtn = el('button', 'replay-css-btn', 'Load external CSS');
@@ -642,6 +650,26 @@
     overlay.className = 'replay-overlay';
     overlay.setAttribute('aria-hidden', 'true');
     stage.appendChild(overlay);
+    // Unstyled-stage banner: shown whenever a sheet the recording names is
+    // not in the frame — skipped (strict frame, opt-in not taken) or failed
+    // to load (offline, URL gone, server refused). ON the stage, because an
+    // unstyled page is misaligned by construction and a header note above
+    // it went unread through a whole session (bench harness, 2026-09-03).
+    var unstyledBanner = el('div', 'replay-unstyled', '');
+    unstyledBanner.setAttribute('data-ch-unstyled', '');
+    unstyledBanner.setAttribute('role', 'status');
+    unstyledBanner.style.display = 'none';
+    stage.appendChild(unstyledBanner);
+    var missingSheets = 0, failedSheets = 0;
+    function updateUnstyled() {
+      var n = missingSheets + failedSheets;
+      if (n === 0) { unstyledBanner.style.display = 'none'; unstyledBanner.textContent = ''; return; }
+      unstyledBanner.textContent = 'Unstyled replay — ' + n + ' stylesheet' + (n === 1 ? '' : 's') +
+        (failedSheets ? ' could not be fetched' : ' not loaded') +
+        '; layout differs from the recorded page, so cursor positions will not match elements.' +
+        (failedSheets ? '' : ' Reload the replay with “fetch external stylesheets” ticked, or use the button above.');
+      unstyledBanner.style.display = '';
+    }
     // Keycast: chips for keys currently down or recently released, mirroring
     // the click-ripple/cursor-trail convention (a pure function of playhead).
     // keys:'off' recordings carry no key events, so this stays empty; that
@@ -739,8 +767,12 @@
         node = doc.createElement('link');
         node.setAttribute('rel', 'stylesheet');
         node.setAttribute('href', sheet.href);
+        // A blocked or failed fetch fires `error` on the element (parent-realm
+        // handler; the frame runs no scripts). Counted once per node.
+        node.onerror = function () { failedSheets++; updateUnstyled(); };
       } else {
-        return null;   // external sheet, opt-in not taken
+        missingSheets++;   // external sheet, opt-in not taken
+        return null;
       }
       node.setAttribute('data-ch-sheet', String(sheet.id));
       if (sheet.media) node.setAttribute('media', sheet.media);
@@ -794,6 +826,7 @@
       for (var i = live.length - 1; i >= 0; i--) {
         if (live[i].parentNode) live[i].parentNode.removeChild(live[i]);
       }
+      missingSheets = 0; failedSheets = 0;   // recounted by every rebuild
       (model.stylesheets || []).forEach(function (sheet) {
         if (sheet && sheet.id != null) insertSheet(doc, sheet);
       });
@@ -802,6 +835,7 @@
         if ((num(ev.t) || 0) > originT) break;
         applySheetEvent(doc, ev);
       }
+      updateUnstyled();
     }
 
     // ── Span geometry ──

@@ -1492,3 +1492,51 @@ describe('T5.8 fix — a partial camera block cannot cancel half the view state'
     assert.equal(v.chip('data-ch-dpr-note').style.display, '');
   });
 });
+
+// ── external stylesheets: one-button fetch + unstyled banner (2026-09-03) ──
+// A cross-origin sheet is captured href-only when the capture-side fetch
+// could not inline it. The report's "Load replay" now decides up front
+// (opts.externalCss) whether the frame may link such sheets; whichever way
+// it goes, an unstyled stage must SAY so on the stage, not in a header note
+// nobody reads (bench harness, 2026-09-03: a whole session played
+// unstyled and misaligned with the note sitting right above it).
+describe('external stylesheets (opts.externalCss + unstyled banner)', () => {
+  // The banner element always exists (it is the stage's status line); what
+  // the contract governs is whether it is SHOWN.
+  const bannerShown = (v) => {
+    const b = v.mount.querySelector('[data-ch-unstyled]');
+    return !!b && b.style.display !== 'none';
+  };
+  const hrefOnly = () => baseRecording({
+    stylesheets: [{ id: 1, kind: 'link', href: 'https://cdn.example/jspsych.css', css: null, media: null }],
+    segments: [segment({ initial_dom: bodyKeyframe() })],
+  });
+
+  it('opts.externalCss: true links the href-only sheet at boot and shows no banner', () => {
+    const v = boot(hrefOnly(), { externalCss: true });
+    const link = v.doc().head.querySelector('link[data-ch-sheet="1"]');
+    assert.ok(link, 'href-only sheet must be linked when fetching is allowed');
+    assert.equal(link.getAttribute('href'), 'https://cdn.example/jspsych.css');
+    assert.equal(bannerShown(v), false, 'no unstyled banner');
+    assert.equal(v.mount.querySelector('.replay-css-btn'), null, 'no opt-in button when already opted in');
+  });
+
+  it('without opts the frame stays strict and the stage carries the unstyled banner', () => {
+    const v = boot(hrefOnly());
+    assert.equal(v.doc().head.querySelector('link[data-ch-sheet]'), null, 'strict frame: nothing linked');
+    assert.equal(bannerShown(v), true, 'banner must be shown on the stage');
+    const banner = v.mount.querySelector('[data-ch-unstyled]');
+    assert.match(banner.textContent, /1 stylesheet/);
+    assert.match(banner.textContent, /layout differs/i);
+    assert.ok(v.mount.querySelector('.replay-css-btn'), 'opt-in button still offered');
+  });
+
+  it('a recording whose sheets are all inlined shows no banner either way', () => {
+    const inlined = baseRecording({
+      stylesheets: [{ id: 1, kind: 'link', href: 'https://cdn.example/a.css', css: '.a{}', media: null }],
+      segments: [segment({ initial_dom: bodyKeyframe() })],
+    });
+    assert.equal(bannerShown(boot(inlined)), false);
+    assert.equal(bannerShown(boot(inlined, { externalCss: true })), false);
+  });
+});

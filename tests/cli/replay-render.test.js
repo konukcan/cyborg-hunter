@@ -532,12 +532,16 @@ describe('viewer client file', () => {
     assert.match(src, /frame-src 'none'/);
     assert.match(src, /connect-src 'none'/);
     assert.match(src, /base-uri 'none'/);
-    // External stylesheets load only behind the analyst's explicit opt-in
-    // (default-safe): the <link> emission must be gated by allowExternalCss.
+    // External stylesheets load only when the analyst allowed it: the <link>
+    // emission must be gated by allowExternalCss, and that flag must come from
+    // the report's up-front decision (opts.externalCss, 2026-09-03) — absent
+    // opts, the frame stays strict and the in-viewer opt-in applies.
     assert.match(src, /allowExternalCss && sheet\.href/,
       'external stylesheet links must be gated by the opt-in flag');
-    assert.match(src, /allowExternalCss = false/,
-      'the opt-in must default to off');
+    assert.match(src, /var initialExternalCss = !!\(opts && opts\.externalCss\)/,
+      'the flag is seeded from opts.externalCss and nothing else');
+    assert.match(src, /allowExternalCss = initialExternalCss/,
+      'no other initialiser: absent opts means off');
   });
 
   it('hardens the srcdoc reconstruction with a CSP + no-referrer meta', () => {
