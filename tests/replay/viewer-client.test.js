@@ -312,6 +312,21 @@ describe('T5.4 — the data-ch-* family is viewer-owned, both verbs', () => {
     assert.equal(v.dbg.getNode(2).hasAttribute('src'), false, 'no src to fetch');
   });
 
+  it('the shell stylesheet gives <html> the full frame height (percentage-height chain)', () => {
+    // A recorded body carrying `height: 100%` (jsPsych's display element does)
+    // resolves against <html>, which lies OUTSIDE the observed root and is
+    // therefore never captured. Without this rule the chain collapses to
+    // content height and a vertically-centred page renders top-left, with
+    // every anchor rect off by the centring offset — a full-session
+    // misalignment on the first real jsPsych capture (bench harness,
+    // 2026-09-03). The fork's shell states the same rule.
+    const v = boot(baseRecording({ segments: [segment({ initial_dom: iframeKeyframe() })] }));
+    const shellCss = Array.from(v.doc().querySelectorAll('style'))
+      .map((st) => st.textContent).join('\n');
+    assert.match(shellCss, /html\{[^}]*height:\s*100%/,
+      'shell must declare html{height:100%}');
+  });
+
   it('the shell stylesheet outlines the placeholder region', () => {
     const v = boot(baseRecording({ segments: [segment({ initial_dom: iframeKeyframe() })] }));
     const shellCss = Array.from(v.doc().querySelectorAll('style'))

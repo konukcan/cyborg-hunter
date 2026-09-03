@@ -264,8 +264,20 @@
   // deliberately — a border participates in layout, and the §8 rect check
   // compares the replayed box against the capture-time one, so a viewer that
   // grew the box would report a misalignment it caused itself.
+  //
+  // `html{height:100%}` completes the percentage-height chain. A recorded
+  // <body> with `height: 100%` (jsPsych's display element; any page that
+  // centres in the viewport) resolves against <html>, which sits OUTSIDE the
+  // observed root and is never captured — so whatever gave it its height on
+  // the live page (a stylesheet rule, an inline style) is absent here. With
+  // <html> at content height the chain collapses: a centred page renders
+  // top-left and every anchor rect misses by the centring offset, which is
+  // how the first real jsPsych capture played in this viewer (bench harness,
+  // 2026-09-03) while the fork — whose shell states this rule — played it
+  // right. The rule reproduces the frame's containing block, not any
+  // recorded style: body margin is left to the recording / UA default.
   function shellRules() {
-    return 'html{scrollbar-width:none}' +
+    return 'html{height:100%;scrollbar-width:none}' +
       'html::-webkit-scrollbar{width:0;height:0}' +
       '[data-ch-placeholder]{outline:2px dashed #b26a00;outline-offset:-2px;' +
       'background:repeating-linear-gradient(45deg,rgba(178,106,0,.06),' +
